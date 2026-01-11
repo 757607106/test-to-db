@@ -1,0 +1,12 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "sql_agent": {
+      "path": "./app/agents/chat_graph.py:graph"
+    }
+  },
+  "env": ".env",
+  "image_distro": "wolfi"
+}

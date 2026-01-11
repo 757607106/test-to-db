@@ -1,0 +1,36 @@
+from fastapi import APIRouter
+
+from app.api.api_v1.endpoints import connections, schema, query, value_mappings, graph_visualization, relationship_tips, hybrid_qa
+
+# 强制重新加载 - 修复API路由问题
+
+api_router = APIRouter()
+
+# 添加API根路径处理器
+@api_router.get("/")
+async def api_root():
+    """API根路径"""
+    return {
+        "message": "ChatDB API",
+        "version": "0.1.0",
+        "status": "running",
+        "endpoints": {
+            "connections": "/api/connections/",
+            "schema": "/api/schema/",
+            "query": "/api/query/",
+            "value_mappings": "/api/value-mappings/",
+            "graph_visualization": "/api/graph-visualization/",
+            "relationship_tips": "/api/relationship-tips/",
+            "hybrid_qa": "/api/hybrid-qa/",
+            "docs": "/docs",
+            "openapi": "/openapi.json"
+        }
+    }
+
+api_router.include_router(connections.router, prefix="/connections", tags=["connections"])
+api_router.include_router(schema.router, prefix="/schema", tags=["schema"])
+api_router.include_router(query.router, prefix="/query", tags=["query"])
+api_router.include_router(value_mappings.router, prefix="/value-mappings", tags=["value-mappings"])
+api_router.include_router(graph_visualization.router, prefix="/graph-visualization", tags=["graph-visualization"])
+api_router.include_router(relationship_tips.router, prefix="/relationship-tips", tags=["relationship-tips"])
+api_router.include_router(hybrid_qa.router, prefix="/hybrid-qa", tags=["hybrid-qa"])
