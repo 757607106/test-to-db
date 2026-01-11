@@ -59,7 +59,7 @@ const HomePage: React.FC = () => {
             <ApiOutlined style={{ fontSize: '80px', color: '#1890ff' }} />
 
             <AntTitle level={1} style={{ margin: 0, background: 'linear-gradient(45deg, #1890ff, #722ed1)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-              但问智能数据分析系统
+              任我行智能BI分析系统
             </AntTitle>
 
             <Paragraph style={{ fontSize: '18px', color: '#666', maxWidth: '600px', margin: '0 auto' }}>

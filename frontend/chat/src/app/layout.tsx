@@ -12,7 +12,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "但问智能数据分析平台",
+  title: "任我行智能数据分析平台",
   description: "Agent Chat UX",
 };
 

@@ -78,7 +78,7 @@ const App: React.FC = () => {
       <Header className="app-header">
         <ApiOutlined style={{ fontSize: '28px', color: '#1890ff', marginRight: '16px' }} />
         <div className="app-title">
-          但问智能数据分析系统
+          任我行智能BI分析系统
         </div>
         <Menu
           className="app-menu"

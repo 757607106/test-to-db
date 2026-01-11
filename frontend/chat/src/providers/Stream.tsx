@@ -175,11 +175,11 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
             <div className="flex flex-col items-start gap-2">
               <LangGraphLogoSVG className="h-7" />
               <h1 className="text-xl font-semibold tracking-tight">
-                但问智能
+                任我行智能
               </h1>
             </div>
             <p className="text-muted-foreground">
-              欢迎使用但问智能！在开始之前，您需要输入部署的URL。
+              欢迎使用任我行智能！在开始之前，您需要输入部署的URL。
             </p>
           </div>
           <form
