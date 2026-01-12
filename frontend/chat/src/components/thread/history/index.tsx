@@ -171,7 +171,6 @@ function ThreadList({
     </>
   );
 }
-// @ts-expect-error  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2YjA5T1JRPT06NzkwODExNGE=
 
 function ThreadHistoryLoading() {
   return (
@@ -256,4 +255,3 @@ export default function ThreadHistory() {
     </>
   );
 }
-// @ts-expect-error  My80OmFIVnBZMlhva3JMbW5iN21ucGM2YjA5T1JRPT06NzkwODExNGE=

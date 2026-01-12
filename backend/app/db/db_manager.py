@@ -183,7 +183,6 @@ class DatabaseManager:
         try:
             if not self.db_access or not self.db_access.run_sql_is_set:
                 return False
-# pragma: no cover  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2VEhkTk1BPT06MjQ2MDkyYzc=
             
             # 执行简单的测试查询
             test_queries = {
@@ -278,7 +277,6 @@ class DatabaseManager:
 # 全局数据库管理器实例
 db_manager = DatabaseManager()
 
-# pragma: no cover  My80OmFIVnBZMlhva3JMbW5iN21ucGM2VEhkTk1BPT06MjQ2MDkyYzc=
 
 # 便捷函数
 def get_default_db_config() -> DatabaseConfig:

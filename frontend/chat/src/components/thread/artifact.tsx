@@ -111,7 +111,6 @@ export function ArtifactProvider(props: { children?: ReactNode }) {
     </ArtifactSlotContext.Provider>
   );
 }
-// TODO  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2YjFWWFV3PT06ZGIwNDQxZDY=
 
 /**
  * Provides a value to be passed into `meta.artifact` field

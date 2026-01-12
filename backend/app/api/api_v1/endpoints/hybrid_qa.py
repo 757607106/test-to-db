@@ -216,7 +216,6 @@ async def get_qa_pairs_stats(
         }
 
         return stats
-# fmt: off  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2WTBKd1dnPT06NWQxMzc3ZDE=
 
     except Exception as e:
         logger.error(f"获取统计信息失败: {str(e)}")
@@ -367,7 +366,6 @@ async def export_qa_pairs(
             "format": format,
             "connection_id": connection_id
         }
-# pragma: no cover  My80OmFIVnBZMlhva3JMbW5iN21ucGM2WTBKd1dnPT06NWQxMzc3ZDE=
 
     except Exception as e:
         logger.error(f"导出问答对失败: {str(e)}")

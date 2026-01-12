@@ -48,6 +48,5 @@ function AvatarFallback({
     />
   );
 }
-// TODO  Mi8zOmFIVnBZMlhva3JMbW5iN21ucGM2V0VKbVNRPT06NjliY2I1ODg=
 
 export { Avatar, AvatarImage, AvatarFallback };

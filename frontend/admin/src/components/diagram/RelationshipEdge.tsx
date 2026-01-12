@@ -126,7 +126,6 @@ const getMarkerStart = (relationshipType: string) => {
       return {};
   }
 };
-// FIXME  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2Y1ZOMlpRPT06NzlhNzAyZGE=
 
 // 关系类型对应的标签
 const RELATIONSHIP_LABELS = {

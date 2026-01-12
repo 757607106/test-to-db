@@ -64,7 +64,6 @@ class SQLMessageState(AgentState):
         "error_recovery",
         "completed"
     ] = "schema_analysis"
-# pragma: no cover  My80OmFIVnBZMlhva3JMbW5iN21ucGM2UW5GbVdRPT06Y2YyYmQ4MWE=
 
     # 代理间通信
     agent_messages: Dict[str, Any] = field(default_factory=dict)

@@ -97,7 +97,6 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
     
     return None
 
-# noqa  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2Ym1Gck5BPT06ODg4ZjliMTA=
 
 def format_schema_context(schema_context: Dict[str, Any]) -> str:
     """将表结构信息格式化为SQL DDL字符串

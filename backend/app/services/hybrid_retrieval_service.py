@@ -184,7 +184,6 @@ class VectorService:
         except Exception as e:
             logger.error(f"Failed to embed question: {str(e)}")
             raise
-# type: ignore  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2U1RFMVVBPT06NTVhYmJhOTE=
 
     async def batch_embed(self, questions: List[str]) -> List[List[float]]:
         """批量向量化"""
@@ -290,7 +289,6 @@ class VectorService:
 
         # 基本清理
         processed = question.strip()
-# pragma: no cover  My80OmFIVnBZMlhva3JMbW5iN21ucGM2U1RFMVVBPT06NTVhYmJhOTE=
 
         # 移除多余的空白字符
         processed = re.sub(r'\s+', ' ', processed)

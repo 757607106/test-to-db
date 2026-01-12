@@ -34,7 +34,6 @@ function EditableContent({
     />
   );
 }
-// TODO  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2UWxBME5RPT06MzRmMDM5YmQ=
 
 export function HumanMessage({
   message,

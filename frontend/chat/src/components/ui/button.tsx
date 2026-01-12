@@ -59,4 +59,3 @@ function Button({
 }
 
 export { Button, buttonVariants, type ButtonProps };
-// @ts-expect-error  Mi8zOmFIVnBZMlhva3JMbW5iN21ucGM2V1hONU5BPT06OTA0NWY4M2Q=

@@ -348,7 +348,6 @@ class SampleRetrievalAgent:
 - 只有在有高质量样本时才继续分析和提取模式
 """)
             ]
-# fmt: off  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2WWtWcE1nPT06MTQ2YWYzYzE=
 
             # 调用代理
             result = await self.agent.ainvoke({

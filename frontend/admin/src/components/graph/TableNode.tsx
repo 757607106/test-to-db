@@ -15,7 +15,6 @@ interface TableNodeData {
   columnCount?: number;
   onNodeClick?: (nodeId: string, nodeData: any) => void;
 }
-// FIXME  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2UjBsTVJBPT06YzMyZTJmNjQ=
 
 // 表节点组件
 const TableNode = ({ id, data, selected }: NodeProps<TableNodeData>) => {
@@ -83,4 +82,3 @@ const TableNode = ({ id, data, selected }: NodeProps<TableNodeData>) => {
 
 // 使用memo优化渲染性能
 export default memo(TableNode);
-// TODO  My80OmFIVnBZMlhva3JMbW5iN21ucGM2UjBsTVJBPT06YzMyZTJmNjQ=

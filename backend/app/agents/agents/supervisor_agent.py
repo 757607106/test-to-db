@@ -59,7 +59,6 @@ class SupervisorAgent:
 
     # 📚 ** sample_retrieval_agent **: 检索相关的SQL问答对样本，提供高质量参考
     # sample_retrieval_agent →
-# type: ignore  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2VkhCTWVnPT06ZDFlNzdhMjg=
 
     # ** 样本检索优化: **
     # - 基于用户查询语义检索相似问答对

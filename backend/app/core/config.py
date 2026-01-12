@@ -66,7 +66,6 @@ class Settings(BaseSettings):
     STRUCTURAL_WEIGHT: float = float(os.getenv("STRUCTURAL_WEIGHT", "0.20"))
     PATTERN_WEIGHT: float = float(os.getenv("PATTERN_WEIGHT", "0.10"))
     QUALITY_WEIGHT: float = float(os.getenv("QUALITY_WEIGHT", "0.10"))
-# noqa  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2UjFjeGN3PT06MTliOGZiNWM=
 
     # 学习配置
     AUTO_LEARNING_ENABLED: bool = os.getenv("AUTO_LEARNING_ENABLED", "true").lower() == "true"

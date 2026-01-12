@@ -365,12 +365,15 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
       <div style={{ 
         height, 
         display: 'flex', 
+        flexDirection: 'column',
         alignItems: 'center', 
         justifyContent: 'center',
         background: 'linear-gradient(135deg, #f6f9fc 0%, #ffffff 100%)',
-        borderRadius: '8px'
+        borderRadius: '8px',
+        gap: '16px'
       }}>
-        <Spin size="large" tip="加载专业知识图谱中..." />
+        <Spin size="large" />
+        <div style={{ color: '#1890ff' }}>加载专业知识图谱中...</div>
       </div>
     );
   }

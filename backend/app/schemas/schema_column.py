@@ -50,4 +50,3 @@ class SchemaColumnWithMappings(SchemaColumn):
 # Update forward references after all classes are defined
 from app.schemas.value_mapping import ValueMapping
 SchemaColumnWithMappings.model_rebuild()
-# pragma: no cover  Mi8zOmFIVnBZMlhva3JMbW5iN21ucGM2UkVGbVdBPT06ZmFiMDNlYWU=

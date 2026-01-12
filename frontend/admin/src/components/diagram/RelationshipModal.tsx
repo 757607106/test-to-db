@@ -30,7 +30,6 @@ const RELATIONSHIP_TYPE_COLORS = {
   [RELATIONSHIP_TYPES.MANY_TO_ONE]: '#10b981', // 绿色
   [RELATIONSHIP_TYPES.MANY_TO_MANY]: '#f59e0b', // 橙色
 };
-// FIXME  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2ZG5GUFdBPT06ODQwYWRhMGM=
 
 // 关系类型对应的图标
 const RELATIONSHIP_TYPE_ICONS = {
@@ -152,7 +151,7 @@ const RelationshipModal: React.FC<RelationshipModalProps> = ({
       onCancel={onClose}
       footer={modalFooter}
       maskClosable={false}
-      destroyOnClose
+      destroyOnClose={true}
       width={500}
     >
       {relationshipData && (

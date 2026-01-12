@@ -264,7 +264,6 @@ def determine_relationship_type(
     if source_table.lower() == 'scores' and target_table.lower() == 'courses' and source_column.lower() == 'course_id':
         print(f"[DEBUG] 特殊情况：学生成绩表到课程表的关系，设置为多对一关系")
         return "N-to-1"
-# fmt: off  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2YXpadFJ3PT06OGVkNzk1ZDE=
 
     if target_table.lower() == 'scores' and source_table.lower() == 'students' and target_column.lower() == 'student_id':
         print(f"[DEBUG] 特殊情况：学生表到学生成绩表的关系，设置为一对多关系")

@@ -84,7 +84,6 @@ class CRUDDBConnection(CRUDBase[DBConnection, DBConnectionCreate, DBConnectionUp
 
                 # Step 3: Delete all columns associated with these tables
                 db.execute(delete(SchemaColumn).where(SchemaColumn.table_id.in_(table_ids)))
-# fmt: off  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2ZG5sTFl3PT06ZDcyYTFjZGQ=
 
             # Step 4: Delete all tables associated with this connection
             db.execute(delete(SchemaTable).where(SchemaTable.connection_id == id))
@@ -98,7 +97,6 @@ class CRUDDBConnection(CRUDBase[DBConnection, DBConnectionCreate, DBConnectionUp
             db.rollback()
             print(f"Error deleting connection: {str(e)}")
             raise e
-# type: ignore  My80OmFIVnBZMlhva3JMbW5iN21ucGM2ZG5sTFl3PT06ZDcyYTFjZGQ=
 
     def _clean_neo4j_data(self, connection_id: int) -> None:
         """清理Neo4j图数据库中与指定连接相关的所有数据"""

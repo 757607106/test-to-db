@@ -28,7 +28,6 @@ try {
       const tagName = tag.match(/<(div|main)/)[1];
       stack.push({ tag: tagName, line: index + 1 });
     });
-// @ts-expect-error  Mi8zOmFIVnBZMlhva3JMbW5iN21ucGM2Um5jemFBPT06ODIzNDdlZjg=
     
     // 检查结束标签
     const closeTags = line.match(/<\/(div|main)>/g) || [];

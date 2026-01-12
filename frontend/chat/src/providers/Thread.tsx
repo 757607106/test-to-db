@@ -34,7 +34,6 @@ function getThreadSearchMetadata(
     return { graph_id: assistantId };
   }
 }
-// TODO  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2UkRsYWJBPT06ZjAxYTYxN2I=
 
 export function ThreadProvider({ children }: { children: ReactNode }) {
   // Get environment variables
@@ -93,7 +92,6 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
     <ThreadContext.Provider value={value}>{children}</ThreadContext.Provider>
   );
 }
-// TODO  My80OmFIVnBZMlhva3JMbW5iN21ucGM2UkRsYWJBPT06ZjAxYTYxN2I=
 
 export function useThreads() {
   const context = useContext(ThreadContext);

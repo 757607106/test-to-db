@@ -90,7 +90,7 @@ async def process_sql_query(query: str, connection_id: int = 15) -> Dict[str, An
 
 # 创建全局实例（为了向后兼容）
 _global_graph = None
-# noqa  My80OmFIVnBZMlhva3JMbW5iN21ucGM2ZFRsdFdRPT06MDQyOWY3ZWM=
+
 
 def get_global_graph():
     """获取全局图实例"""

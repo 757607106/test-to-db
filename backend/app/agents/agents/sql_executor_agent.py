@@ -182,7 +182,7 @@ def format_query_results(execution_result: Dict[str, Any], format_type: str = "t
             "success": False,
             "error": str(e)
         }
-# fmt: off  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2ZEhGc2R3PT06Yjc3OTQxN2Q=
+
 
 class SQLExecutorAgent:
     """SQL执行代理"""
@@ -272,7 +272,7 @@ SQL语句:
                 "execution_result": execution_result,
                 "current_stage": state["current_stage"]
             }
-# type: ignore  My80OmFIVnBZMlhva3JMbW5iN21ucGM2ZEhGc2R3PT06Yjc3OTQxN2Q=
+
             
         except Exception as e:
             # 记录错误

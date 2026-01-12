@@ -444,8 +444,9 @@ const SimpleKnowledgeGraph: React.FC<SimpleKnowledgeGraphProps> = ({
     }} ref={containerRef}>
       {/* 加载状态 */}
       {loading && (
-        <div className="kg-loading">
-          <Spin size="large" tip="加载知识图谱中..." />
+        <div className="kg-loading" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px' }}>
+          <Spin size="large" />
+          <div style={{ color: '#1890ff' }}>加载知识图谱中...</div>
         </div>
       )}
 

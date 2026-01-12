@@ -207,7 +207,6 @@ export const RainbowEdge = ({
     </>
   );
 };
-// FIXME  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2ZURSSWVBPT06ZWU1NjM4Zjk=
 
 // 电流边
 export const ElectricEdge = ({

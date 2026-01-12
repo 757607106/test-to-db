@@ -75,7 +75,6 @@ interface InterruptProps {
   isLastMessage: boolean;
   hasNoAIOrToolMessages: boolean;
 }
-// TODO  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2Ym1KUlF3PT06M2Q1NmMyYjE=
 
 function Interrupt({
   interruptValue,

@@ -239,7 +239,6 @@ def publish_schema(
 
         # Get all existing relationships for this connection
         existing_relationships = crud.schema_relationship.get_by_connection(db=db, connection_id=connection_id)
-# noqa  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2WVdVMk13PT06NDdlYTU5MjM=
 
         # Track which relationships are still valid
         processed_relationship_ids = set()
@@ -425,7 +424,6 @@ def sync_to_neo4j(
         error_trace = traceback.format_exc()
         print(f"Error syncing to Neo4j: {str(e)}\n{error_trace}")
         raise HTTPException(status_code=500, detail=f"Error syncing to Neo4j: {str(e)}")
-# noqa  My80OmFIVnBZMlhva3JMbW5iN21ucGM2WVdVMk13PT06NDdlYTU5MjM=
 
 @router.post("/{connection_id}/discover-and-sync", response_model=Dict[str, Any])
 def discover_and_sync(

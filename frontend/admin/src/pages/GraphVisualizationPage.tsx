@@ -227,6 +227,5 @@ const KnowledgeGraphVisualization = () => {
 const GraphVisualizationPage = () => {
   return <KnowledgeGraphVisualization />;
 };
-// TODO  My80OmFIVnBZMlhva3JMbW5iN21ucGM2VmpaR01RPT06ZTkzY2MyMzg=
 
 export default GraphVisualizationPage;

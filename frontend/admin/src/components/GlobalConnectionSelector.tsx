@@ -58,7 +58,7 @@ const GlobalConnectionSelector: React.FC<GlobalConnectionSelectorProps> = ({
         onChange={(value) => setSelectedConnectionId(value ? Number(value) : null)}
         loading={loading}
         style={{ width: 220 }}
-        dropdownMatchSelectWidth={false}
+        popupMatchSelectWidth={false}
         suffixIcon={loading ? <Spin size="small" /> : <DatabaseOutlined />}
         className="connection-select"
       >
@@ -71,6 +71,5 @@ const GlobalConnectionSelector: React.FC<GlobalConnectionSelectorProps> = ({
     </div>
   );
 };
-// TODO  My80OmFIVnBZMlhva3JMbW5iN21ucGM2V1VKeVNnPT06MmZmZmQ1NzI=
 
 export default GlobalConnectionSelector;

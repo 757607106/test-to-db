@@ -295,7 +295,6 @@ def format_schema_for_prompt(schema_context: Dict[str, Any]) -> str:
                 schema_str += f"--   {col_name} {col_type}{pk_flag}{fk_flag}{col_desc}\n"
 
         schema_str += "\n"
-# noqa  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2TXpCWWJRPT06NmM3YjRkOGM=
 
     if relationships:
         schema_str += "-- 关系:\n"
@@ -383,7 +382,6 @@ def extract_sql_from_llm_response(response: str) -> str:
     code_match = re.search(r'```(.*?)```', response, re.DOTALL)
     if code_match:
         return code_match.group(1).strip()
-# pragma: no cover  My80OmFIVnBZMlhva3JMbW5iN21ucGM2TXpCWWJRPT06NmM3YjRkOGM=
 
     # 如果没有代码块，尝试找到类似SQL的内容
     lines = response.split('\n')

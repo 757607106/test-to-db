@@ -96,7 +96,6 @@ def process_text2sql_query(db: Session, connection: DBConnection, natural_langua
     try:
         # 1. 检索相关表结构
         schema_context = retrieve_relevant_schema(db, connection.id, natural_language_query)
-# noqa  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2ZHpsVmRnPT06ZjIwOTIzYTE=
 
         # 如果没有找到相关表结构，返回错误
         if not schema_context["tables"]:
@@ -121,7 +120,6 @@ def process_text2sql_query(db: Session, connection: DBConnection, natural_langua
 
         # 6. 使用值映射处理SQL
         processed_sql = process_sql_with_value_mappings(sql, value_mappings)
-# pragma: no cover  My80OmFIVnBZMlhva3JMbW5iN21ucGM2ZHpsVmRnPT06ZjIwOTIzYTE=
 
         # 7. 验证SQL
         if not validate_sql(processed_sql):

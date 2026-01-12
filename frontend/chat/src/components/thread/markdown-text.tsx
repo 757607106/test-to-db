@@ -38,7 +38,6 @@ const useCopyToClipboard = ({
 
   return { isCopied, copyToClipboard };
 };
-// TODO  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2YVdSYWVnPT06YTRlMjk5Njc=
 
 const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
   const { isCopied, copyToClipboard } = useCopyToClipboard();
@@ -273,6 +272,5 @@ const MarkdownTextImpl: FC<{ children: string }> = ({ children }) => {
     </div>
   );
 };
-// @ts-expect-error  My80OmFIVnBZMlhva3JMbW5iN21ucGM2YVdSYWVnPT06YTRlMjk5Njc=
 
 export const MarkdownText = memo(MarkdownTextImpl);

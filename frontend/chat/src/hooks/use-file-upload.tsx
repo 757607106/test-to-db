@@ -10,7 +10,6 @@ export const SUPPORTED_FILE_TYPES = [
   "image/webp",
   "application/pdf",
 ];
-// FIXME  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2WWpReFNBPT06OTI5NGZmYWE=
 
 interface UseFileUploadOptions {
   initialBlocks?: OptimizedContentBlock[];

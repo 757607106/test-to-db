@@ -61,7 +61,6 @@ interface SchemaTable {
   relationships: SchemaRelationship[];
   ui_metadata?: any;
 }
-// FIXME  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2ZEZNMVFnPT06ZjZjMGFkZGQ=
 
 interface SchemaColumn {
   id: number;

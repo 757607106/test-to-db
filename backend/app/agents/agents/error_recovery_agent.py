@@ -256,7 +256,6 @@ def auto_fix_sql_error(sql_query: str, error_message: str, schema_info: Dict[str
             "success": False,
             "error": str(e)
         }
-# fmt: off  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2U2t0UFl3PT06NGMwMjhhZDM=
 
 
 class ErrorRecoveryAgent:
@@ -347,7 +346,6 @@ class ErrorRecoveryAgent:
                     state["current_stage"] = "error_recovery"
             
             return recovery_result
-# pragma: no cover  My80OmFIVnBZMlhva3JMbW5iN21ucGM2U2t0UFl3PT06NGMwMjhhZDM=
             
         except Exception as e:
             return {

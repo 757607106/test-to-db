@@ -54,4 +54,3 @@ class WebSocketException(BaseAppException):
     """WebSocket相关异常"""
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
         super().__init__(message, code="websocket_error", details=details)
-# noqa  Mi8zOmFIVnBZMlhva3JMbW5iN21ucGM2U0hCMFRRPT06MDA1ZjY2YjY=

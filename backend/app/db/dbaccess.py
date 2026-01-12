@@ -220,7 +220,6 @@ class DBAccess(ABC):
             return psycopg2.connect(host=host, dbname=dbname,
                         user=user, password=password, port=port, **kwargs)
 
-# pragma: no cover  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2ZVROUGR3PT06NGNkMjVhZTE=
 
         def run_sql_postgres(sql: str) -> Union[pd.DataFrame, None]:
             conn = None

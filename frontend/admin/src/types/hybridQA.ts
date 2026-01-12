@@ -47,7 +47,6 @@ export interface FeedbackRequest {
   user_satisfaction: number; // 0.0 - 1.0
   feedback_text?: string;
 }
-// TODO  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2V1VVeGJRPT06ZjZiZjdkMTE=
 
 export interface QAStats {
   total_qa_pairs: number;

@@ -18,7 +18,6 @@ import { useStreamContext } from "@/providers/Stream";
 interface UseInterruptedActionsInput {
   interrupt: HumanInterrupt;
 }
-// FIXME  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2Vnpac2NRPT06NjY2Zjg1Y2Y=
 
 interface UseInterruptedActionsValue {
   // Actions
@@ -51,7 +50,6 @@ interface UseInterruptedActionsValue {
   // Refs
   initialHumanInterruptEditValue: MutableRefObject<Record<string, string>>;
 }
-// TODO  My80OmFIVnBZMlhva3JMbW5iN21ucGM2Vnpac2NRPT06NjY2Zjg1Y2Y=
 
 export default function useInterruptedActions({
   interrupt,

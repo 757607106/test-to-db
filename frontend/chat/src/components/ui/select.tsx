@@ -97,7 +97,6 @@ const SelectContent = React.forwardRef<
   </SelectPrimitive.Portal>
 ))
 SelectContent.displayName = SelectPrimitive.Content.displayName
-// @ts-expect-error  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2UWpOdFJBPT06ZDVhMGIyOGM=
 
 const SelectLabel = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Label>,

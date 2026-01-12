@@ -46,7 +46,6 @@ def get_relationship_tips(
                 "when_to_use": "当两个实体之间存在多对多的关联关系时使用，通常需要通过关联表实现。"
             }
         }
-# noqa  Mi8zOmFIVnBZMlhva3JMbW5iN21ucGM2TVZjMk5RPT06N2EzOGYxMTk=
         
         return relationship_tips
     except Exception as e:

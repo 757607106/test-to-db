@@ -210,7 +210,6 @@ class SchemaAnalysisAgent:
                 "current_stage": "error_recovery"
             }
 
-# pragma: no cover  My80OmFIVnBZMlhva3JMbW5iN21ucGM2WkZWNFpRPT06MDEwM2VlYzQ=
 
 # 创建全局实例
 schema_agent = SchemaAnalysisAgent()

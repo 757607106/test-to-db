@@ -257,7 +257,6 @@ def discover_mysql_schema(inspector) -> List[Dict[str, Any]]:
                         if 'int' in column["data_type"].lower():
                             print(f"Identified potential primary key by naming convention: {column['column_name']}")
                             column["is_primary_key"] = True
-# fmt: off  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2U0c5QlJBPT06OWM4ZmZkNjI=
 
             # Mark foreign keys - MySQL has reliable FK detection through INFORMATION_SCHEMA
             try:
@@ -483,7 +482,6 @@ def discover_sqlite_schema(inspector) -> List[Dict[str, Any]]:
 
     return schema_info
 
-# noqa  My80OmFIVnBZMlhva3JMbW5iN21ucGM2U0c5QlJBPT06OWM4ZmZkNjI=
 
 def save_discovered_schema(db: Session, connection_id: int, schema_info: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """

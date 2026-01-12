@@ -347,7 +347,7 @@ SQL语句:
                 "error": str(e),
                 "retry_count": state.get("retry_count", 0)
             }
-# type: ignore  My80OmFIVnBZMlhva3JMbW5iN21ucGM2YzJKdGRRPT06Nzg1NzE1ZDQ=
+
             
             state["error_history"].append(error_info)
             state["current_stage"] = "error_recovery"

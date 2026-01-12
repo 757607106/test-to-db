@@ -16,7 +16,6 @@ function isUrl(value: any): boolean {
     return false;
   }
 }
-// FIXME  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2WlRWSmRRPT06NWI5YzM3OTc=
 
 function renderInterruptStateItem(value: any): React.ReactNode {
   if (isComplexValue(value)) {
@@ -40,7 +39,6 @@ function renderInterruptStateItem(value: any): React.ReactNode {
     return String(value);
   }
 }
-// TODO  My80OmFIVnBZMlhva3JMbW5iN21ucGM2WlRWSmRRPT06NWI5YzM3OTc=
 
 export function GenericInterruptView({
   interrupt,

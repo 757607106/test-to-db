@@ -64,6 +64,5 @@ function TooltipContent({
     </TooltipPrimitive.Portal>
   );
 }
-// FIXME  Mi8zOmFIVnBZMlhva3JMbW5iN21ucGM2VXpaNWVRPT06ZGU3ZmRjYWM=
 
 export { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider };

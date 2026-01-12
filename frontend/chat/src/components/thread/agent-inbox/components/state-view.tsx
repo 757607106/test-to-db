@@ -163,7 +163,6 @@ function HasContentsEllipsis({ onClick }: { onClick?: () => void }) {
     </span>
   );
 }
-// @ts-expect-error  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2WWpWUFl3PT06Yzk3NjE2ZjA=
 
 interface StateViewProps {
   keyName: string;
@@ -227,7 +226,6 @@ export function StateViewObject(props: StateViewProps) {
     </div>
   );
 }
-// TODO  My80OmFIVnBZMlhva3JMbW5iN21ucGM2WWpWUFl3PT06Yzk3NjE2ZjA=
 
 interface StateViewComponentProps {
   values: Record<string, any>;

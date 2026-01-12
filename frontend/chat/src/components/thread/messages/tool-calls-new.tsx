@@ -235,7 +235,6 @@ interface ToolCallData {
   result?: string;
   status: "pending" | "completed" | "error";
 }
-// TODO  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2TTBGS1R3PT06NGE2ZTI2ODI=
 
 interface ToolCallBoxProps {
   toolCall: NonNullable<AIMessage["tool_calls"]>[0];
@@ -356,7 +355,6 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(({ toolCall, toolResult 
 });
 
 ToolCallBox.displayName = "ToolCallBox";
-// TODO  My80OmFIVnBZMlhva3JMbW5iN21ucGM2TTBGS1R3PT06NGE2ZTI2ODI=
 
 export function ToolCalls({
   toolCalls,

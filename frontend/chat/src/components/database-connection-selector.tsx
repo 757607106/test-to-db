@@ -12,14 +12,12 @@ import {
 } from "@/components/ui/select";
 import { getConnections, type DBConnection } from '@/lib/api';
 import { cn } from '@/lib/utils';
-// FIXME  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2UjJKa2NnPT06MjYzOWQ0YmM=
 
 interface DatabaseConnectionSelectorProps {
   value?: number | null;
   onChange: (connectionId: number | null) => void;
   className?: string;
 }
-// @ts-expect-error  My80OmFIVnBZMlhva3JMbW5iN21ucGM2UjJKa2NnPT06MjYzOWQ0YmM=
 
 export function DatabaseConnectionSelector({
   value,

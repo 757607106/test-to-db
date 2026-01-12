@@ -71,7 +71,6 @@ def discover_and_save_schema(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error discovering and saving schema: {str(e)}")
 
-# pragma: no cover  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2WWpKMFZRPT06Y2ZiY2E2MTM=
 
 @router.get("/{connection_id}", response_model=schemas.DBConnection)
 def read_connection(
@@ -104,7 +103,6 @@ def update_connection(
     connection = crud.db_connection.update(db=db, db_obj=connection, obj_in=connection_in)
     return connection
 
-# pragma: no cover  My80OmFIVnBZMlhva3JMbW5iN21ucGM2WWpKMFZRPT06Y2ZiY2E2MTM=
 
 @router.delete("/{connection_id}", response_model=schemas.DBConnection)
 def delete_connection(

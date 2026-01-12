@@ -67,7 +67,6 @@ def setup_environment():
 def main():
     """Start the server"""
     print("🚀 Starting Simple LangGraph API Server...")
-# pragma: no cover  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2VjJrd2RnPT06ZGRiZmY5NWQ=
     
     # Setup environment
     setup_environment()
@@ -79,7 +78,6 @@ def main():
     print("🎨 Studio UI: http://localhost:2025/ui")
     print("💚 Health Check: http://localhost:2025/ok")
     print("="*60)
-# type: ignore  My80OmFIVnBZMlhva3JMbW5iN21ucGM2VjJrd2RnPT06ZGRiZmY5NWQ=
     
     try:
         # Import uvicorn after environment setup

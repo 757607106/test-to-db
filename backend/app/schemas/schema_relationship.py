@@ -42,7 +42,6 @@ class SchemaRelationshipInDBBase(SchemaRelationshipBase):
     class Config:
         from_attributes = True
 
-# fmt: off  Mi8zOmFIVnBZMlhva3JMbW5iN21ucGM2VVhCUmJRPT06ZDgzODlkY2E=
 
 # Properties to return to client
 class SchemaRelationship(SchemaRelationshipInDBBase):

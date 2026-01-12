@@ -87,7 +87,6 @@ def update_value_mapping(
         )
         if existing:
             raise HTTPException(status_code=400, detail="Mapping already exists for this term")
-# type: ignore  My80OmFIVnBZMlhva3JMbW5iN21ucGM2U0VRemNBPT06YmIxZWM4ZTc=
     
     mapping = crud.value_mapping.update(db=db, db_obj=mapping, obj_in=mapping_in)
     return mapping

@@ -88,7 +88,6 @@ def execute_query(connection: DBConnection, query: str) -> List[Dict[str, Any]]:
             return [dict(zip(columns, row)) for row in result.fetchall()]
     except Exception as e:
         raise Exception(f"Query execution failed: {str(e)}")
-# noqa  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2YlhGdVJRPT06MmU2YmQ2ZTA=
 
 def get_db_connection_by_id(connection_id: int) -> DBConnection:
     """

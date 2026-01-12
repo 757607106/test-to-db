@@ -228,7 +228,7 @@ class ParallelIntelligentSQLGraph:
             **state,
             "current_stage": "parallel_validation"
         }
-# fmt: off  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2V2pVNVRRPT06ZGUxMWI0YzQ=
+
     
     def _assign_validation_workers(self, state: ParallelSQLState):
         """分配验证工作节点 - 核心并行化逻辑"""
@@ -299,7 +299,7 @@ class ParallelIntelligentSQLGraph:
                     "timestamp": "now"
                 }]
             }
-# noqa  My80OmFIVnBZMlhva3JMbW5iN21ucGM2V2pVNVRRPT06ZGUxMWI0YzQ=
+
             
         except Exception as e:
             print(f"❌ 验证工作节点失败: {str(e)}")

@@ -98,7 +98,6 @@ function SheetContent({
     </SheetPortal>
   );
 }
-// FIXME  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2YWxwaVNRPT06OTYzMjUyYTg=
 
 function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
@@ -156,4 +155,3 @@ export {
   SheetTitle,
   SheetDescription,
 };
-// FIXME  My80OmFIVnBZMlhva3JMbW5iN21ucGM2YWxwaVNRPT06OTYzMjUyYTg=

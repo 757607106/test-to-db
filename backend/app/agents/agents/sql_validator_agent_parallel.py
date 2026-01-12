@@ -186,7 +186,7 @@ def validate_sql_performance(sql_query: str, schema_info: Dict[str, Any] = None)
         for pattern in like_patterns:
             if pattern.startswith('%'):
                 performance_issues.append(f"LIKE模式'{pattern}'以通配符开头，无法使用索引")
-# noqa  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2VG1SNlVRPT06YzZlYzQwYTM=
+
         
         return {
             "success": True,
@@ -309,7 +309,6 @@ class ParallelSQLValidatorAgent:
         
         workflow.add_edge("fix_issues", "finalize")
         workflow.add_edge("finalize", END)
-# fmt: off  My80OmFIVnBZMlhva3JMbW5iN21ucGM2VG1SNlVRPT06YzZlYzQwYTM=
         
         return workflow.compile(name=self.name)
 

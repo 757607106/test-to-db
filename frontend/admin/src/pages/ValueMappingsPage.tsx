@@ -19,7 +19,6 @@ interface SchemaTable {
   table_name: string;
   description?: string;
 }
-// FIXME  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2WjBoak53PT06YjIwMGZhNzU=
 
 interface SchemaColumn {
   id: number;
@@ -354,4 +353,3 @@ const ValueMappingsPage: React.FC = () => {
 };
 
 export default ValueMappingsPage;
-// FIXME  My80OmFIVnBZMlhva3JMbW5iN21ucGM2WjBoak53PT06YjIwMGZhNzU=

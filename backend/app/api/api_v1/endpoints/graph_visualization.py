@@ -135,7 +135,6 @@ def get_graph_data(
             relationship_count = 0
             edge_id_counter = {}  # 用于跟踪重复的边ID
             skipped_relationships = 0
-# pragma: no cover  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2Um1OaWN3PT06NGFjMDE2ZTA=
 
             for record in relationship_records:
                 relationship_count += 1
@@ -157,7 +156,6 @@ def get_graph_data(
                     print(f"Warning: Target column {target_id} not found in nodes, skipping relationship")
                     skipped_relationships += 1
                     continue
-# noqa  My80OmFIVnBZMlhva3JMbW5iN21ucGM2Um1OaWN3PT06NGFjMDE2ZTA=
 
                 # 生成基础边ID
                 base_edge_id = f"rel-{source_id}-{target_id}"
