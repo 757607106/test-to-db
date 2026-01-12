@@ -88,7 +88,6 @@ function ScrollToBottom(props: { className?: string }) {
     </Button>
   );
 }
-// @ts-expect-error  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2TlhkUlNBPT06ODk0NDI2MTM=
 
 function OpenGitHubRepo() {
   return (
@@ -379,7 +378,7 @@ export function Thread() {
                     height={32}
                   />
                   <span className="text-xl font-semibold tracking-tight">
-                    任我行智能
+                    任我行智能BI
                   </span>
                 </motion.button>
               </div>
@@ -447,12 +446,12 @@ export function Thread() {
                 </>
               }
               footer={
-                <div className="sticky bottom-0 flex flex-col items-center gap-8 bg-white">
+                <div className="sticky bottom-0 flex flex-col items-center gap-8 bg-background/80 backdrop-blur-xl">
                   {!chatStarted && (
                     <div className="flex items-center gap-3">
                       <LangGraphLogoSVG className="h-8 flex-shrink-0" />
                       <h1 className="text-2xl font-semibold tracking-tight">
-                        任我行智能
+                        任我行智能BI
                       </h1>
                     </div>
                   )}
@@ -462,10 +461,10 @@ export function Thread() {
                   <div
                     ref={dropRef}
                     className={cn(
-                      "bg-muted relative z-10 mx-auto mb-8 w-full max-w-3xl rounded-2xl shadow-xs transition-all",
+                      "relative z-10 mx-auto mb-8 w-full max-w-3xl rounded-[24px] shadow-lg transition-all bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-md border border-white/20 dark:border-white/10",
                       dragOver
                         ? "border-primary border-2 border-dotted"
-                        : "border border-solid",
+                        : "border border-black/5 dark:border-white/5",
                     )}
                   >
                     <form

@@ -63,7 +63,7 @@ export function LangGraphLogoSVG({
       <circle cx="98" cy="30" r="2.5" fill="#60a5fa" opacity="0.9" />
       <circle cx="98" cy="30" r="1" fill="#ffffff" opacity="0.8" />
 
-      {/* "但" 字 */}
+      {/* "问" 字 */}
       <text
         x="38"
         y="39"
@@ -74,10 +74,10 @@ export function LangGraphLogoSVG({
         textAnchor="middle"
         opacity="0.95"
       >
-        但
+        问
       </text>
 
-      {/* "问" 字 */}
+      {/* "数" 字 */}
       <text
         x="82"
         y="39"
@@ -88,7 +88,7 @@ export function LangGraphLogoSVG({
         textAnchor="middle"
         opacity="0.95"
       >
-        问
+        数
       </text>
 
       {/* 中间分隔线 - 使用渐变 */}

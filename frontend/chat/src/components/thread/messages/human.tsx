@@ -113,7 +113,7 @@ export function HumanMessage({
             )}
             {/* Render text if present, otherwise fallback to file/image name */}
             {contentString ? (
-              <p className="bg-muted ml-auto w-fit rounded-3xl px-4 py-2 text-right whitespace-pre-wrap">
+              <p className="bg-[#007AFF] text-white ml-auto w-fit rounded-[20px] px-5 py-3 text-right whitespace-pre-wrap shadow-sm leading-relaxed">
                 {contentString}
               </p>
             ) : null}

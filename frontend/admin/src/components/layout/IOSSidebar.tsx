@@ -1,0 +1,131 @@
+import React from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import {
+  HomeOutlined,
+  BulbOutlined,
+  TableOutlined,
+  ShareAltOutlined,
+  DatabaseOutlined,
+  SwapOutlined,
+  SettingOutlined,
+  UserOutlined
+} from '@ant-design/icons';
+
+const IOSSidebar: React.FC = () => {
+  const location = useLocation();
+
+  const menuItems = [
+    { key: '/', icon: <HomeOutlined />, label: '首页', to: '/' },
+    { key: '/hybrid-qa', icon: <BulbOutlined />, label: '智能训练', to: '/hybrid-qa' },
+    { key: '/schema', icon: <TableOutlined />, label: '数据建模', to: '/schema' },
+    { key: '/graph-visualization', icon: <ShareAltOutlined />, label: '知识图谱', to: '/graph-visualization' },
+    { key: '/connections', icon: <DatabaseOutlined />, label: '连接管理', to: '/connections' },
+    { key: '/value-mappings', icon: <SwapOutlined />, label: '数据映射', to: '/value-mappings' },
+  ];
+
+  const styles = {
+    sidebar: {
+      width: 'var(--sidebar-width)',
+      height: '100vh',
+      background: 'var(--glass-bg)',
+      backdropFilter: 'blur(var(--blur-amount)) saturate(180%)',
+      WebkitBackdropFilter: 'blur(var(--blur-amount)) saturate(180%)',
+      borderRight: '1px solid var(--glass-border)',
+      display: 'flex',
+      flexDirection: 'column' as const,
+      padding: '0 8px', // Adjusted for macOS spacing
+      boxSizing: 'border-box' as const,
+      position: 'fixed' as const,
+      left: 0,
+      top: 0,
+      zIndex: 1000,
+      transition: 'all var(--transition-speed) var(--transition-ease)',
+    },
+    logoArea: {
+      height: '52px', // Compact toolbar height
+      display: 'flex',
+      alignItems: 'center',
+      paddingLeft: '12px',
+      marginTop: '0', // Flush to top traffic lights area (conceptually)
+      marginBottom: '10px',
+    },
+    logoText: {
+      fontSize: '15px', // Increased from 13px
+      fontWeight: 600,
+      color: 'var(--text-secondary)', // Sidebar titles are usually subtle in macOS
+      fontFamily: 'var(--font-stack)',
+      letterSpacing: '0.02em',
+      textTransform: 'uppercase' as const,
+      opacity: 0.9,
+      paddingLeft: '4px', // Align with new padding
+    },
+    menuList: {
+      listStyle: 'none',
+      padding: 0,
+      margin: 0,
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column' as const,
+    },
+    bottomSection: {
+      padding: '10px 0 16px 0',
+      borderTop: '1px solid var(--glass-border)',
+      display: 'flex',
+      flexDirection: 'column' as const,
+      gap: '2px',
+    },
+  };
+
+  return (
+    <aside style={styles.sidebar}>
+      {/* Imitate Window Controls Area Space */}
+      <div style={{ height: '38px', WebkitAppRegion: 'drag' } as any} /> 
+      
+      <div style={styles.logoArea}>
+        <span style={styles.logoText}>RWX Admin</span>
+      </div>
+
+      <ul style={styles.menuList}>
+        {menuItems.map((item) => {
+          const isActive = location.pathname === item.to;
+          return (
+            <li key={item.key}>
+              <Link
+                to={item.to}
+                className={`macos-sidebar-item ${isActive ? 'active' : ''}`}
+              >
+                <span className="sidebar-icon">{item.icon}</span>
+                {item.label}
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div style={styles.bottomSection}>
+        <div className="macos-sidebar-item">
+          <SettingOutlined className="sidebar-icon" style={{ fontSize: '18px' }} />
+          <span style={{ fontWeight: 500 }}>设置</span>
+        </div>
+        <div className="macos-sidebar-item">
+          <div style={{ 
+            width: '24px', 
+            height: '24px', 
+            borderRadius: '50%', 
+            background: 'var(--bg-tertiary)', 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center', 
+            marginRight: '12px',
+            color: 'var(--text-secondary)'
+          }}>
+            <UserOutlined style={{ fontSize: '14px' }} />
+          </div>
+          <span style={{ fontWeight: 500 }}>管理员</span>
+        </div>
+      </div>
+    </aside>
+  );
+};
+
+export default IOSSidebar;

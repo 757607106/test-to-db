@@ -151,7 +151,7 @@ export function AssistantMessage({
         {!isToolResult && (
           <>
             {contentString.length > 0 && (
-              <div className="py-1">
+              <div className="py-3 px-5 bg-[#F2F2F7] dark:bg-[#1C1C1E] rounded-[20px] w-fit shadow-sm leading-relaxed text-black/90 dark:text-white/90">
                 <MarkdownText>{contentString}</MarkdownText>
               </div>
             )}
