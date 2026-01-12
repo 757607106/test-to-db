@@ -151,7 +151,7 @@ const RelationshipModal: React.FC<RelationshipModalProps> = ({
       onCancel={onClose}
       footer={modalFooter}
       maskClosable={false}
-      destroyOnClose={true}
+      destroyOnHidden={true}
       width={500}
     >
       {relationshipData && (
@@ -159,7 +159,7 @@ const RelationshipModal: React.FC<RelationshipModalProps> = ({
           {/* 关系可视化展示 */}
           <div style={{ marginBottom: 20 }}>
             <Card
-              bordered={false}
+              variant="borderless"
               style={{
                 background: '#f8fafc',
                 borderRadius: 8,

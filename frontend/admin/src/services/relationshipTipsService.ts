@@ -1,5 +1,5 @@
 
-import { API_BASE_URL } from '../config';
+import api from './api';
 
 /**
  * 获取关系类型提示信息
@@ -7,13 +7,11 @@ import { API_BASE_URL } from '../config';
  */
 export const getRelationshipTips = async () => {
   try {
-    const response = await fetch(`${API_BASE_URL}/relationship-tips/`);
-    if (!response.ok) {
-      throw new Error(`获取关系类型提示信息失败: ${response.statusText}`);
-    }
-    return await response.json();
+    const response = await api.get('/relationship-tips/');
+    return response.data;
   } catch (error) {
     console.error('获取关系类型提示信息出错:', error);
+    // 返回空对象作为降级处理
     return {};
   }
 };

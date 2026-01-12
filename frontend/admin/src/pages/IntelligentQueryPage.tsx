@@ -14,7 +14,6 @@ const CodeHighlighter = SyntaxHighlighter as any;
 const { Option } = Select;
 const { TextArea } = Input;
 const { Title, Text } = Typography;
-const { TabPane } = Tabs;
 
 interface DBConnection {
   id: number;
@@ -165,76 +164,89 @@ const IntelligentQueryPage: React.FC = () => {
           <div>
             <Divider orientation="left">结果</Divider>
 
-            <Tabs defaultActiveKey="1">
-              <TabPane tab="生成的SQL" key="1">
-                <div style={{ position: 'relative' }}>
-                  <Button
-                    icon={<CopyOutlined />}
-                    style={{ position: 'absolute', top: 8, right: 8, zIndex: 1 }}
-                    onClick={() => copyToClipboard(result.sql)}
-                  >
-                    复制
-                  </Button>
-                  <CodeHighlighter language="sql" style={vscDarkPlus}>
-                    {result.sql}
-                  </CodeHighlighter>
-                </div>
-              </TabPane>
-
-              <TabPane tab="查询结果" key="2">
-                {result.error ? (
-                  <div style={{ color: 'red', marginBottom: 16 }}>
-                    <Text type="danger">{result.error}</Text>
-                  </div>
-                ) : result.results && result.results.length > 0 ? (
-                  <Table
-                    columns={columns}
-                    dataSource={result.results.map((item, index) => ({ ...item, key: index }))}
-                    scroll={{ x: 'max-content' }}
-                    pagination={{ pageSize: 10 }}
-                  />
-                ) : (
-                  <Text>未找到结果</Text>
-                )}
-              </TabPane>
-
-              <TabPane tab="上下文和解释" key="3">
-                {result.context ? (
-                  <div>
-                    <Title level={5}>模式上下文</Title>
-                    <div style={{ marginBottom: 16 }}>
-                      <Text>此查询中使用的表：</Text>
-                      <ul>
-                        {result.context.schema_context?.tables.map((table: any) => (
-                          <li key={table.id}>
-                            <Text strong>{table.name}</Text>
-                            {table.description && <Text> - {table.description}</Text>}
-                          </li>
-                        ))}
-                      </ul>
+            <Tabs 
+              defaultActiveKey="1"
+              items={[
+                {
+                  key: '1',
+                  label: '生成的SQL',
+                  children: (
+                    <div style={{ position: 'relative' }}>
+                      <Button
+                        icon={<CopyOutlined />}
+                        style={{ position: 'absolute', top: 8, right: 8, zIndex: 1 }}
+                        onClick={() => copyToClipboard(result.sql)}
+                      >
+                        复制
+                      </Button>
+                      <CodeHighlighter language="sql" style={vscDarkPlus}>
+                        {result.sql}
+                      </CodeHighlighter>
                     </div>
+                  )
+                },
+                {
+                  key: '2',
+                  label: '查询结果',
+                  children: (
+                    result.error ? (
+                      <div style={{ color: 'red', marginBottom: 16 }}>
+                        <Text type="danger">{result.error}</Text>
+                      </div>
+                    ) : result.results && result.results.length > 0 ? (
+                      <Table
+                        columns={columns}
+                        dataSource={result.results.map((item, index) => ({ ...item, key: index }))}
+                        scroll={{ x: 'max-content' }}
+                        pagination={{ pageSize: 10 }}
+                      />
+                    ) : (
+                      <Text>未找到结果</Text>
+                    )
+                  )
+                },
+                {
+                  key: '3',
+                  label: '上下文和解释',
+                  children: (
+                    result.context ? (
+                      <div>
+                        <Title level={5}>模式上下文</Title>
+                        <div style={{ marginBottom: 16 }}>
+                          <Text>此查询中使用的表：</Text>
+                          <ul>
+                            {result.context.schema_context?.tables.map((table: any) => (
+                              <li key={table.id}>
+                                <Text strong>{table.name}</Text>
+                                {table.description && <Text> - {table.description}</Text>}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
 
-                    <Title level={5}>关系</Title>
-                    <div style={{ marginBottom: 16 }}>
-                      {result.context.schema_context?.relationships.length > 0 ? (
-                        <ul>
-                          {result.context.schema_context.relationships.map((rel: any, index: number) => (
-                            <li key={index}>
-                              <Text>{rel.source_table}.{rel.source_column} → {rel.target_table}.{rel.target_column}</Text>
-                              {rel.relationship_type && <Text type="secondary"> ({rel.relationship_type})</Text>}
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <Text>此查询中未使用关系</Text>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <Text>无可用的上下文信息</Text>
-                )}
-              </TabPane>
-            </Tabs>
+                        <Title level={5}>关系</Title>
+                        <div style={{ marginBottom: 16 }}>
+                          {result.context.schema_context?.relationships.length > 0 ? (
+                            <ul>
+                              {result.context.schema_context.relationships.map((rel: any, index: number) => (
+                                <li key={index}>
+                                  <Text>{rel.source_table}.{rel.source_column} → {rel.target_table}.{rel.target_column}</Text>
+                                  {rel.relationship_type && <Text type="secondary"> ({rel.relationship_type})</Text>}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <Text>此查询中未使用关系</Text>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <Text>无可用的上下文信息</Text>
+                    )
+                  )
+                }
+              ]}
+            />
           </div>
         )}
       </Card>

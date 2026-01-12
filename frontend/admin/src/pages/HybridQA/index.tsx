@@ -42,7 +42,6 @@ import QAFeedbackModal from '../../components/QAFeedbackModal';
 import type { QAPair, SimilarQAPair, QAPairCreate } from '../../types/hybridQA';
 import type { DBConnection } from '../../types/api';
 
-const { TabPane } = Tabs;
 const { TextArea } = Input;
 const { Option } = Select;
 
@@ -338,112 +337,124 @@ const HybridQAPage: React.FC = () => {
           </Button>
         </Space>
 
-        <Tabs defaultActiveKey="search">
-          <TabPane tab="智能搜索" key="search">
-            <Card size="small" style={{ marginBottom: '16px' }}>
-              <Form
-                form={searchForm}
-                layout="inline"
-                onFinish={handleSearchSimilar}
-              >
-                <Form.Item
-                  name="question"
-                  rules={[{ required: true, message: '请输入问题' }]}
-                >
-                  <Input
-                    placeholder="输入自然语言问题"
-                    style={{ width: 300 }}
-                  />
-                </Form.Item>
-                <Form.Item name="connection_id">
-                  <Select
-                    placeholder="选择数据库连接"
-                    style={{ width: 200 }}
-                    allowClear
-                  >
-                    {connections.map(conn => (
-                      <Option key={conn.id} value={conn.id}>
-                        {conn.name}
-                      </Option>
-                    ))}
-                  </Select>
-                </Form.Item>
-                <Form.Item name="top_k" initialValue={5}>
-                  <InputNumber
-                    placeholder="返回数量"
-                    min={1}
-                    max={20}
-                    style={{ width: 100 }}
-                  />
-                </Form.Item>
-                <Form.Item>
-                  <Button
-                    type="primary"
-                    htmlType="submit"
+        <Tabs 
+          defaultActiveKey="search"
+          items={[
+            {
+              key: 'search',
+              label: '智能搜索',
+              children: (
+                <>
+                  <Card size="small" style={{ marginBottom: '16px' }}>
+                    <Form
+                      form={searchForm}
+                      layout="inline"
+                      onFinish={handleSearchSimilar}
+                    >
+                      <Form.Item
+                        name="question"
+                        rules={[{ required: true, message: '请输入问题' }]}
+                      >
+                        <Input
+                          placeholder="输入自然语言问题"
+                          style={{ width: 300 }}
+                        />
+                      </Form.Item>
+                      <Form.Item name="connection_id">
+                        <Select
+                          placeholder="选择数据库连接"
+                          style={{ width: 200 }}
+                          allowClear
+                        >
+                          {connections.map(conn => (
+                            <Option key={conn.id} value={conn.id}>
+                              {conn.name}
+                            </Option>
+                          ))}
+                        </Select>
+                      </Form.Item>
+                      <Form.Item name="top_k" initialValue={5}>
+                        <InputNumber
+                          placeholder="返回数量"
+                          min={1}
+                          max={20}
+                          style={{ width: 100 }}
+                        />
+                      </Form.Item>
+                      <Form.Item>
+                        <Button
+                          type="primary"
+                          htmlType="submit"
+                          loading={loading}
+                          icon={<SearchOutlined />}
+                        >
+                          搜索
+                        </Button>
+                      </Form.Item>
+                    </Form>
+                  </Card>
+
+                  <Table
+                    columns={searchColumns}
+                    dataSource={searchResults}
                     loading={loading}
-                    icon={<SearchOutlined />}
-                  >
-                    搜索
-                  </Button>
-                </Form.Item>
-              </Form>
-            </Card>
-
-            <Table
-              columns={searchColumns}
-              dataSource={searchResults}
-              loading={loading}
-              rowKey={(record) => record.qa_pair.id}
-              pagination={{
-                pageSize: 10,
-                showSizeChanger: true,
-                showQuickJumper: true,
-                showTotal: (total) => `共 ${total} 条记录`,
-              }}
-              scroll={{ x: 1200 }}
-            />
-          </TabPane>
-
-          <TabPane tab="统计分析" key="stats">
-            <Row gutter={16}>
-              <Col span={12}>
-                <Card title="查询类型分布" size="small">
-                  {stats.query_types && Object.entries(stats.query_types).map(([type, count]: [string, any]) => (
-                    <div key={type} style={{ marginBottom: '8px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Tag color={getQueryTypeColor(type)} style={{ fontSize: '12px' }}>{type}</Tag>
-                        <span>{count}</span>
-                      </div>
-                      <Progress
-                        percent={stats.total_qa_pairs > 0 ? (count / stats.total_qa_pairs) * 100 : 0}
-                        size="small"
-                        showInfo={false}
-                      />
-                    </div>
-                  ))}
-                </Card>
-              </Col>
-              <Col span={12}>
-                <Card title="难度分布" size="small">
-                  {stats.difficulty_distribution && Object.entries(stats.difficulty_distribution).map(([level, count]: [string, any]) => (
-                    <div key={level} style={{ marginBottom: '8px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span>难度 {level}</span>
-                        <span>{count}</span>
-                      </div>
-                      <Progress
-                        percent={stats.total_qa_pairs > 0 ? (count / stats.total_qa_pairs) * 100 : 0}
-                        size="small"
-                        showInfo={false}
-                        strokeColor={getDifficultyColor(parseInt(level))}
-                      />
-                    </div>
-                  ))}
-                </Card>
-              </Col>
-            </Row>
-          </TabPane>
-        </Tabs>
+                    rowKey={(record) => record.qa_pair.id}
+                    pagination={{
+                      pageSize: 10,
+                      showSizeChanger: true,
+                      showQuickJumper: true,
+                      showTotal: (total) => `共 ${total} 条记录`,
+                    }}
+                    scroll={{ x: 1200 }}
+                  />
+                </>
+              )
+            },
+            {
+              key: 'stats',
+              label: '统计分析',
+              children: (
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <Card title="查询类型分布" size="small">
+                      {stats.query_types && Object.entries(stats.query_types).map(([type, count]: [string, any]) => (
+                        <div key={type} style={{ marginBottom: '8px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Tag color={getQueryTypeColor(type)} style={{ fontSize: '12px' }}>{type}</Tag>
+                            <span>{count}</span>
+                          </div>
+                          <Progress
+                            percent={stats.total_qa_pairs > 0 ? (count / stats.total_qa_pairs) * 100 : 0}
+                            size="small"
+                            showInfo={false}
+                          />
+                        </div>
+                      ))}
+                    </Card>
+                  </Col>
+                  <Col span={12}>
+                    <Card title="难度分布" size="small">
+                      {stats.difficulty_distribution && Object.entries(stats.difficulty_distribution).map(([level, count]: [string, any]) => (
+                        <div key={level} style={{ marginBottom: '8px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span>难度 {level}</span>
+                            <span>{count}</span>
+                          </div>
+                          <Progress
+                            percent={stats.total_qa_pairs > 0 ? (count / stats.total_qa_pairs) * 100 : 0}
+                            size="small"
+                            showInfo={false}
+                            strokeColor={getDifficultyColor(parseInt(level))}
+                          />
+                        </div>
+                      ))}
+                    </Card>
+                  </Col>
+                </Row>
+              )
+            }
+          ]}
+        />
       </Card>
 
       {/* 创建问答对模态框 */}
