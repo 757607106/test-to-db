@@ -314,7 +314,7 @@ def should_generate_chart(query: str, data: Dict[str, Any]) -> Dict[str, Any]:
             "reason": f"判断过程出错: {str(e)}"
         }
 
-# pragma: no cover  Mi80OmFIVnBZMlhva3JMbW5iN21ucGM2ZUhad2JnPT06NTNiNjIzMzE=
+
 
 class ChartGeneratorAgent:
     """图表生成代理"""

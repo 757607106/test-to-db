@@ -23,3 +23,11 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# IDEs
+.idea/
+.vscode/
+
+# Project specific
+.langgraph_api/
+backend/.langgraph_api/
