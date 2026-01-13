@@ -13,5 +13,45 @@ from app.schemas.query import (
     ChatQueryRequest,
     ChatQueryResponse
 )
-
+from app.schemas.dashboard import (
+    DashboardBase,
+    DashboardCreate,
+    DashboardUpdate,
+    DashboardListItem,
+    DashboardDetail,
+    DashboardListResponse,
+    LayoutUpdateRequest,
+    PermissionLevel,
+    PermissionBase,
+    PermissionCreate,
+    PermissionUpdate,
+    PermissionResponse,
+    PermissionListResponse
+)
+from app.schemas.dashboard_widget import (
+    WidgetBase,
+    WidgetCreate,
+    WidgetUpdate,
+    WidgetResponse,
+    WidgetRefreshResponse,
+    WidgetRegenerateRequest,
+    UserSimple
+)
+from app.schemas.dashboard_insight import (
+    TimeRangeCondition,
+    InsightConditions,
+    DashboardInsightRequest,
+    InsightSummary,
+    InsightTrend,
+    InsightAnomaly,
+    InsightCorrelation,
+    InsightRecommendation,
+    InsightResult,
+    DashboardInsightResponse,
+    InsightRefreshRequest,
+    AdjustableTimeRange,
+    AdjustableDimensionFilter,
+    AdjustableAggregationLevel,
+    AdjustableConditionsConfig
+)
 

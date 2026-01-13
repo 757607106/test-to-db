@@ -21,6 +21,8 @@ if env_file.exists():
 
 from app.api.api_v1.api import api_router
 from app.core.config import settings
+from app.db.session import SessionLocal
+from app.db.init_db import create_initial_data
 
 # 注释掉过度的日志过滤，保持正常日志显示
 # 这样我们可以看到完整的连接信息来诊断问题
@@ -43,6 +45,19 @@ app.add_middleware(
 
 # Include API router
 app.include_router(api_router, prefix="/api")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时初始化数据"""
+    db = SessionLocal()
+    try:
+        create_initial_data(db)
+        print("✅ Database initialized with default data")
+    except Exception as e:
+        print(f"⚠️ Error initializing database: {e}")
+    finally:
+        db.close()
 
 
 # 强制重新加载 - 修复路由问题

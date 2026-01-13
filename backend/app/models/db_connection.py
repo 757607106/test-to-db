@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, BigInteger, Integer, String, DateTime
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
@@ -6,7 +6,9 @@ from app.db.base_class import Base
 
 
 class DBConnection(Base):
-    id = Column(Integer, primary_key=True, index=True)
+    __tablename__ = "dbconnection"
+
+    id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
     name = Column(String(255), unique=True, index=True, nullable=False)
     db_type = Column(String(50), nullable=False)
     host = Column(String(255), nullable=False)

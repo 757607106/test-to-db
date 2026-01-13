@@ -5,6 +5,9 @@
   "graphs": {
     "sql_agent": {
       "path": "./app/agents/chat_graph.py:graph"
+    },
+    "dashboard_insight_agent": {
+      "path": "./app/agents/dashboard_insight_graph.py:dashboard_insight_graph"
     }
   },
   "env": ".env",

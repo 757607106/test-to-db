@@ -8,7 +8,8 @@ import {
   DatabaseOutlined,
   SwapOutlined,
   SettingOutlined,
-  UserOutlined
+  UserOutlined,
+  DashboardOutlined
 } from '@ant-design/icons';
 
 const IOSSidebar: React.FC = () => {
@@ -19,6 +20,7 @@ const IOSSidebar: React.FC = () => {
     { key: '/hybrid-qa', icon: <BulbOutlined />, label: '智能训练', to: '/hybrid-qa' },
     { key: '/schema', icon: <TableOutlined />, label: '数据建模', to: '/schema' },
     { key: '/graph-visualization', icon: <ShareAltOutlined />, label: '知识图谱', to: '/graph-visualization' },
+    { key: '/dashboards', icon: <DashboardOutlined />, label: 'BI仪表盘', to: '/dashboards' },
     { key: '/connections', icon: <DatabaseOutlined />, label: '连接管理', to: '/connections' },
     { key: '/value-mappings', icon: <SwapOutlined />, label: '数据映射', to: '/value-mappings' },
   ];
@@ -87,7 +89,8 @@ const IOSSidebar: React.FC = () => {
 
       <ul style={styles.menuList}>
         {menuItems.map((item) => {
-          const isActive = location.pathname === item.to;
+          const isActive = location.pathname === item.to || 
+            (item.to === '/dashboards' && location.pathname.startsWith('/dashboards'));
           return (
             <li key={item.key}>
               <Link

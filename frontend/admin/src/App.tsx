@@ -12,6 +12,8 @@ import IntelligentQueryPage from './pages/IntelligentQueryPage';
 import ValueMappingsPage from './pages/ValueMappingsPage';
 import GraphVisualizationPage from './pages/GraphVisualizationPage';
 import HybridQAPage from './pages/HybridQA';
+import DashboardListPage from './pages/DashboardListPage';
+import DashboardEditorPage from './pages/DashboardEditorPage';
 
 const App: React.FC = () => {
   return (
@@ -24,6 +26,8 @@ const App: React.FC = () => {
         <Route path="/schema" element={<SchemaManagementPage />} />
         <Route path="/graph-visualization" element={<GraphVisualizationPage />} />
         <Route path="/value-mappings" element={<ValueMappingsPage />} />
+        <Route path="/dashboards" element={<DashboardListPage />} />
+        <Route path="/dashboards/:id" element={<DashboardEditorPage />} />
       </Routes>
     </IOSLayout>
   );

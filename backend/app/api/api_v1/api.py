@@ -1,6 +1,10 @@
 from fastapi import APIRouter
 
-from app.api.api_v1.endpoints import connections, schema, query, value_mappings, graph_visualization, relationship_tips, hybrid_qa
+from app.api.api_v1.endpoints import (
+    connections, schema, query, value_mappings, 
+    graph_visualization, relationship_tips, hybrid_qa,
+    dashboards, dashboard_widgets, dashboard_insights
+)
 
 # 强制重新加载 - 修复API路由问题
 
@@ -34,3 +38,6 @@ api_router.include_router(value_mappings.router, prefix="/value-mappings", tags=
 api_router.include_router(graph_visualization.router, prefix="/graph-visualization", tags=["graph-visualization"])
 api_router.include_router(relationship_tips.router, prefix="/relationship-tips", tags=["relationship-tips"])
 api_router.include_router(hybrid_qa.router, prefix="/hybrid-qa", tags=["hybrid-qa"])
+api_router.include_router(dashboards.router, prefix="/dashboards", tags=["dashboards"])
+api_router.include_router(dashboard_widgets.router, prefix="", tags=["widgets"])
+api_router.include_router(dashboard_insights.router, prefix="", tags=["insights"])

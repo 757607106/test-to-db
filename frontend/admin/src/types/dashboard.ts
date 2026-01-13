@@ -1,0 +1,234 @@
+// Dashboard相关类型定义
+
+export interface UserSimple {
+  id: number;
+  username: string;
+  display_name?: string;
+  avatar_url?: string;
+}
+
+export interface Dashboard {
+  id: number;
+  name: string;
+  description?: string;
+  owner_id: number;
+  owner?: UserSimple;
+  is_public: boolean;
+  tags?: string[];
+  layout_config: any[];
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string;
+}
+
+export interface DashboardListItem {
+  id: number;
+  name: string;
+  description?: string;
+  owner_id: number;
+  owner?: UserSimple;
+  widget_count: number;
+  permission_level?: string;
+  is_public: boolean;
+  tags?: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DashboardDetail extends Dashboard {
+  widgets: Widget[];
+  permissions: DashboardPermission[];
+  permission_level?: string;
+}
+
+export interface DashboardCreate {
+  name: string;
+  description?: string;
+  is_public?: boolean;
+  tags?: string[];
+}
+
+export interface DashboardUpdate {
+  name?: string;
+  description?: string;
+  is_public?: boolean;
+  tags?: string[];
+}
+
+export interface DashboardListResponse {
+  total: number;
+  page: number;
+  page_size: number;
+  items: DashboardListItem[];
+}
+
+export interface Widget {
+  id: number;
+  dashboard_id: number;
+  widget_type: 'chart' | 'table' | 'text' | 'insight_analysis';
+  title: string;
+  connection_id: number;
+  query_config: WidgetQueryConfig;
+  chart_config?: any;
+  position_config: WidgetPositionConfig;
+  refresh_interval: number;
+  last_refresh_at?: string;
+  data_cache?: any;
+  created_at: string;
+  updated_at: string;
+  connection_name?: string;
+}
+
+export interface WidgetQueryConfig {
+  original_query: string;
+  generated_sql: string;
+  parameters?: Record<string, any>;
+  editable_params?: string[];
+  conversation_id?: string;
+  edit_history?: Array<{
+    timestamp: string;
+    previous_query: string;
+    new_query: string;
+  }>;
+}
+
+export interface WidgetPositionConfig {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  minW?: number;
+  minH?: number;
+  maxW?: number;
+  maxH?: number;
+}
+
+export interface WidgetCreate {
+  widget_type: 'chart' | 'table' | 'text' | 'insight_analysis';
+  title: string;
+  connection_id: number;
+  query_config: WidgetQueryConfig;
+  chart_config?: any;
+  position_config: WidgetPositionConfig;
+  refresh_interval?: number;
+}
+
+export interface WidgetUpdate {
+  title?: string;
+  chart_config?: any;
+  refresh_interval?: number;
+  position_config?: WidgetPositionConfig;
+}
+
+export interface WidgetRefreshResponse {
+  id: number;
+  data_cache?: any;
+  last_refresh_at: string;
+  refresh_duration_ms: number;
+}
+
+export interface WidgetRegenerateRequest {
+  mode: 'params' | 'full';
+  updated_query?: string;
+  parameters?: Record<string, any>;
+}
+
+export interface WidgetRegenerateResponse {
+  id: number;
+  query_config: WidgetQueryConfig;
+  data_cache?: any;
+  last_refresh_at: string;
+  message: string;
+}
+
+export interface DashboardPermission {
+  id: number;
+  dashboard_id: number;
+  user_id: number;
+  user?: UserSimple;
+  permission_level: 'owner' | 'editor' | 'viewer';
+  granted_by: number;
+  created_at: string;
+}
+
+export interface PermissionCreate {
+  user_id: number;
+  permission_level: 'owner' | 'editor' | 'viewer';
+}
+
+export interface PermissionUpdate {
+  permission_level: 'owner' | 'editor' | 'viewer';
+}
+
+export interface LayoutUpdateRequest {
+  layout: Array<{
+    widget_id: number;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  }>;
+}
+
+// Insight相关类型定义
+export interface InsightSummary {
+  description?: string;
+  data_points?: number;
+  key_metrics?: Record<string, any>;
+}
+
+export interface InsightTrend {
+  description?: string;
+  direction?: 'up' | 'down' | 'stable';
+  change_rate?: number;
+}
+
+export interface InsightAnomaly {
+  metric?: string;
+  description: string;
+  severity?: 'high' | 'medium' | 'low';
+}
+
+export interface InsightCorrelation {
+  entities?: string[];
+  description: string;
+  strength?: number;
+}
+
+export interface InsightRecommendation {
+  category?: string;
+  content: string;
+  priority?: 'high' | 'medium' | 'low';
+}
+
+export interface InsightResult {
+  summary?: InsightSummary;
+  trends?: InsightTrend;
+  anomalies?: InsightAnomaly[];
+  correlations?: InsightCorrelation[];
+  recommendations?: InsightRecommendation[];
+}
+
+export interface TimeRangeCondition {
+  start?: string;  // 修改为与后端Schema一致
+  end?: string;    // 修改为与后端Schema一致
+  relative_range?: string;
+}
+
+export interface InsightConditions {
+  time_range?: TimeRangeCondition;
+  dimension_filters?: Record<string, any>;
+  aggregation_level?: string;
+}
+
+export interface DashboardInsightRequest {
+  conditions?: InsightConditions;
+  use_graph_relationships?: boolean;
+}
+
+export interface DashboardInsightResponse {
+  dashboard_id: number;
+  insights: InsightResult;
+  widget_id?: number;
+  generated_at: string;
+}
