@@ -80,5 +80,6 @@ class Settings(BaseSettings):
     class Config:
         case_sensitive = True
         env_file = ".env"
+        extra = 'ignore'  # 忽略.env中未在Settings类中定义的额外字段
 
 settings = Settings()
