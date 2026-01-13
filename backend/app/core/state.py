@@ -56,11 +56,14 @@ class SQLMessageState(AgentState):
 
     # 当前处理阶段
     current_stage: Literal[
+        "clarification",        # 新增：澄清阶段
         "schema_analysis",
         "sample_retrieval",
         "sql_generation",
         "sql_validation",
         "sql_execution",
+        "analysis",            # 新增：分析阶段
+        "chart_generation",
         "error_recovery",
         "completed"
     ] = "schema_analysis"
@@ -70,6 +73,20 @@ class SQLMessageState(AgentState):
 
     # 错误历史
     error_history: List[Dict[str, Any]] = field(default_factory=list)
+
+    # 澄清机制相关字段
+    clarification_history: List[Dict[str, Any]] = field(default_factory=list)
+    clarification_round: int = 0
+    max_clarification_rounds: int = 2
+    needs_clarification: bool = False
+    clarification_questions: List[Dict[str, Any]] = field(default_factory=list)
+    conversation_id: Optional[str] = None
+    original_query: Optional[str] = None
+    enriched_query: Optional[str] = None
+
+    # 分析师相关字段
+    analyst_insights: Optional[Dict[str, Any]] = None
+    needs_analysis: bool = False
 
 def extract_connection_id(state: SQLMessageState) -> int:
     """从状态中提取数据库连接ID"""
