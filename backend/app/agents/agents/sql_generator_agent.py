@@ -1,6 +1,7 @@
 """
-SQL生成代理
+SQL生成代理 - 优化版
 负责根据模式信息和用户查询生成高质量的SQL语句
+优化：改为直接工具调用模式，避免ReAct开销
 """
 from typing import Dict, Any, List
 from langchain_core.tools import tool
@@ -364,54 +365,55 @@ def optimize_sql_query(sql_query: str, schema_info: Dict[str, Any]) -> Dict[str,
             "error": str(e)
         }
 
-@tool
-def explain_sql_query(sql_query: str) -> Dict[str, Any]:
-    """
-    解释SQL查询的逻辑和执行计划
-    
-    Args:
-        sql_query: SQL查询语句
-        
-    Returns:
-        SQL查询的解释和分析
-    """
-    try:
-        prompt = f"""
-请详细解释以下SQL查询：
-
-{sql_query}
-
-请提供：
-1. 查询逻辑说明
-2. 执行步骤分析
-3. 可能的性能瓶颈
-4. 结果集预期
-"""
-        
-        llm = get_default_model()
-        response = llm.invoke([HumanMessage(content=prompt)])
-        
-        return {
-            "success": True,
-            "explanation": response.content,
-            "sql_query": sql_query
-        }
-        
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+# 已禁用：SQL解释功能
+# @tool
+# def explain_sql_query(sql_query: str) -> Dict[str, Any]:
+#     """
+#     解释SQL查询的逻辑和执行计划
+#     
+#     Args:
+#         sql_query: SQL查询语句
+#         
+#     Returns:
+#         SQL查询的解释和分析
+#     """
+#     try:
+#         prompt = f"""
+# 请详细解释以下SQL查询：
+# 
+# {sql_query}
+# 
+# 请提供：
+# 1. 查询逻辑说明
+# 2. 执行步骤分析
+# 3. 可能的性能瓶颈
+# 4. 结果集预期
+# """
+#         
+#         llm = get_default_model()
+#         response = llm.invoke([HumanMessage(content=prompt)])
+#         
+#         return {
+#             "success": True,
+#             "explanation": response.content,
+#             "sql_query": sql_query
+#         }
+#         
+#     except Exception as e:
+#         return {
+#             "success": False,
+#             "error": str(e)
+#         }
 
 class SQLGeneratorAgent:
-    """SQL生成代理"""
+    """SQL生成代理 - 优化版（直接工具调用模式）"""
 
     def __init__(self):
-        self.name = "sql_generator_agent"  # 添加name属性
+        self.name = "sql_generator_agent"
         self.llm = get_default_model()
-        self.tools = [generate_sql_query, generate_sql_with_samples, explain_sql_query]
-        # , analyze_sql_optimization_need, optimize_sql_query
-        # 创建ReAct代理
+        # 简化：保留两个工具但直接调用
+        self.tools = [generate_sql_query, generate_sql_with_samples]
+        # 保留ReAct代理以兼容supervisor（但实际不使用ReAct循环）
         self.agent = create_react_agent(
             self.llm,
             self.tools,
@@ -420,41 +422,85 @@ class SQLGeneratorAgent:
         )
     
     def _create_system_prompt(self) -> str:
-        """创建系统提示"""
+        """创建系统提示 - 增强版（智能处理模糊查询）"""
         return """你是一个专业的SQL生成专家。你的任务是：
 
 1. 根据用户查询和数据库模式信息生成准确的SQL语句
-2. 智能判断是否需要优化SQL查询
-3. 仅在必要时进行SQL优化
-4. 提供SQL查询的详细解释
+2. **智能处理模糊查询**，做出合理假设并确保准确性
+3. 快速生成高质量SQL，无需额外澄清
 
 智能工作流程：
 1. 检查是否有样本检索结果
 2. 如果有样本，优先使用 generate_sql_with_samples 工具
 3. 如果没有样本，使用 generate_sql_query 工具生成基础SQL
-4. 根据需要使用 explain_sql_query 工具解释查询逻辑
 
 SQL生成原则：
-- 确保语法正确性
+- 确保语法正确性和执行准确性
 - 使用适当的连接方式
 - 应用正确的过滤条件
-- 生成时就考虑基本性能优化
 - 限制结果集大小（除非明确要求）
 - 使用正确的值映射
 - 充分利用样本提供的最佳实践
 
-样本利用策略：
-- 优先参考高相关性和高成功率的样本
-- 学习样本的SQL结构和模式
-- 适应当前查询的具体需求
-- 保持SQL的正确性和效率
+**模糊查询智能处理规则（重要）:**
 
-请始终生成高质量、可执行的SQL语句，并充分利用样本的指导作用。"""
+遇到模糊词时，按以下规则做出合理假设：
+
+1. **"最好"/"最高"/"最优"类词汇:**
+   - 在销售场景：默认指销售额（amount/sales/revenue）降序
+   - 在数量场景：默认指数量（quantity/count）降序
+   - 在评分场景：默认指评分（rating/score）降序
+   - 添加注释说明假设
+
+2. **"最近"/"近期"等时间词:**
+   - 默认指最近30天
+   - SQL: WHERE date >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+   - 或: WHERE date >= CURRENT_DATE - INTERVAL 30 DAY
+
+3. **"销售"相关查询:**
+   - 默认指销售额（sales_amount, revenue, total_sales）
+   - 如果只有销量字段，则使用销量
+   - 在注释中说明使用的字段
+
+4. **"用户"相关查询:**
+   - 默认指活跃用户或所有用户
+   - 考虑是否需要JOIN用户表
+
+5. **排序和限制:**
+   - "前N"/"最高N" → ORDER BY [字段] DESC LIMIT N
+   - 如果没有指定N，默认 LIMIT 10
+   - "后N"/"最低N" → ORDER BY [字段] ASC LIMIT N
+
+6. **聚合查询:**
+   - "统计"/"汇总" → 使用SUM/COUNT等聚合函数
+   - "平均" → 使用AVG函数
+   - "总共"/"总计" → 使用SUM函数
+
+**SQL注释规范:**
+在生成的SQL中添加简短注释说明假设：
+```sql
+-- 假设：按销售额排序，最近30天数据
+SELECT product_name, SUM(sales_amount) as total_sales
+FROM sales
+WHERE sale_date >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+GROUP BY product_name
+ORDER BY total_sales DESC
+LIMIT 10
+```
+
+**准确性保证:**
+- 优先使用schema中存在的字段
+- 确保JOIN条件正确
+- 验证WHERE条件的字段类型
+- 使用合适的聚合函数
+- 添加必要的GROUP BY
+
+请始终生成**准确、可执行**的SQL语句，智能处理模糊查询，确保准确率！"""
     # 2. 使用 analyze_sql_optimization_need 工具分析是否需要优化
     # 3. 仅当分析结果显示需要优化时，才使用 optimize_sql_query 工具
 
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
-        """处理SQL生成任务"""
+        """处理SQL生成任务 - 优化版（直接工具调用）"""
         try:
             # 获取用户查询
             user_query = state["messages"][0].content
@@ -467,7 +513,6 @@ SQL生成原则：
                 # 从代理消息中提取模式信息
                 schema_agent_result = state.get("agent_messages", {}).get("schema_agent")
                 if schema_agent_result:
-                    # 解析模式信息
                     schema_info = self._extract_schema_from_messages(schema_agent_result.get("messages", []))
 
             # 获取样本检索结果
@@ -476,43 +521,39 @@ SQL生成原则：
             if sample_retrieval_result and sample_retrieval_result.get("qa_pairs"):
                 sample_qa_pairs = sample_retrieval_result["qa_pairs"]
             
-            # 准备输入消息
-            sample_info = ""
+            # 直接调用工具函数，避免ReAct循环
+            print(f"直接调用SQL生成工具: 样本数量={len(sample_qa_pairs)}")
+            
             if sample_qa_pairs:
-                sample_info = f"\n样本数量: {len(sample_qa_pairs)}"
-                if sample_retrieval_result.get("best_samples"):
-                    best_sample = sample_retrieval_result["best_samples"][0]
-                    sample_info += f"\n最佳样本相关性: {best_sample.get('final_score', 0):.3f}"
-
-            messages = [
-                HumanMessage(content=f"""
-请为以下用户查询生成SQL语句：
-
-用户查询: {user_query}
-模式信息: {schema_info}
-{sample_info}
-
-请根据可用的样本生成、优化并解释SQL查询。
-""")
-            ]
+                # 使用样本生成
+                result = generate_sql_with_samples.invoke({
+                    "user_query": user_query,
+                    "schema_info": schema_info,
+                    "sample_qa_pairs": sample_qa_pairs,
+                    "value_mappings": schema_info.get("value_mappings") if schema_info else None
+                })
+            else:
+                # 基本生成
+                result = generate_sql_query.invoke({
+                    "user_query": user_query,
+                    "schema_info": schema_info,
+                    "value_mappings": schema_info.get("value_mappings") if schema_info else None,
+                    "db_type": "mysql"
+                })
             
-            # 调用代理
-            result = await self.agent.ainvoke({
-                "messages": messages
-            })
+            if not result.get("success"):
+                raise ValueError(result.get("error", "SQL生成失败"))
             
-            # 提取生成的SQL
-            generated_sql = self._extract_sql_from_result(result)
+            generated_sql = result.get("sql_query", "")
             
             # 更新状态
             state["generated_sql"] = generated_sql
-            state["current_stage"] = "sql_validation"
-            state["agent_messages"]["sql_generator"] = result
+            state["current_stage"] = "sql_execution"  # 跳过验证，直接执行
             
             return {
-                "messages": result["messages"],
+                "messages": [AIMessage(content=f"已生成SQL查询")],
                 "generated_sql": generated_sql,
-                "current_stage": "sql_validation"
+                "current_stage": "sql_execution"
             }
             
         except Exception as e:

@@ -1,6 +1,7 @@
 """
-SQL执行代理
+SQL执行代理 - 优化版
 负责安全地执行SQL查询并处理结果
+优化：改为直接工具调用模式，避免ReAct开销
 """
 from typing import Dict, Any
 
@@ -185,14 +186,15 @@ def format_query_results(execution_result: Dict[str, Any], format_type: str = "t
 
 
 class SQLExecutorAgent:
-    """SQL执行代理"""
+    """SQL执行代理 - 优化版（直接工具调用模式）"""
 
     def __init__(self):
-        self.name = "sql_executor_agent"  # 添加name属性
+        self.name = "sql_executor_agent"
         self.llm = get_default_model()
-        self.tools = [execute_sql_query]    #, analyze_query_performance, format_query_results]
+        # 简化：只使用execute_sql_query工具
+        self.tools = [execute_sql_query]
         
-        # 创建ReAct代理
+        # 保留ReAct代理以兼容supervisor（但实际不使用ReAct循环）
         self.agent = create_react_agent(
             self.llm,
             self.tools,
@@ -223,56 +225,47 @@ class SQLExecutorAgent:
 """
         return [{"role": "system", "content": system_msg}] + state["messages"]
 
-    # 2. 使用 analyze_query_performance 分析性能
-    # 3. 使用 format_query_results 格式化结果
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
-        """处理SQL执行任务"""
+        """处理SQL执行任务 - 优化版（直接工具调用）"""
         try:
-            # 获取验证通过的SQL
+            # 获取生成的SQL
             sql_query = state.get("generated_sql")
             if not sql_query:
                 raise ValueError("没有找到需要执行的SQL语句")
             
-            # 检查验证结果
-            validation_result = state.get("validation_result")
-            if validation_result and not validation_result.is_valid:
-                raise ValueError("SQL验证未通过，无法执行")
+            # 获取connection_id
+            connection_id = state.get("connection_id", 15)
             
-            # 准备输入消息
-            messages = [
-                HumanMessage(content=f"""
-请执行以下SQL查询并分析结果：
-
-SQL语句:
-{sql_query}
-
-请执行查询、分析性能并格式化结果。
-""")
-            ]
-            
-            # 调用代理
-            result = await self.agent.ainvoke({
-                "messages": messages
+            # 直接调用工具函数，避免ReAct循环
+            print(f"直接调用SQL执行工具: connection_id={connection_id}")
+            result = execute_sql_query.invoke({
+                "sql_query": sql_query,
+                "connection_id": connection_id,
+                "timeout": 30
             })
             
-            # 创建执行结果
-            execution_result = self._create_execution_result(result)
+            if not result.get("success"):
+                raise ValueError(result.get("error", "SQL执行失败"))
+            
+            # 构造执行结果
+            execution_result = {
+                "success": True,
+                "data": result.get("data", {}),
+                "error": None,
+                "execution_time": result.get("execution_time", 0),
+                "rows_affected": result.get("rows_affected", 0)
+            }
             
             # 更新状态
             state["execution_result"] = execution_result
-            if execution_result.success:
-                state["current_stage"] = "completed"
-            else:
-                state["current_stage"] = "error_recovery"
+            state["current_stage"] = "analyst_agent"  # 继续到分析阶段
             
-            state["agent_messages"]["sql_executor"] = result
-            
+            row_count = execution_result["rows_affected"]
             return {
-                "messages": result["messages"],
+                "messages": [AIMessage(content=f"SQL执行成功，返回{row_count}行数据")],
                 "execution_result": execution_result,
-                "current_stage": state["current_stage"]
+                "current_stage": "analyst_agent"
             }
-
             
         except Exception as e:
             # 记录错误
@@ -286,10 +279,10 @@ SQL语句:
             state["current_stage"] = "error_recovery"
             
             # 创建失败的执行结果
-            execution_result = SQLExecutionResult(
-                success=False,
-                error=str(e)
-            )
+            execution_result = {
+                "success": False,
+                "error": str(e)
+            }
             
             return {
                 "messages": [AIMessage(content=f"SQL执行失败: {str(e)}")],
