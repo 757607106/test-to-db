@@ -33,9 +33,31 @@ def generate_sql_query(
         生成的SQL语句和相关信息
     """
     try:
+        # 根据数据库类型添加特定语法说明
+        db_syntax_guide = ""
+        if db_type.lower() == "mysql":
+            db_syntax_guide = """
+MySQL 特定语法要求：
+- 日期截断：使用 DATE_FORMAT(date_column, '%Y-%m-01') 而不是 DATE_TRUNC
+- 当前日期：使用 NOW() 或 CURRENT_DATE
+- 日期间隔：使用 DATE_SUB(NOW(), INTERVAL 30 DAY) 或 DATE_ADD
+- 不支持 FULL OUTER JOIN，使用 LEFT JOIN UNION RIGHT JOIN 代替
+- 字符串连接：使用 CONCAT() 函数
+"""
+        elif db_type.lower() == "postgresql":
+            db_syntax_guide = """
+PostgreSQL 特定语法：
+- 日期截断：使用 DATE_TRUNC('month', date_column)
+- 当前日期：使用 CURRENT_DATE 或 NOW()
+- 日期间隔：使用 CURRENT_DATE - INTERVAL '30 days'
+- 支持 FULL OUTER JOIN
+- 字符串连接：使用 || 运算符或 CONCAT()
+"""
+        
         # 构建详细的上下文信息
         context = f"""
 数据库类型: {db_type}
+{db_syntax_guide}
 
 可用的表和字段信息:
 {schema_info}
@@ -72,12 +94,13 @@ SQL: {sample.get('sql', '')}
 
 请生成一个准确、高效的SQL查询语句。要求：
 1. 只返回SQL语句，不要其他解释
-2. 确保语法正确
+2. 确保语法正确，严格遵守上述数据库类型的语法要求
 3. 使用适当的连接和过滤条件
 4. 限制结果数量（除非用户明确要求全部数据）
 5. 使用正确的值映射
 6. 参考样本的SQL结构和模式，但要适应当前查询的具体需求
 7. 优先参考高成功率的样本
+8. 特别注意：如果是 MySQL，不要使用 DATE_TRUNC、FULL OUTER JOIN 等 PostgreSQL 特有的语法
 """
         
         llm = get_default_model()
@@ -110,7 +133,8 @@ def generate_sql_with_samples(
     user_query: str,
     schema_info: Dict[str, Any],
     sample_qa_pairs: List[Dict[str, Any]],
-    value_mappings: Dict[str, Any] = None
+    value_mappings: Dict[str, Any] = None,
+    db_type: str = "mysql"
 ) -> Dict[str, Any]:
     """
     基于样本生成高质量SQL查询
@@ -120,6 +144,7 @@ def generate_sql_with_samples(
         schema_info: 数据库模式信息
         sample_qa_pairs: 相关的SQL问答对样本
         value_mappings: 值映射信息
+        db_type: 数据库类型
 
     Returns:
         生成的SQL语句和样本分析
@@ -127,7 +152,7 @@ def generate_sql_with_samples(
     try:
         if not sample_qa_pairs:
             # 如果没有样本，回退到基本生成
-            return generate_sql_query(user_query, schema_info, value_mappings)
+            return generate_sql_query(user_query, schema_info, value_mappings, db_type)
 
         # 过滤并分析最佳样本
         min_similarity_threshold = 0.6  # 与样本检索代理保持一致的阈值
@@ -140,7 +165,7 @@ def generate_sql_with_samples(
 
         if not high_quality_samples:
             # 如果没有高质量样本，回退到基本生成
-            return generate_sql_query(user_query, schema_info, value_mappings)
+            return generate_sql_query(user_query, schema_info, value_mappings, db_type)
 
         # 选择最佳样本
         best_samples = sorted(
@@ -161,9 +186,42 @@ def generate_sql_with_samples(
 - 解释: {sample.get('explanation', '')}
 """
 
+        # 根据数据库类型添加特定语法说明
+        db_syntax_guide = ""
+        if db_type.lower() == "mysql":
+            db_syntax_guide = """
+MySQL 特定语法要求：
+- 日期截断：使用 DATE_FORMAT(date_column, '%Y-%m-01') 而不是 DATE_TRUNC
+- 当前日期：使用 NOW() 或 CURRENT_DATE
+- 日期间隔：使用 DATE_SUB(NOW(), INTERVAL 30 DAY) 或 DATE_ADD
+- 不支持 FULL OUTER JOIN，使用 LEFT JOIN UNION RIGHT JOIN 代替
+- 字符串连接：使用 CONCAT() 函数
+"""
+        elif db_type.lower() in ["postgresql", "postgres"]:
+            db_syntax_guide = """
+PostgreSQL 特定语法：
+- 日期截断：使用 DATE_TRUNC('month', date_column)
+- 当前日期：使用 CURRENT_DATE 或 NOW()
+- 日期间隔：使用 CURRENT_DATE - INTERVAL '30 days'
+- 支持 FULL OUTER JOIN
+- 字符串连接：使用 || 运算符或 CONCAT()
+"""
+        elif db_type.lower() == "sqlite":
+            db_syntax_guide = """
+SQLite 特定语法：
+- 日期格式化：使用 strftime('%Y-%m', date_column)
+- 当前日期：使用 date('now')
+- 日期间隔：使用 date('now', '-30 days')
+- 不支持 FULL OUTER JOIN
+- 字符串连接：使用 || 运算符
+"""
+
         # 构建增强的生成提示
         prompt = f"""
 作为SQL专家，请基于以下信息生成高质量的SQL查询：
+
+数据库类型: {db_type.upper()}
+{db_syntax_guide}
 
 用户查询: {user_query}
 
@@ -179,12 +237,12 @@ def generate_sql_with_samples(
 1. 分析用户查询的意图和需求
 2. 参考最相关样本的SQL结构和模式
 3. 根据当前数据库模式调整表名和字段名
-4. 确保SQL语法正确且高效
+4. 确保SQL语法正确且高效，严格遵守上述 {db_type.upper()} 语法要求
 5. 添加适当的限制条件
 
 要求：
 - 只返回最终的SQL语句
-- 确保语法正确
+- 确保语法正确，严格使用 {db_type.upper()} 语法
 - 参考样本的最佳实践
 - 适应当前的数据库结构
 - 优化查询性能
@@ -515,6 +573,18 @@ LIMIT 10
                 if schema_agent_result:
                     schema_info = self._extract_schema_from_messages(schema_agent_result.get("messages", []))
 
+            # 获取数据库类型
+            db_type = "mysql"  # 默认值
+            connection_id = state.get("connection_id", 15)
+            
+            try:
+                from app.services.db_service import get_db_connection_by_id
+                connection = get_db_connection_by_id(connection_id)
+                if connection:
+                    db_type = connection.db_type
+            except Exception as e:
+                print(f"获取数据库类型失败，使用默认值mysql: {str(e)}")
+
             # 获取样本检索结果
             sample_retrieval_result = state.get("sample_retrieval_result")
             sample_qa_pairs = []
@@ -522,7 +592,7 @@ LIMIT 10
                 sample_qa_pairs = sample_retrieval_result["qa_pairs"]
             
             # 直接调用工具函数，避免ReAct循环
-            print(f"直接调用SQL生成工具: 样本数量={len(sample_qa_pairs)}")
+            print(f"直接调用SQL生成工具: 样本数量={len(sample_qa_pairs)}, 数据库类型={db_type}")
             
             if sample_qa_pairs:
                 # 使用样本生成
@@ -530,7 +600,8 @@ LIMIT 10
                     "user_query": user_query,
                     "schema_info": schema_info,
                     "sample_qa_pairs": sample_qa_pairs,
-                    "value_mappings": schema_info.get("value_mappings") if schema_info else None
+                    "value_mappings": schema_info.get("value_mappings") if schema_info else None,
+                    "db_type": db_type
                 })
             else:
                 # 基本生成
@@ -538,7 +609,7 @@ LIMIT 10
                     "user_query": user_query,
                     "schema_info": schema_info,
                     "value_mappings": schema_info.get("value_mappings") if schema_info else None,
-                    "db_type": "mysql"
+                    "db_type": db_type
                 })
             
             if not result.get("success"):

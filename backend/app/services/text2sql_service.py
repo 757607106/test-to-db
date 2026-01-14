@@ -15,7 +15,7 @@ from app.services.text2sql_utils import (
 from app.core.llms import get_default_model
 
 
-def construct_prompt(schema_context: Dict[str, Any], query: str, value_mappings: Dict[str, Dict[str, str]]) -> str:
+def construct_prompt(schema_context: Dict[str, Any], query: str, value_mappings: Dict[str, Dict[str, str]], db_type: str = "mysql") -> str:
     """
     为LLM构建增强上下文和指令的提示
     """
@@ -32,14 +32,44 @@ def construct_prompt(schema_context: Dict[str, Any], query: str, value_mappings:
                 mappings_str += f"--   自然语言中的'{nl_term}'指数据库中的'{db_value}'\n"
         mappings_str += "\n"
 
+    # 根据数据库类型添加特定语法说明
+    db_syntax_guide = ""
+    if db_type.lower() == "mysql":
+        db_syntax_guide = """### MySQL 语法要求（重要）:
+- 日期截断：使用 DATE_FORMAT(date_column, '%Y-%m-01') 而不是 DATE_TRUNC
+- 月份提取：使用 DATE_FORMAT(date_column, '%Y-%m')
+- 年份提取：使用 YEAR(date_column)
+- 当前日期：使用 NOW() 或 CURRENT_DATE
+- 日期间隔：使用 DATE_SUB(NOW(), INTERVAL 1 YEAR) 而不是 - INTERVAL '1 year'
+- 不支持 FULL OUTER JOIN，使用 LEFT JOIN + UNION + RIGHT JOIN 代替
+- 字符串连接：使用 CONCAT() 函数"""
+    elif db_type.lower() in ["postgresql", "postgres"]:
+        db_syntax_guide = """### PostgreSQL 语法要求:
+- 日期截断：使用 DATE_TRUNC('month', date_column)
+- 当前日期：使用 CURRENT_DATE 或 NOW()
+- 日期间隔：使用 CURRENT_DATE - INTERVAL '1 year'
+- 支持 FULL OUTER JOIN
+- 字符串连接：使用 || 运算符或 CONCAT()"""
+    elif db_type.lower() == "sqlite":
+        db_syntax_guide = """### SQLite 语法要求:
+- 日期格式化：使用 strftime('%Y-%m', date_column)
+- 当前日期：使用 date('now') 或 datetime('now')
+- 日期间隔：使用 date('now', '-1 year')
+- 不支持 FULL OUTER JOIN
+- 字符串连接：使用 || 运算符"""
+
     prompt = f"""
 你是一名专业的SQL开发专家，专门将自然语言问题转换为精确的SQL查询。
+
+### 数据库类型: {db_type.upper()}
 
 ### 数据库结构:
 ```sql
 {schema_str}
 {mappings_str}
 ```
+
+{db_syntax_guide}
 
 ### 自然语言问题:
 "{query}"
@@ -52,8 +82,9 @@ def construct_prompt(schema_context: Dict[str, Any], query: str, value_mappings:
 5. 只使用结构中提供的表和列。
 6. 如果需要，使用适当的聚合函数（COUNT、SUM、AVG等）。
 7. 根据需要包含适当的GROUP BY、ORDER BY和LIMIT子句。
-8. 如果查询与时间相关，适当处理日期/时间比较。
-9. 简要解释你的推理。
+8. 如果查询与时间相关，严格使用上述 {db_type.upper()} 语法处理日期/时间比较。
+9. **严格使用 {db_type.upper()} 语法，不要混用其他数据库的语法。**
+10. 简要解释你的推理。
 
 ### SQL查询:
 """
@@ -109,19 +140,22 @@ def process_text2sql_query(db: Session, connection: DBConnection, natural_langua
         # 2. 获取值映射
         value_mappings = get_value_mappings(db, schema_context)
 
-        # 3. 构建提示
-        prompt = construct_prompt(schema_context, natural_language_query, value_mappings)
+        # 3. 获取数据库类型
+        db_type = connection.db_type if connection else "mysql"
 
-        # 4. 调用LLM API
+        # 4. 构建提示
+        prompt = construct_prompt(schema_context, natural_language_query, value_mappings, db_type)
+
+        # 5. 调用LLM API
         llm_response = call_llm_api(prompt)
 
-        # 5. 从响应中提取SQL
+        # 6. 从响应中提取SQL
         sql = extract_sql_from_llm_response(llm_response)
 
-        # 6. 使用值映射处理SQL
+        # 7. 使用值映射处理SQL
         processed_sql = process_sql_with_value_mappings(sql, value_mappings)
 
-        # 7. 验证SQL
+        # 8. 验证SQL
         if not validate_sql(processed_sql):
             return QueryResponse(
                 sql=processed_sql,
@@ -130,11 +164,12 @@ def process_text2sql_query(db: Session, connection: DBConnection, natural_langua
                 context={
                     "schema_context": schema_context,
                     "prompt": prompt,
-                    "llm_response": llm_response
+                    "llm_response": llm_response,
+                    "db_type": db_type
                 }
             )
 
-        # 8. 执行SQL
+        # 9. 执行SQL
         try:
             results = execute_query(connection, processed_sql)
 

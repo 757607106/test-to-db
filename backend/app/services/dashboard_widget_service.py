@@ -1,6 +1,8 @@
 """Dashboard Widget业务服务"""
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
+from decimal import Decimal
+from datetime import datetime, date
 import time
 
 from app import crud
@@ -9,6 +11,29 @@ from app.schemas.dashboard_widget import (
     WidgetResponse, WidgetRefreshResponse
 )
 from app.models.dashboard_widget import DashboardWidget
+
+
+def convert_to_json_serializable(obj):
+    """
+    将数据库返回的对象转换为JSON可序列化的格式
+    处理Decimal、datetime、date等特殊类型
+    """
+    if isinstance(obj, Decimal):
+        # 将Decimal转换为float，保持精度
+        return float(obj)
+    elif isinstance(obj, (datetime, date)):
+        # 将日期时间转换为ISO格式字符串
+        return obj.isoformat()
+    elif isinstance(obj, bytes):
+        # 将bytes转换为字符串
+        try:
+            return obj.decode('utf-8')
+        except:
+            return str(obj)
+    elif obj is None:
+        return None
+    else:
+        return obj
 
 
 class DashboardWidgetService:
@@ -107,13 +132,50 @@ class DashboardWidgetService:
         ):
             return None
         
-        # TODO: 实际执行查询获取数据
-        # 这里暂时使用占位数据
+        # 实际执行SQL查询获取数据
+        from app.services.db_service import get_db_connection_by_id, execute_query
+        
         start_time = time.time()
-        data_cache = {
-            "columns": ["col1", "col2"],
-            "rows": [[1, 2], [3, 4]]
-        }
+        
+        try:
+            # 获取数据库连接
+            connection = get_db_connection_by_id(widget.connection_id)
+            if not connection:
+                raise Exception(f"数据库连接 {widget.connection_id} 不存在")
+            
+            # 从query_config中获取SQL
+            generated_sql = widget.query_config.get("generated_sql", "")
+            if not generated_sql:
+                raise Exception("Widget没有有效的SQL查询")
+            
+            # 执行查询
+            result_data = execute_query(connection, generated_sql)
+            
+            # 转换数据格式为前端需要的格式
+            if result_data:
+                columns = list(result_data[0].keys()) if result_data else []
+                # 转换每个值为JSON可序列化格式
+                rows = [
+                    [convert_to_json_serializable(row[col]) for col in columns] 
+                    for row in result_data
+                ]
+                data_cache = {
+                    "columns": columns,
+                    "rows": rows
+                }
+            else:
+                data_cache = {
+                    "columns": [],
+                    "rows": []
+                }
+            
+        except Exception as e:
+            print(f"刷新Widget数据失败: {str(e)}")
+            # 如果查询失败，返回空数据（不包含error字段，避免前端误判为有效数据）
+            data_cache = {
+                "columns": [],
+                "rows": []
+            }
         
         updated_widget, duration_ms = crud.crud_dashboard_widget.refresh_data(
             db,

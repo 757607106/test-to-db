@@ -51,7 +51,7 @@ const ColumnNode = ({ id, data, selected }: NodeProps<ColumnNodeData>) => {
           opacity: 1,
           visibility: 'visible'
         }}
-        bodyStyle={{ padding: '8px', textAlign: 'center' }}
+        styles={{ body: { padding: '8px', textAlign: 'center' } }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', marginBottom: '4px' }}>
           <ColumnWidthOutlined style={{ color: '#52c41a' }} />

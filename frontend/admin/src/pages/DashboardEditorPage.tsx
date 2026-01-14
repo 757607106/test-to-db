@@ -22,6 +22,8 @@ import {
   DeleteOutlined,
   SettingOutlined,
   BulbOutlined,
+  DownOutlined,
+  UpOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import { dashboardService, widgetService } from '../services/dashboardService';
@@ -37,6 +39,8 @@ import { DashboardInsightWidget } from '../components/DashboardInsightWidget';
 import { InsightConditionPanel } from '../components/InsightConditionPanel';
 import { AddWidgetForm } from '../components/AddWidgetForm';
 import { SmartChart } from '../components/SmartChart';
+import { ChartTypeSelector } from '../components/ChartTypeSelector';
+import { GuidedMiningWizard } from '../components/GuidedMiningWizard';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -56,6 +60,8 @@ const DashboardEditorPage: React.FC = () => {
   const [generatingInsights, setGeneratingInsights] = useState<boolean>(false);
   const [conditionPanelVisible, setConditionPanelVisible] = useState<boolean>(false);
   const [currentInsightWidget, setCurrentInsightWidget] = useState<Widget | null>(null);
+  const [miningWizardVisible, setMiningWizardVisible] = useState<boolean>(false);
+  const [sqlCollapsed, setSqlCollapsed] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     if (dashboardId) {
@@ -310,27 +316,62 @@ const DashboardEditorPage: React.FC = () => {
             </div>
           )}
           <div>
-            <Text type="secondary">查询SQL：</Text>
-            <pre
-              style={{
-                background: '#f5f5f5',
-                padding: '8px',
-                borderRadius: '4px',
-                fontSize: '12px',
-                overflow: 'auto',
-                maxHeight: '200px',
+            <div 
+              style={{ 
+                display: 'flex', 
+                justifyContent: 'space-between', 
+                alignItems: 'center',
+                cursor: 'pointer',
+                marginBottom: '8px'
+              }}
+              onClick={() => {
+                const newState = {...sqlCollapsed};
+                newState[widget.id] = !newState[widget.id];
+                setSqlCollapsed(newState);
               }}
             >
-              {widget.query_config.generated_sql}
-            </pre>
+              <Text type="secondary">查询SQL：</Text>
+              <Button 
+                type="link" 
+                size="small"
+                icon={sqlCollapsed[widget.id] ? <DownOutlined /> : <UpOutlined />}
+              >
+                {sqlCollapsed[widget.id] ? '展开' : '收起'}
+              </Button>
+            </div>
+            {!sqlCollapsed[widget.id] && (
+              <pre
+                style={{
+                  background: '#f5f5f5',
+                  padding: '8px',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  overflow: 'auto',
+                  maxHeight: '200px',
+                }}
+              >
+                {widget.query_config.generated_sql}
+              </pre>
+            )}
           </div>
           {widget.data_cache && (
             <div>
               {widget.widget_type === 'chart' ? (
                 <>
-                  <Text type="secondary">图表展示：</Text>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <Text type="secondary">图表展示：</Text>
+                    <ChartTypeSelector
+                      widgetId={widget.id}
+                      currentChartType={widget.chart_config?.chart_type}
+                      onChartTypeChange={() => fetchDashboard()}
+                    />
+                  </div>
                   <div style={{ marginTop: 8 }}>
-                    <SmartChart data={widget.data_cache} height={300} />
+                    <SmartChart 
+                      data={widget.data_cache} 
+                      height={300}
+                      chartType={widget.chart_config?.chart_type}
+                    />
                   </div>
                 </>
               ) : (
@@ -401,6 +442,12 @@ const DashboardEditorPage: React.FC = () => {
               <Space>
                 <Button
                   type="primary"
+                  icon={<BulbOutlined />}
+                  onClick={() => setMiningWizardVisible(true)}
+                >
+                  智能挖掘
+                </Button>
+                <Button
                   icon={<BulbOutlined />}
                   onClick={() => handleOpenConditionPanel()}
                   loading={generatingInsights}
@@ -499,6 +546,18 @@ const DashboardEditorPage: React.FC = () => {
         }
         onSubmit={handleConditionSubmit}
         onCancel={handleCloseConditionPanel}
+      />
+
+      {/* 智能挖掘向导 */}
+      <GuidedMiningWizard
+        visible={miningWizardVisible}
+        dashboardId={dashboardId}
+        connectionId={dashboard?.widgets[0]?.connection_id}  // 从第一个widget获取，如果没有则让用户选择
+        onClose={() => setMiningWizardVisible(false)}
+        onSuccess={() => {
+          setMiningWizardVisible(false);
+          fetchDashboard();
+        }}
       />
     </div>
   );

@@ -56,8 +56,7 @@ const TableNode = ({ id, data, selected }: NodeProps<TableNodeData>) => {
           opacity: 1,
           visibility: 'visible'
         }}
-        bodyStyle={{ padding: '8px' }}
-        headStyle={{ background: 'rgba(24, 144, 255, 0.2)' }}
+        styles={{ body: { padding: '8px' }, header: { background: 'rgba(24, 144, 255, 0.2)' } }}
       >
         {data.description && (
           <Tooltip title={data.description}>

@@ -1,9 +1,6 @@
 import axios from 'axios';
 
-// 调试环境变量
-
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
-console.log('最终使用的 API_URL:', API_URL);
 
 const api = axios.create({
   baseURL: API_URL,

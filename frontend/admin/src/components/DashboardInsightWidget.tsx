@@ -75,7 +75,7 @@ export const DashboardInsightWidget: React.FC<DashboardInsightWidgetProps> = ({
         marginBottom: 16,
         border: 'none',
       }}
-      bodyStyle={{ padding: 0 }}
+      styles={{ body: { padding: 0 } }}
     >
       {/* 头部 */}
       <div
