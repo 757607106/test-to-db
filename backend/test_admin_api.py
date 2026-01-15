@@ -20,7 +20,7 @@ def test_llm_config_lifecycle():
         "provider": "TestProvider",
         "model_name": model_name,
         "model_type": "chat",
-        "api_key": "sk-test-key",
+        "api_key": "test-key-placeholder",
         "base_url": "https://api.test.com",
         "is_active": True
     }
@@ -69,7 +69,7 @@ def test_llm_config_lifecycle():
         "provider": "TestProvider",
         "model_name": "test-model-v1",
         "model_type": "chat",
-        "api_key": "sk-test-key",
+        "api_key": "test-key-placeholder",
         "base_url": "https://api.test.com"
     }
     response = requests.post(f"{BASE_URL}/llm-configs/test", json=test_payload)

@@ -118,13 +118,13 @@ class IntelligentSQLGraph:
         return self.supervisor_agent.worker_agents
 
 # 便捷函数
-def create_intelligent_sql_graph() -> IntelligentSQLGraph:
+def create_intelligent_sql_graph(active_agent_profile: Optional[AgentProfile] = None) -> IntelligentSQLGraph:
     """创建智能SQL图实例"""
-    return IntelligentSQLGraph()
+    return IntelligentSQLGraph(active_agent_profile=active_agent_profile)
 
-async def process_sql_query(query: str, connection_id: int = 15) -> Dict[str, Any]:
+async def process_sql_query(query: str, connection_id: int = 15, active_agent_profile: Optional[AgentProfile] = None) -> Dict[str, Any]:
     """处理SQL查询的便捷函数"""
-    graph = create_intelligent_sql_graph()
+    graph = create_intelligent_sql_graph(active_agent_profile=active_agent_profile)
     return await graph.process_query(query, connection_id)
 
 # 创建全局实例（为了向后兼容）

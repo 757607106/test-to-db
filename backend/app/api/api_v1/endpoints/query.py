@@ -71,7 +71,12 @@ async def chat_query(
             query_text = f"{query_text}\n\n澄清信息:\n{clarification_context}"
         
         # 创建 LangGraph 实例
-        graph = IntelligentSQLGraph()
+        active_agent_profile = None
+        if chat_request.agent_id:
+            from app.crud.crud_agent_profile import agent_profile as crud_agent_profile
+            active_agent_profile = crud_agent_profile.get(db=db, id=chat_request.agent_id)
+        
+        graph = IntelligentSQLGraph(active_agent_profile=active_agent_profile)
         
         # 处理查询
         from app.core.state import SQLMessageState

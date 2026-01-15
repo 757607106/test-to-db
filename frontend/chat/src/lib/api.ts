@@ -27,4 +27,17 @@ const api = axios.create({
 // 数据库连接相关API
 export const getConnections = () => api.get<DBConnection[]>('/connections');
 
+// 智能体配置类型定义
+export interface AgentProfile {
+  id: number;
+  name: string;
+  role_description: string;
+  system_prompt?: string;
+  is_active: boolean;
+  llm_config_id?: number;
+}
+
+// 智能体相关API
+export const getAgentProfiles = () => api.get<AgentProfile[]>('/agent-profiles/');
+
 export default api;

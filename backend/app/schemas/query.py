@@ -45,6 +45,7 @@ class ChatQueryRequest(BaseModel):
     natural_language_query: str
     conversation_id: Optional[str] = None
     clarification_responses: Optional[List[ClarificationResponse]] = None
+    agent_id: Optional[int] = None
 
 
 class ChatQueryResponse(BaseModel):

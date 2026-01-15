@@ -3,7 +3,7 @@
 负责协调各个专门代理的工作流程
 pip install langgraph-supervisor
 """
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from langchain_core.runnables import RunnableConfig
 from langgraph_supervisor import create_supervisor
@@ -17,7 +17,8 @@ from app.models.agent_profile import AgentProfile
 class SupervisorAgent:
     """监督代理 - 基于LangGraph自带supervisor"""
 
-    def __init__(self, worker_agents: List[Any] = None):
+    def __init__(self, worker_agents: List[Any] = None, active_agent_profile: Optional[AgentProfile] = None):
+        self.active_agent_profile = active_agent_profile
         self.llm = get_default_model()
         self.worker_agents = worker_agents or self._create_worker_agents()
         self.supervisor = self._create_supervisor()
@@ -44,6 +45,13 @@ class SupervisorAgent:
         db = SessionLocal()
         try:
             profiles = db.query(AgentProfile).filter(AgentProfile.is_active == True).all()
+            
+            # 确保当前选中的代理也在列表中（即使未启用，或者是刚才被禁用了等边缘情况）
+            if self.active_agent_profile:
+                # 如果当前选中的代理不在 profiles 中（比如 ID 匹配但对象不同），添加进去
+                if not any(p.id == self.active_agent_profile.id for p in profiles):
+                    profiles.append(self.active_agent_profile)
+
             for profile in profiles:
                 # 避免重复添加同名核心代理
                 if any(a.name == profile.name for a in agents):
@@ -104,7 +112,18 @@ class SupervisorAgent:
 1. SQL查询: 用户查询 → schema_agent → sql_generator_agent → sql_executor_agent
 2. 可视化: (SQL执行后) → chart_generator_agent
 3. 错误处理: 任何阶段出错 → error_recovery_agent
+"""
 
+        # 如果有选定的代理，修改工作流指令
+        if self.active_agent_profile:
+             system_msg += f"""
+**特别指令:**
+用户指定了 **{self.active_agent_profile.name}** 进行分析。
+在 `sql_executor_agent` 执行成功并获得数据后，你**必须**将控制权移交给 **{self.active_agent_profile.name}**，让其根据数据进行分析。
+不要直接结束，也不要使用默认的分析方式。
+"""
+
+        system_msg += """
 **工作原则:**
 1. 快速响应，简洁高效
 2. 确保SQL准确性，优先正确执行
@@ -130,10 +149,10 @@ class SupervisorAgent:
                 "error": str(e)
             }
 
-def create_supervisor_agent(worker_agents: List[Any] = None) -> SupervisorAgent:
+def create_supervisor_agent(worker_agents: List[Any] = None, active_agent_profile: Optional[AgentProfile] = None) -> SupervisorAgent:
     """创建监督代理实例"""
-    return SupervisorAgent(worker_agents)
+    return SupervisorAgent(worker_agents, active_agent_profile)
 
-def create_intelligent_sql_supervisor() -> SupervisorAgent:
+def create_intelligent_sql_supervisor(active_agent_profile: Optional[AgentProfile] = None) -> SupervisorAgent:
     """创建智能SQL监督代理的便捷函数"""
-    return SupervisorAgent()
+    return SupervisorAgent(active_agent_profile=active_agent_profile)

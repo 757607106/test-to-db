@@ -11,6 +11,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
+from app.core.config import settings
 
 # 初始化MCP图表服务器客户端
 def _initialize_chart_client():
@@ -23,7 +24,7 @@ def _initialize_chart_client():
                     "transport": "sse",
                     "url": "https://dashscope.aliyuncs.com/api/v1/mcps/antv-visualization-chart/sse",
                     "headers": {
-                        "Authorization": "Bearer sk-899ef9ac687f4373816f102b20983e93"
+                        "Authorization": f"Bearer {settings.DASHSCOPE_API_KEY}"
                     }
                 }
             }

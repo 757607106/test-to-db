@@ -535,6 +535,12 @@ export function Thread() {
                               onChange={setSelectedConnectionId}
                             />
                           </div>
+                          <div className="border-l border-gray-200 pl-4">
+                            <AgentSelector
+                              value={selectedAgentId}
+                              onChange={setSelectedAgentId}
+                            />
+                          </div>
                         </div>
 
                         {stream.isLoading ? (
