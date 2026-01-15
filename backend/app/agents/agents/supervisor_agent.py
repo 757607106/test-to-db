@@ -7,9 +7,12 @@ from typing import Dict, Any, List
 
 from langchain_core.runnables import RunnableConfig
 from langgraph_supervisor import create_supervisor
+from langgraph.prebuilt import create_react_agent
 
 from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
+from app.db.session import SessionLocal
+from app.models.agent_profile import AgentProfile
 
 class SupervisorAgent:
     """监督代理 - 基于LangGraph自带supervisor"""
@@ -20,31 +23,49 @@ class SupervisorAgent:
         self.supervisor = self._create_supervisor()
 
     def _create_worker_agents(self) -> List[Any]:
-        """创建工作代理 - 精简版（保留核心4个agent，保证准确率）"""
+        """创建工作代理 - 包含核心代理、图表代理及动态配置的代理"""
 
         # 核心代理：保证SQL查询的准确性和可靠性
         from app.agents.agents.schema_agent import schema_agent          # 核心：分析用户查询并获取准确的数据库模式
-        from app.agents.agents.sql_generator_agent import sql_generator_agent      # 核心：生成准确的SQL查询（已增强智能处理模糊查询）
+        from app.agents.agents.sql_generator_agent import sql_generator_agent      # 核心：生成准确的SQL查询
         from app.agents.agents.sql_executor_agent import sql_executor_agent        # 核心：安全地执行SQL查询
-        from app.agents.agents.error_recovery_agent import error_recovery_agent    # 保障：处理错误并修正，提高准确率
+        from app.agents.agents.error_recovery_agent import error_recovery_agent    # 保障：处理错误并修正
+        from app.agents.agents.chart_generator_agent import chart_generator_agent  # 可视化：图表生成
 
-        # 已移除的代理（不影响准确率，提升速度）：
-        # - clarification_agent: 由SQL生成agent的智能假设替代
-        # - analyst_agent: 只是结果分析，不影响SQL准确性
-        # - chart_generator_agent: 只是可视化，不影响查询准确性
-        # - sample_retrieval_agent: 暂未启用
-        # - sql_validator_agent: 已禁用
-
-        # 返回精简的核心agent列表
-        return [
-            schema_agent.agent,              # 1. 获取准确的数据库结构
-            sql_generator_agent.agent,       # 2. 生成准确的SQL（智能处理模糊查询）
-            sql_executor_agent.agent,        # 3. 安全执行SQL
-            error_recovery_agent.agent       # 4. 错误修正（提高准确率）
+        agents = [
+            schema_agent.agent,
+            sql_generator_agent.agent,
+            sql_executor_agent.agent,
+            error_recovery_agent.agent,
+            chart_generator_agent.agent
         ]
 
-    # def pre_model_hook(self, state):
-    #     print("哈哈哈哈哈：：：：", state)
+        # 动态加载数据库配置的代理
+        db = SessionLocal()
+        try:
+            profiles = db.query(AgentProfile).filter(AgentProfile.is_active == True).all()
+            for profile in profiles:
+                # 避免重复添加同名核心代理
+                if any(a.name == profile.name for a in agents):
+                    continue
+                
+                # 创建动态代理
+                # 注意：这里工具列表暂时为空，或者需要一个工具注册表来映射 profile.tools 字符串到实际函数
+                # 这里我们假设动态代理主要用于对话或特定分析，使用通用 LLM
+                dynamic_agent = create_react_agent(
+                    model=get_default_model(), # 可以扩展支持 profile.llm_config_id
+                    tools=[], # TODO: 实现工具动态加载
+                    prompt=profile.system_prompt or f"你是 {profile.name}，{profile.role_description}",
+                    name=profile.name
+                )
+                agents.append(dynamic_agent)
+        except Exception as e:
+            print(f"Error loading dynamic agents: {e}")
+        finally:
+            db.close()
+
+        return agents
+
     def _create_supervisor(self):
         """创建LangGraph supervisor"""
         supervisor = create_supervisor(
@@ -52,52 +73,46 @@ class SupervisorAgent:
             agents=self.worker_agents,
             prompt=self._get_supervisor_prompt(),
             add_handoff_back_messages=True,
-            # pre_model_hook=self.pre_model_hook,
-            # parallel_tool_calls=True,
             output_mode="full_history",
         )
 
         return supervisor.compile()
 
     def _get_supervisor_prompt(self) -> str:
-        """获取监督代理提示 - 精简高效版"""
+        """获取监督代理提示 - 动态生成"""
         
-        system_msg = """你是高效的SQL查询系统监督者。
+        # 基础提示
+        system_msg = """你是高效的SQL查询与分析系统监督者。
 
-你管理4个核心代理（精简版，保证准确率和速度）：
+你管理以下代理：
 
 🔍 **schema_agent**: 分析用户查询，获取准确的数据库表结构
 ⚙️ **sql_generator_agent**: 生成准确的SQL（已增强：智能处理模糊查询）
 🚀 **sql_executor_agent**: 安全执行SQL并返回结果
 🔧 **error_recovery_agent**: 处理错误并修正SQL，提高准确率
+📊 **chart_generator_agent**: 将数据结果生成可视化图表
+"""
 
-**核心工作流程（快速高效）:**
-用户查询 → schema_agent → sql_generator_agent → sql_executor_agent → 完成
+        # 添加动态代理描述
+        for agent in self.worker_agents:
+            name = agent.name
+            if name not in ["schema_agent", "sql_generator_agent", "sql_executor_agent", "error_recovery_agent", "chart_generator_agent"]:
+                system_msg += f"🤖 **{name}**: 自定义代理\n"
+
+        system_msg += """
+**核心工作流程:**
+1. SQL查询: 用户查询 → schema_agent → sql_generator_agent → sql_executor_agent
+2. 可视化: (SQL执行后) → chart_generator_agent
+3. 错误处理: 任何阶段出错 → error_recovery_agent
 
 **工作原则:**
 1. 快速响应，简洁高效
-2. SQL生成agent会智能处理模糊查询（无需额外澄清）
-3. 确保SQL准确性，优先正确执行
+2. 确保SQL准确性，优先正确执行
+3. 如果用户请求包含"图表"、"画图"、"可视化"等意图，必须调用 chart_generator_agent
 4. 一次只分配一个代理
 5. 不要自己执行任何具体工作
 
-**模糊查询处理:**
-- sql_generator_agent已增强，能智能处理模糊词：
-  - "最好"/"最高" → 自动按关键指标降序
-  - "最近" → 自动使用最近30天
-  - "销售" → 自动选择销售额字段
-- 无需额外澄清，直接生成准确SQL
-
-**错误处理:**
-任何阶段出错 → error_recovery_agent → 分析错误 → 修正SQL → 重试对应阶段
-
-**准确率保障:**
-1. schema_agent: 准确获取数据库结构
-2. sql_generator_agent: 智能假设 + 准确SQL
-3. sql_executor_agent: 安全执行
-4. error_recovery_agent: 错误修正
-
-请根据当前状态选择合适的代理，保持流程简洁高效，确保SQL准确性。"""
+请根据当前状态选择合适的代理，保持流程简洁高效。"""
 
         return system_msg
 

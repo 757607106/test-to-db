@@ -25,6 +25,7 @@ interface QueryResult {
   results: any[] | null;
   error: string | null;
   context: any | null;
+  similar_queries?: any[]; // Added similar_queries
 }
 
 const IntelligentQueryPage: React.FC = () => {
@@ -58,22 +59,29 @@ const IntelligentQueryPage: React.FC = () => {
     setQuery(e.target.value);
   };
 
-  const executeQuery = async () => {
+  const executeQuery = async (queryText?: string) => {
+    const textToExecute = queryText || query;
+
     if (!selectedConnection) {
       message.error('请选择数据库连接');
       return;
     }
 
-    if (!query.trim()) {
+    if (!textToExecute.trim()) {
       message.error('请输入查询');
       return;
     }
 
     setLoading(true);
+    // If it's a new query (clicked from similar questions), update the input box
+    if (queryText) {
+      setQuery(queryText);
+    }
+
     try {
       const response = await api.executeQuery({
         connection_id: selectedConnection,
-        natural_language_query: query
+        natural_language_query: textToExecute
       });
 
       setResult(response.data);
@@ -143,13 +151,31 @@ const IntelligentQueryPage: React.FC = () => {
           <Button
             type="primary"
             icon={<SendOutlined />}
-            onClick={executeQuery}
+            onClick={() => executeQuery()}
             loading={loading}
             disabled={!selectedConnection}
           >
             执行查询
           </Button>
         </div>
+
+        {/* 相似问题推荐区域 */}
+        {result?.similar_queries && result.similar_queries.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <Text type="secondary">相似问题推荐：</Text>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: 8 }}>
+              {result.similar_queries.map((item: any, index: number) => (
+                <Button 
+                  key={index} 
+                  size="small" 
+                  onClick={() => executeQuery(item.query)}
+                >
+                  {item.query}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {loading && (
           <div style={{ textAlign: 'center', padding: '20px' }}>

@@ -6,6 +6,8 @@ from typing import Dict, Any
 
 from app.core.state import SQLMessageState
 from app.agents.agents.supervisor_agent import create_intelligent_sql_supervisor
+from app.db.session import SessionLocal
+from app.services.query_history_service import QueryHistoryService
 
 def extract_connection_id_from_messages(messages) -> int:
     """从消息中提取连接ID"""
@@ -39,7 +41,23 @@ class IntelligentSQLGraph:
 
     async def process_query(self, query: str, connection_id: int = 15) -> Dict[str, Any]:
         """处理SQL查询"""
+        db = SessionLocal()
+        history_service = QueryHistoryService(db)
+        
         try:
+            # 1. 查找相似问题 (Before Execution)
+            similar_queries = []
+            try:
+                similar_items = history_service.find_similar_queries(query, limit=3)
+                for item in similar_items:
+                    similar_queries.append({
+                        "query": item.query_text,
+                        "created_at": item.created_at.isoformat() if item.created_at else None,
+                        "meta_info": item.meta_info
+                    })
+            except Exception as e:
+                print(f"查找相似问题失败: {e}")
+
             # 初始化状态
             initial_state = SQLMessageState(
                 messages=[{"role": "user", "content": query}],
@@ -47,23 +65,42 @@ class IntelligentSQLGraph:
                 current_stage="schema_analysis",
                 retry_count=0,
                 max_retries=3,
-                error_history=[]
+                error_history=[],
+                similar_queries=similar_queries # 注入相似问题
             )
 
             # 委托给supervisor处理
             result = await self.supervisor_agent.supervise(initial_state)
 
             if result.get("success"):
+                # 2. 保存当前查询 (After Successful Execution)
+                # 只有当成功时才保存，避免污染
+                # 也可以根据 result 中的信息判断是否真的"成功"（例如有 generated_sql）
+                graph_result = result.get("result", {})
+                
+                # 保存查询历史
+                try:
+                    meta_info = {
+                        "final_stage": graph_result.get("current_stage"),
+                        "has_sql": bool(graph_result.get("generated_sql")),
+                        "has_error": bool(graph_result.get("error_history"))
+                    }
+                    history_service.save_query(query, connection_id, meta_info)
+                except Exception as e:
+                    print(f"保存查询历史失败: {e}")
+
                 return {
                     "success": True,
-                    "result": result.get("result"),
-                    "final_stage": result.get("result", {}).get("current_stage", "completed")
+                    "result": graph_result,
+                    "final_stage": graph_result.get("current_stage", "completed"),
+                    "similar_queries": similar_queries # 返回给前端
                 }
             else:
                 return {
                     "success": False,
                     "error": result.get("error"),
-                    "final_stage": "error"
+                    "final_stage": "error",
+                    "similar_queries": similar_queries
                 }
 
         except Exception as e:
@@ -72,6 +109,8 @@ class IntelligentSQLGraph:
                 "error": str(e),
                 "final_stage": "error"
             }
+        finally:
+            db.close()
 
     @property
     def worker_agents(self):

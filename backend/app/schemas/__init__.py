@@ -37,6 +37,8 @@ from app.schemas.dashboard_widget import (
     WidgetRegenerateRequest,
     UserSimple
 )
+from app.schemas.llm_config import LLMConfig, LLMConfigCreate, LLMConfigUpdate
+from app.schemas.agent_profile import AgentProfile, AgentProfileCreate, AgentProfileUpdate
 from app.schemas.dashboard_insight import (
     TimeRangeCondition,
     InsightConditions,

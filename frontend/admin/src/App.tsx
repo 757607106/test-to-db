@@ -14,6 +14,8 @@ import GraphVisualizationPage from './pages/GraphVisualizationPage';
 import HybridQAPage from './pages/HybridQA';
 import DashboardListPage from './pages/DashboardListPage';
 import DashboardEditorPage from './pages/DashboardEditorPage';
+import LLMConfigPage from './pages/LLMConfig';
+import AgentProfilePage from './pages/AgentProfile';
 
 const App: React.FC = () => {
   return (
@@ -28,6 +30,8 @@ const App: React.FC = () => {
         <Route path="/value-mappings" element={<ValueMappingsPage />} />
         <Route path="/dashboards" element={<DashboardListPage />} />
         <Route path="/dashboards/:id" element={<DashboardEditorPage />} />
+        <Route path="/llm-config" element={<LLMConfigPage />} />
+        <Route path="/agent-profile" element={<AgentProfilePage />} />
       </Routes>
     </IOSLayout>
   );

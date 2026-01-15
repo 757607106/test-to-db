@@ -52,8 +52,13 @@ class Settings(BaseSettings):
     OLLAMA_NUM_PREDICT: int = int(os.getenv("OLLAMA_NUM_PREDICT", "-1"))
     OLLAMA_TEMPERATURE: float = float(os.getenv("OLLAMA_TEMPERATURE", "0.0"))
 
+    # 阿里云DashScope配置
+    DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
+    DASHSCOPE_BASE_URL: str = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+    DASHSCOPE_EMBEDDING_MODEL: str = os.getenv("DASHSCOPE_EMBEDDING_MODEL", "text-embedding-v4")
+
     # 向量服务配置
-    VECTOR_SERVICE_TYPE: str = os.getenv("VECTOR_SERVICE_TYPE", "ollama")  # ollama 或 sentence_transformer
+    VECTOR_SERVICE_TYPE: str = os.getenv("VECTOR_SERVICE_TYPE", "aliyun")  # ollama 或 sentence_transformer 或 aliyun
     VECTOR_CACHE_ENABLED: bool = os.getenv("VECTOR_CACHE_ENABLED", "true").lower() == "true"
     VECTOR_CACHE_TTL: int = int(os.getenv("VECTOR_CACHE_TTL", "3600"))
     VECTOR_BATCH_SIZE: int = int(os.getenv("VECTOR_BATCH_SIZE", "32"))

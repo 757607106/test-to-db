@@ -3,13 +3,14 @@ from fastapi import APIRouter
 from app.api.api_v1.endpoints import (
     connections, schema, query, value_mappings, 
     graph_visualization, relationship_tips, hybrid_qa,
-    dashboards, dashboard_widgets, dashboard_insights
+    dashboards, dashboard_widgets, dashboard_insights,
+    llm_configs, agent_profiles
 )
 
 # 强制重新加载 - 修复API路由问题
 
 api_router = APIRouter()
-
+ 
 # 添加API根路径处理器
 @api_router.get("/")
 async def api_root():
@@ -41,3 +42,5 @@ api_router.include_router(hybrid_qa.router, prefix="/hybrid-qa", tags=["hybrid-q
 api_router.include_router(dashboards.router, prefix="/dashboards", tags=["dashboards"])
 api_router.include_router(dashboard_widgets.router, prefix="", tags=["widgets"])
 api_router.include_router(dashboard_insights.router, prefix="", tags=["insights"])
+api_router.include_router(llm_configs.router, prefix="/llm-configs", tags=["llm-configs"])
+api_router.include_router(agent_profiles.router, prefix="/agent-profiles", tags=["agent-profiles"])

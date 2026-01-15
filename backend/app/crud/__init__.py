@@ -6,3 +6,5 @@ from app.crud.crud_value_mapping import value_mapping
 from app.crud.crud_dashboard import crud_dashboard
 from app.crud.crud_dashboard_widget import crud_dashboard_widget
 from app.crud.crud_dashboard_permission import crud_dashboard_permission
+from app.crud.crud_llm_config import llm_config
+from app.crud.crud_agent_profile import agent_profile

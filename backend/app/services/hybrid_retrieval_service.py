@@ -14,6 +14,7 @@ from neo4j import GraphDatabase
 from pymilvus import MilvusClient, DataType
 # from sentence_transformers import SentenceTransformer
 from langchain_ollama import OllamaEmbeddings
+from openai import AsyncOpenAI
 
 import numpy as np
 
@@ -113,6 +114,8 @@ class VectorService:
             try:
                 if self.service_type == "ollama":
                     await self._initialize_ollama()
+                elif self.service_type == "aliyun":
+                    await self._initialize_aliyun()
                 else:
                     pass
                     # await self._initialize_sentence_transformer()
@@ -123,6 +126,31 @@ class VectorService:
             except Exception as e:
                 logger.error(f"Failed to initialize vector service: {str(e)}")
                 raise
+
+    async def _initialize_aliyun(self):
+        """初始化阿里云DashScope嵌入模型"""
+        logger.info(f"Initializing Aliyun DashScope embedding model: {self.model_name}")
+        
+        api_key = settings.DASHSCOPE_API_KEY
+        base_url = settings.DASHSCOPE_BASE_URL
+        
+        if not api_key:
+            raise ValueError("DASHSCOPE_API_KEY is not set in environment variables")
+            
+        # 使用 AsyncOpenAI 客户端
+        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        
+        # 测试连接并获取维度
+        try:
+            response = await self.client.embeddings.create(
+                model=self.model_name,
+                input="test"
+            )
+            self.dimension = len(response.data[0].embedding)
+            logger.info(f"Aliyun DashScope model loaded, dimension: {self.dimension}")
+        except Exception as e:
+            logger.error(f"Failed to connect to Aliyun DashScope: {e}")
+            raise
 
     async def _initialize_ollama(self):
         """初始化Ollama嵌入模型"""
@@ -254,6 +282,12 @@ class VectorService:
                     # 使用异步方法
                     embedding = await self.model.aembed_query(text)
                     return embedding
+                elif self.service_type == "aliyun":
+                    response = await self.client.embeddings.create(
+                        model=self.model_name,
+                        input=text
+                    )
+                    return response.data[0].embedding
                 else:
                     return self.model.encode(text).tolist()
 
@@ -294,7 +328,9 @@ class VectorService:
         processed = re.sub(r'\s+', ' ', processed)
 
         # 可选：转换为小写（根据模型需求）
-        if self.service_type != "ollama":  # Ollama模型通常对大小写敏感
+        # Ollama和Aliyun模型可能对大小写敏感，或者处理方式不同
+        # 一般来说，保留大小写可能包含更多语义信息
+        if self.service_type not in ["ollama", "aliyun"]: 
             processed = processed.lower()
 
         return processed

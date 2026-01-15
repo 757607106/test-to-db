@@ -88,6 +88,9 @@ class SQLMessageState(AgentState):
     analyst_insights: Optional[Dict[str, Any]] = None
     needs_analysis: bool = False
 
+    # 相似问题
+    similar_queries: Optional[List[Dict[str, Any]]] = None
+
 def extract_connection_id(state: SQLMessageState) -> int:
     """从状态中提取数据库连接ID"""
     messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])

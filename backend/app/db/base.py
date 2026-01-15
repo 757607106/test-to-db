@@ -10,3 +10,6 @@ from app.models.value_mapping import ValueMapping  # noqa
 from app.models.dashboard import Dashboard  # noqa
 from app.models.dashboard_widget import DashboardWidget  # noqa
 from app.models.dashboard_permission import DashboardPermission  # noqa
+from app.models.llm_config import LLMConfiguration  # noqa
+from app.models.agent_profile import AgentProfile  # noqa
+from app.models.query_history import QueryHistory  # noqa

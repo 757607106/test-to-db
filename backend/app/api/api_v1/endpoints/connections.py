@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app import crud, models, schemas
 from app.api import deps
+from app.models.db_connection import DBConnection # Import for type hinting mock
 
 router = APIRouter()
 
@@ -127,7 +128,7 @@ def test_connection(
     connection_id: int,
 ) -> Any:
     """
-    Test a database connection.
+    Test a database connection (existing).
     """
     connection = crud.db_connection.get(db=db, id=connection_id)
     if not connection:
@@ -135,9 +136,37 @@ def test_connection(
 
     # Test the connection
     try:
-        # Implement connection testing logic
         from app.services.db_service import test_db_connection
         test_db_connection(connection)
+        return {"status": "success", "message": "Connection successful"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@router.post("/test-config", response_model=dict)
+def test_connection_config(
+    *,
+    connection_in: schemas.DBConnectionCreate,
+) -> Any:
+    """
+    Test a database connection configuration (before saving).
+    """
+    try:
+        from app.services.db_service import test_db_connection
+        # Create a temporary DBConnection object (not saved to DB)
+        # Note: We can't easily instantiate SQLAlchemy model without session, 
+        # but db_service.py expects an object with attributes.
+        # Let's create a simple object or use the Pydantic model if compatible.
+        
+        # We need to construct an object that has the same attributes as DBConnection
+        class MockConnection:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+                self.password_encrypted = kwargs.get('password', '') # Mock encrypted as plain for test if provided
+                
+        mock_conn = MockConnection(**connection_in.dict())
+        
+        test_db_connection(mock_conn)
         return {"status": "success", "message": "Connection successful"}
     except Exception as e:
         return {"status": "error", "message": str(e)}

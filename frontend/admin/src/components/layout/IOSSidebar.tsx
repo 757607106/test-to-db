@@ -9,7 +9,9 @@ import {
   SwapOutlined,
   SettingOutlined,
   UserOutlined,
-  DashboardOutlined
+  DashboardOutlined,
+  ApiOutlined,
+  RobotOutlined
 } from '@ant-design/icons';
 
 const IOSSidebar: React.FC = () => {
@@ -23,6 +25,8 @@ const IOSSidebar: React.FC = () => {
     { key: '/dashboards', icon: <DashboardOutlined />, label: 'BI仪表盘', to: '/dashboards' },
     { key: '/connections', icon: <DatabaseOutlined />, label: '连接管理', to: '/connections' },
     { key: '/value-mappings', icon: <SwapOutlined />, label: '数据映射', to: '/value-mappings' },
+    { key: '/llm-config', icon: <ApiOutlined />, label: '模型配置', to: '/llm-config' },
+    { key: '/agent-profile', icon: <RobotOutlined />, label: '智能体配置', to: '/agent-profile' },
   ];
 
   const styles = {
