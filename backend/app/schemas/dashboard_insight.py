@@ -122,3 +122,29 @@ class AdjustableConditionsConfig(BaseModel):
     time_range: Optional[AdjustableTimeRange] = None
     dimension_filters: Optional[List[AdjustableDimensionFilter]] = Field(default_factory=list)
     aggregation_level: Optional[AdjustableAggregationLevel] = None
+
+
+# ===== 智能挖掘相关 Schema =====
+
+class MiningSuggestion(BaseModel):
+    """智能挖掘推荐项"""
+    title: str = Field(..., description="图表标题")
+    description: str = Field(..., description="推荐理由")
+    sql: str = Field(..., description="SQL查询语句")
+    chart_type: str = Field(..., description="推荐图表类型")
+    analysis_intent: str = Field(..., description="对应的分析意图")
+
+class MiningRequest(BaseModel):
+    """智能挖掘请求"""
+    connection_id: int = Field(..., description="数据库连接ID")
+    intent: Optional[str] = Field(None, description="用户意图/关注点，为空则全自动推荐")
+    limit: int = Field(5, description="推荐数量")
+
+class MiningResponse(BaseModel):
+    """智能挖掘响应"""
+    suggestions: List[MiningSuggestion] = Field(default_factory=list)
+
+class ApplyMiningRequest(BaseModel):
+    """应用推荐请求"""
+    connection_id: int = Field(..., description="数据库连接ID")
+    suggestions: List[MiningSuggestion] = Field(..., description="用户选中的推荐项")

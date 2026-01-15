@@ -4,6 +4,7 @@ Dashboard分析师代理
 """
 from typing import Dict, Any, List, Optional
 import json
+import asyncio
 
 from langchain_core.messages import HumanMessage
 from app.core.llms import get_default_model
@@ -17,7 +18,7 @@ class DashboardAnalystAgent:
     def __init__(self):
         self.llm = get_default_model()
     
-    def analyze_dashboard_data(
+    async def analyze_dashboard_data(
         self,
         dashboard: Any,
         aggregated_data: Dict[str, Any],
@@ -25,7 +26,7 @@ class DashboardAnalystAgent:
         analysis_dimensions: Optional[List[str]] = None
     ) -> schemas.InsightResult:
         """
-        分析看板数据，生成综合洞察
+        分析看板数据，生成综合洞察 (Async)
         
         Args:
             dashboard: Dashboard对象
@@ -45,14 +46,14 @@ class DashboardAnalystAgent:
         if analysis_level == "skip":
             return self._create_minimal_insights(total_rows)
         
-        # 计算统计信息
+        # 计算统计信息 (CPU bound, consider run_in_executor if heavy, but likely fine here)
         stats = calculate_statistics(data) if data else {}
         
         # 检测时间序列
         time_series_info = detect_time_series(data) if data else None
         
-        # 构建Prompt并调用LLM
-        insights_dict = self._generate_insights_with_llm(
+        # 构建Prompt并调用LLM (Async)
+        insights_dict = await self._generate_insights_with_llm(
             dashboard,
             aggregated_data,
             stats,
@@ -80,7 +81,7 @@ class DashboardAnalystAgent:
         
         return "basic_analysis"
     
-    def _generate_insights_with_llm(
+    async def _generate_insights_with_llm(
         self,
         dashboard: Any,
         aggregated_data: Dict[str, Any],
@@ -89,7 +90,7 @@ class DashboardAnalystAgent:
         relationship_context: Optional[Dict[str, Any]],
         analysis_level: str
     ) -> Dict[str, Any]:
-        """使用LLM生成洞察"""
+        """使用LLM生成洞察 (Async)"""
         
         # 构建数据特征描述
         data_characteristics = self._build_data_characteristics(aggregated_data, stats)
@@ -112,7 +113,7 @@ class DashboardAnalystAgent:
         
         # 调用LLM
         try:
-            response = self.llm.invoke([HumanMessage(content=prompt)])
+            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
             content = response.content.strip()
             
             # 提取JSON

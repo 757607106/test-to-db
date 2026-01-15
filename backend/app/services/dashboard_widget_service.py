@@ -171,10 +171,11 @@ class DashboardWidgetService:
             
         except Exception as e:
             print(f"刷新Widget数据失败: {str(e)}")
-            # 如果查询失败，返回空数据（不包含error字段，避免前端误判为有效数据）
+            # 如果查询失败，返回空数据，并附带错误信息
             data_cache = {
                 "columns": [],
-                "rows": []
+                "rows": [],
+                "error": str(e)
             }
         
         updated_widget, duration_ms = crud.crud_dashboard_widget.refresh_data(

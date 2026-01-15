@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     NEO4J_PASSWORD: str = os.getenv("NEO4J_PASSWORD", "65132090")
 
     # LLM settings
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "deepseek")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_API_BASE: Optional[str] = os.getenv("OPENAI_API_BASE", "https://api.deepseek.com/v1")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "deepseek-chat")

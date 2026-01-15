@@ -117,6 +117,33 @@ export const dashboardService = {
     const response = await api.get(`/dashboards/${dashboardId}/insights`);
     return response.data;
   },
+
+  // 生成智能挖掘建议
+  async generateMiningSuggestions(
+    dashboardId: number,
+    connectionId: number,
+    intent?: string
+  ): Promise<{ suggestions: any[] }> {
+    const response = await api.post(`/dashboards/${dashboardId}/mining/suggestions`, {
+      connection_id: connectionId,
+      intent,
+      limit: 5
+    });
+    return response.data;
+  },
+
+  // 应用智能挖掘建议
+  async applyMiningSuggestions(
+    dashboardId: number,
+    connectionId: number,
+    suggestions: any[]
+  ): Promise<any> {
+    const response = await api.post(`/dashboards/${dashboardId}/mining/apply`, {
+      connection_id: connectionId,
+      suggestions
+    });
+    return response.data;
+  },
 };
 
 // Widget服务

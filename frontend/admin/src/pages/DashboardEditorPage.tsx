@@ -12,25 +12,29 @@ import {
   Input,
   Select,
   Popconfirm,
+  Row,
+  Col,
+  Dropdown,
+  Menu,
+  Tooltip
 } from 'antd';
 import {
   ArrowLeftOutlined,
   PlusOutlined,
-  SaveOutlined,
   ReloadOutlined,
   EditOutlined,
   DeleteOutlined,
   SettingOutlined,
   BulbOutlined,
-  DownOutlined,
-  UpOutlined,
+  MoreOutlined,
+  CodeOutlined,
+  SyncOutlined
 } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import { dashboardService, widgetService } from '../services/dashboardService';
 import type {
   DashboardDetail,
   Widget,
-  WidgetCreate,
   WidgetUpdate,
   InsightConditions,
   InsightResult,
@@ -39,7 +43,7 @@ import { DashboardInsightWidget } from '../components/DashboardInsightWidget';
 import { InsightConditionPanel } from '../components/InsightConditionPanel';
 import { AddWidgetForm } from '../components/AddWidgetForm';
 import { SmartChart } from '../components/SmartChart';
-import { ChartTypeSelector } from '../components/ChartTypeSelector';
+// import { ChartTypeSelector } from '../components/ChartTypeSelector';
 import { GuidedMiningWizard } from '../components/GuidedMiningWizard';
 
 const { Title, Text } = Typography;
@@ -61,7 +65,10 @@ const DashboardEditorPage: React.FC = () => {
   const [conditionPanelVisible, setConditionPanelVisible] = useState<boolean>(false);
   const [currentInsightWidget, setCurrentInsightWidget] = useState<Widget | null>(null);
   const [miningWizardVisible, setMiningWizardVisible] = useState<boolean>(false);
-  const [sqlCollapsed, setSqlCollapsed] = useState<Record<number, boolean>>({});
+  
+  // 详情弹窗状态
+  const [detailModalVisible, setDetailModalVisible] = useState<boolean>(false);
+  const [detailWidget, setDetailWidget] = useState<Widget | null>(null);
 
   useEffect(() => {
     if (dashboardId) {
@@ -132,6 +139,11 @@ const DashboardEditorPage: React.FC = () => {
     });
     setEditWidgetModalVisible(true);
   };
+  
+  const showDetailModal = (widget: Widget) => {
+      setDetailWidget(widget);
+      setDetailModalVisible(true);
+  };
 
   const handleAddWidgetCancel = () => {
     setAddWidgetModalVisible(false);
@@ -174,7 +186,7 @@ const DashboardEditorPage: React.FC = () => {
     
     setGeneratingInsights(true);
     try {
-      const response = await dashboardService.generateDashboardInsights(dashboardId, {
+      await dashboardService.generateDashboardInsights(dashboardId, {
         conditions,
         use_graph_relationships: true,
       });
@@ -246,155 +258,76 @@ const DashboardEditorPage: React.FC = () => {
     // 如果是洞察类型Widget，使用特殊组件渲染
     if (widget.widget_type === 'insight_analysis') {
       return (
-        <DashboardInsightWidget
-          key={widget.id}
-          widgetId={widget.id}
-          insights={widget.data_cache as InsightResult}
-          loading={isRefreshing}
-          onRefresh={() => handleRefreshInsights(widget.id)}
-          onOpenConditionPanel={() => handleOpenConditionPanel(widget)}
-        />
+        <Col span={24} key={widget.id}>
+            <DashboardInsightWidget
+            widgetId={widget.id}
+            insights={widget.data_cache as InsightResult}
+            loading={isRefreshing}
+            onRefresh={() => handleRefreshInsights(widget.id)}
+            onOpenConditionPanel={() => handleOpenConditionPanel(widget)}
+            />
+        </Col>
       );
     }
+    
+    const menu = (
+        <Menu>
+            <Menu.Item key="refresh" icon={<ReloadOutlined />} onClick={() => handleRefreshWidget(widget.id)}>
+                刷新数据
+            </Menu.Item>
+            <Menu.Item key="detail" icon={<CodeOutlined />} onClick={() => showDetailModal(widget)}>
+                查看详情
+            </Menu.Item>
+            <Menu.Item key="edit" icon={<EditOutlined />} onClick={() => showEditWidgetModal(widget)}>
+                编辑配置
+            </Menu.Item>
+            <Menu.Item key="delete" icon={<DeleteOutlined />} danger>
+                <Popconfirm
+                    title="确定要删除这个组件吗？"
+                    onConfirm={() => handleDeleteWidget(widget.id)}
+                    okText="是"
+                    cancelText="否"
+                    placement="left"
+                >
+                    删除组件
+                </Popconfirm>
+            </Menu.Item>
+        </Menu>
+    );
 
     return (
-      <Card
-        key={widget.id}
-        title={
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Text strong>{widget.title}</Text>
-            <Space>
-              <Button
-                type="text"
-                size="small"
-                icon={<ReloadOutlined />}
-                loading={isRefreshing}
-                onClick={() => handleRefreshWidget(widget.id)}
-              >
-                刷新
-              </Button>
-              <Button
-                type="text"
-                size="small"
-                icon={<EditOutlined />}
-                onClick={() => showEditWidgetModal(widget)}
-              >
-                编辑
-              </Button>
-              <Popconfirm
-                title="确定要删除这个组件吗？"
-                onConfirm={() => handleDeleteWidget(widget.id)}
-                okText="是"
-                cancelText="否"
-              >
-                <Button type="text" size="small" danger icon={<DeleteOutlined />}>
-                  删除
-                </Button>
-              </Popconfirm>
-            </Space>
-          </div>
-        }
-        style={{ marginBottom: 16 }}
-      >
-        <Space direction="vertical" style={{ width: '100%' }}>
-          <div>
-            <Text type="secondary">类型：</Text>
-            <Text>{widget.widget_type}</Text>
-          </div>
-          <div>
-            <Text type="secondary">数据库连接：</Text>
-            <Text>{widget.connection_name || `Connection #${widget.connection_id}`}</Text>
-          </div>
-          <div>
-            <Text type="secondary">刷新间隔：</Text>
-            <Text>{widget.refresh_interval > 0 ? `${widget.refresh_interval}秒` : '手动刷新'}</Text>
-          </div>
-          {widget.last_refresh_at && (
-            <div>
-              <Text type="secondary">最后刷新：</Text>
-              <Text>{new Date(widget.last_refresh_at).toLocaleString()}</Text>
-            </div>
-          )}
-          <div>
-            <div 
-              style={{ 
-                display: 'flex', 
-                justifyContent: 'space-between', 
-                alignItems: 'center',
-                cursor: 'pointer',
-                marginBottom: '8px'
-              }}
-              onClick={() => {
-                const newState = {...sqlCollapsed};
-                newState[widget.id] = !newState[widget.id];
-                setSqlCollapsed(newState);
-              }}
-            >
-              <Text type="secondary">查询SQL：</Text>
-              <Button 
-                type="link" 
-                size="small"
-                icon={sqlCollapsed[widget.id] ? <DownOutlined /> : <UpOutlined />}
-              >
-                {sqlCollapsed[widget.id] ? '展开' : '收起'}
-              </Button>
-            </div>
-            {!sqlCollapsed[widget.id] && (
-              <pre
-                style={{
-                  background: '#f5f5f5',
-                  padding: '8px',
-                  borderRadius: '4px',
-                  fontSize: '12px',
-                  overflow: 'auto',
-                  maxHeight: '200px',
-                }}
-              >
-                {widget.query_config.generated_sql}
-              </pre>
+      <Col xs={24} sm={24} md={12} lg={12} xl={8} key={widget.id}>
+        <Card
+            title={widget.title}
+            extra={
+                <Space>
+                    {widget.last_refresh_at && (
+                        <Tooltip title={`最后刷新: ${new Date(widget.last_refresh_at).toLocaleString()}`}>
+                            <Text type="secondary" style={{ fontSize: '12px' }}>
+                                <SyncOutlined spin={isRefreshing} />
+                            </Text>
+                        </Tooltip>
+                    )}
+                    <Dropdown overlay={menu} trigger={['click']}>
+                        <Button type="text" icon={<MoreOutlined />} />
+                    </Dropdown>
+                </Space>
+            }
+            bodyStyle={{ padding: '12px', height: '350px', overflow: 'hidden' }}
+            hoverable
+        >
+            {widget.data_cache ? (
+                <SmartChart 
+                    data={widget.data_cache} 
+                    height={326}
+                    chartType={widget.chart_config?.chart_type}
+                    debug={true} // 开启调试模式以便排查问题
+                />
+            ) : (
+                <Empty description="暂无数据" style={{ marginTop: 80 }} />
             )}
-          </div>
-          {widget.data_cache && (
-            <div>
-              {widget.widget_type === 'chart' ? (
-                <>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <Text type="secondary">图表展示：</Text>
-                    <ChartTypeSelector
-                      widgetId={widget.id}
-                      currentChartType={widget.chart_config?.chart_type}
-                      onChartTypeChange={() => fetchDashboard()}
-                    />
-                  </div>
-                  <div style={{ marginTop: 8 }}>
-                    <SmartChart 
-                      data={widget.data_cache} 
-                      height={300}
-                      chartType={widget.chart_config?.chart_type}
-                    />
-                  </div>
-                </>
-              ) : (
-                <>
-                  <Text type="secondary">数据预览：</Text>
-                  <pre
-                    style={{
-                      background: '#f5f5f5',
-                      padding: '8px',
-                      borderRadius: '4px',
-                      fontSize: '12px',
-                      overflow: 'auto',
-                      maxHeight: '300px',
-                    }}
-                  >
-                    {JSON.stringify(widget.data_cache, null, 2)}
-                  </pre>
-                </>
-              )}
-            </div>
-          )}
-        </Space>
-      </Card>
+        </Card>
+      </Col>
     );
   };
 
@@ -418,7 +351,6 @@ const DashboardEditorPage: React.FC = () => {
 
   return (
     <div style={{ padding: '24px' }}>
-      <Card>
         <div style={{ marginBottom: 24 }}>
           <Space style={{ marginBottom: 16 }}>
             <Button icon={<ArrowLeftOutlined />} onClick={handleBack}>
@@ -465,25 +397,34 @@ const DashboardEditorPage: React.FC = () => {
           </div>
         </div>
 
-        {/* 只展示非洞察类型Widget，如果没有则显示空状态 */}
+        {/* 使用 Grid 布局展示组件 */}
         {dashboard.widgets.filter(w => w.widget_type !== 'insight_analysis').length === 0 ? (
-          <Empty
-            description="暂无组件"
-            style={{ margin: '60px 0' }}
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-          >
-            {canEdit && (
-              <Button type="primary" icon={<PlusOutlined />} onClick={showAddWidgetModal}>
-                添加第一个组件
-              </Button>
-            )}
-          </Empty>
+          <Card>
+            <Empty
+                description="暂无组件"
+                style={{ margin: '60px 0' }}
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+            >
+                {canEdit && (
+                <Button type="primary" icon={<PlusOutlined />} onClick={showAddWidgetModal}>
+                    添加第一个组件
+                </Button>
+                )}
+            </Empty>
+          </Card>
         ) : (
-          <div>
-            {dashboard.widgets.map((widget) => renderWidgetCard(widget))}
-          </div>
+          <Row gutter={[16, 16]}>
+            {/* 先渲染洞察组件（通常占满一行） */}
+            {dashboard.widgets
+                .filter(w => w.widget_type === 'insight_analysis')
+                .map(renderWidgetCard)}
+            
+            {/* 再渲染普通组件 */}
+            {dashboard.widgets
+                .filter(w => w.widget_type !== 'insight_analysis')
+                .map(renderWidgetCard)}
+          </Row>
         )}
-      </Card>
 
       {/* 编辑Widget Modal */}
       <Modal
@@ -519,6 +460,34 @@ const DashboardEditorPage: React.FC = () => {
           </Form.Item>
         </Form>
       </Modal>
+      
+      {/* 详情查看 Modal */}
+      <Modal
+        title="组件详情"
+        open={detailModalVisible}
+        onCancel={() => setDetailModalVisible(false)}
+        footer={[
+            <Button key="close" onClick={() => setDetailModalVisible(false)}>关闭</Button>
+        ]}
+        width={800}
+      >
+          {detailWidget && (
+              <Space direction="vertical" style={{ width: '100%' }}>
+                  <div>
+                      <Text strong>SQL查询：</Text>
+                      <pre style={{ background: '#f5f5f5', padding: '10px', maxHeight: '200px', overflow: 'auto' }}>
+                          {detailWidget.query_config?.generated_sql}
+                      </pre>
+                  </div>
+                  <div>
+                      <Text strong>数据预览：</Text>
+                      <pre style={{ background: '#f5f5f5', padding: '10px', maxHeight: '300px', overflow: 'auto' }}>
+                          {JSON.stringify(detailWidget.data_cache, null, 2)}
+                      </pre>
+                  </div>
+              </Space>
+          )}
+      </Modal>
 
       {/* 添加Widget Modal - 完整功能 */}
       <Modal
@@ -552,7 +521,7 @@ const DashboardEditorPage: React.FC = () => {
       <GuidedMiningWizard
         visible={miningWizardVisible}
         dashboardId={dashboardId}
-        connectionId={dashboard?.widgets[0]?.connection_id}  // 从第一个widget获取，如果没有则让用户选择
+        connectionId={dashboard?.widgets.find(w => w.connection_id)?.connection_id}
         onClose={() => setMiningWizardVisible(false)}
         onSuccess={() => {
           setMiningWizardVisible(false);

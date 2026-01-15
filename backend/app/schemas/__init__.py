@@ -52,6 +52,10 @@ from app.schemas.dashboard_insight import (
     AdjustableTimeRange,
     AdjustableDimensionFilter,
     AdjustableAggregationLevel,
-    AdjustableConditionsConfig
+    AdjustableConditionsConfig,
+    MiningRequest,
+    MiningResponse,
+    MiningSuggestion,
+    ApplyMiningRequest
 )
 

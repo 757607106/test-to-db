@@ -1,45 +1,35 @@
 /**
  * SmartChart 组件
- * 根据数据自动选择合适的ECharts图表类型进行渲染
+ * 根据数据自动选择合适的ECharts图表类型进行渲染，支持自动降级为表格
  */
 import React, { useMemo, useRef, useEffect } from 'react';
 import ReactECharts from 'echarts-for-react';
 import type { EChartsOption } from 'echarts';
+import { Table, Empty, Alert, Button, Modal } from 'antd';
+import { BugOutlined } from '@ant-design/icons';
 
 interface SmartChartProps {
   data: any;
   title?: string;
   height?: number;
   chartType?: string;  // 可选的手动指定图表类型
+  debug?: boolean; // 开启调试模式
 }
 
 // 分析数据结构，判断最适合的图表类型
 type ChartType = 'bar' | 'line' | 'pie' | 'scatter' | 'area' | 'heatmap' | 'radar' | 'funnel' | 'table';
 
-function analyzeDataAndGetChartType(data: any): {
-  chartType: ChartType;
-  xAxisData: string[];
-  seriesData: { name: string; data: number[] }[];
-  pieData: { name: string; value: number }[];
-} {
-  // 默认返回值
-  const result: {
-    chartType: ChartType;
-    xAxisData: string[];
-    seriesData: { name: string; data: number[] }[];
-    pieData: { name: string; value: number }[];
-  } = {
-    chartType: 'bar',
-    xAxisData: [],
-    seriesData: [],
-    pieData: [],
-  };
+// 数据标准化结果
+interface NormalizedData {
+  rows: any[];
+  columns: string[];
+}
 
-  if (!data) return result;
-
-  // 处理不同的数据格式
+function normalizeData(data: any): NormalizedData {
   let rows: any[] = [];
   let columns: string[] = [];
+
+  if (!data) return { rows, columns };
 
   // 格式1: { rows: [[...], [...]], columns: [...] }
   if (data.rows && Array.isArray(data.rows) && data.columns) {
@@ -62,6 +52,39 @@ function analyzeDataAndGetChartType(data: any): {
     rows = data;
     columns = rows[0] ? Object.keys(rows[0]) : [];
   }
+  // 格式4: 可能是 { result: [...] } 或其他嵌套
+  else if (data.result && Array.isArray(data.result)) {
+     rows = data.result;
+     columns = rows[0] ? Object.keys(rows[0]) : [];
+  }
+
+  return { rows, columns };
+}
+
+function analyzeDataAndGetChartType(data: any): {
+  chartType: ChartType;
+  xAxisData: string[];
+  seriesData: { name: string; data: number[] }[];
+  pieData: { name: string; value: number }[];
+  normalizedData: NormalizedData;
+} {
+  // 默认返回值
+  const result: {
+    chartType: ChartType;
+    xAxisData: string[];
+    seriesData: { name: string; data: number[] }[];
+    pieData: { name: string; value: number }[];
+    normalizedData: NormalizedData;
+  } = {
+    chartType: 'table', // 默认为 table，如果无法生成图表则回退
+    xAxisData: [],
+    seriesData: [],
+    pieData: [],
+    normalizedData: { rows: [], columns: [] }
+  };
+
+  const { rows, columns } = normalizeData(data);
+  result.normalizedData = { rows, columns };
 
   if (rows.length === 0 || columns.length === 0) {
     return result;
@@ -73,16 +96,24 @@ function analyzeDataAndGetChartType(data: any): {
   const dateColumns: string[] = [];
 
   columns.forEach((col) => {
-    const sampleValues = rows.slice(0, 5).map((row) => row[col]).filter((v) => v !== null && v !== undefined);
+    // 过滤掉 null/undefined，取前10行采样
+    const sampleValues = rows.slice(0, 10).map((row) => row[col]).filter((v) => v !== null && v !== undefined);
     
     if (sampleValues.length === 0) return;
 
     // 检查是否是数值类型
-    if (sampleValues.every((v) => typeof v === 'number' || !isNaN(Number(v)))) {
+    if (sampleValues.every((v) => typeof v === 'number' || (!isNaN(Number(v)) && v !== ''))) {
       numericColumns.push(col);
     }
-    // 检查是否是日期类型
-    else if (sampleValues.every((v) => /^\d{4}[-/]\d{2}[-/]\d{2}/.test(String(v)) || /date|time|日期|时间/i.test(col))) {
+    // 检查是否是日期类型 (增强的日期检测)
+    else if (sampleValues.every((v) => {
+        const str = String(v);
+        // 常见日期格式正则
+        if (/^\d{4}[-/]\d{2}[-/]\d{2}/.test(str)) return true;
+        // 尝试 Date.parse
+        const date = new Date(str);
+        return !isNaN(date.getTime()) && str.length > 4; // 长度>4避免纯数字被当做日期
+    }) || /date|time|日期|时间/i.test(col)) {
       dateColumns.push(col);
     }
     else {
@@ -91,11 +122,9 @@ function analyzeDataAndGetChartType(data: any): {
   });
 
   // 决定图表类型
-  const hasDimension = stringColumns.length > 0 || dateColumns.length > 0;
-  const hasMetric = numericColumns.length > 0;
-
-  // 只有一个数值列且有分类列 → 饼图
-  if (numericColumns.length === 1 && stringColumns.length === 1 && rows.length <= 10) {
+  
+  // 1. 饼图: 只有一个数值列 + 一个分类列 + 数据行数少
+  if (numericColumns.length === 1 && stringColumns.length === 1 && rows.length <= 20) {
     result.chartType = 'pie';
     const labelCol = stringColumns[0];
     const valueCol = numericColumns[0];
@@ -106,31 +135,37 @@ function analyzeDataAndGetChartType(data: any): {
     return result;
   }
 
-  // 有日期列 → 折线图
+  // 2. 折线图: 有日期列 + 数值列
   if (dateColumns.length > 0 && numericColumns.length > 0) {
     result.chartType = 'line';
     const xCol = dateColumns[0];
-    result.xAxisData = rows.map((row) => String(row[xCol] || ''));
+    // 按日期排序
+    const sortedRows = [...rows].sort((a, b) => new Date(a[xCol]).getTime() - new Date(b[xCol]).getTime());
+    
+    result.xAxisData = sortedRows.map((row) => String(row[xCol] || ''));
     result.seriesData = numericColumns.map((col) => ({
       name: col,
-      data: rows.map((row) => Number(row[col]) || 0),
+      data: sortedRows.map((row) => Number(row[col]) || 0),
     }));
     return result;
   }
 
-  // 有分类列和数值列 → 柱状图
+  // 3. 柱状图: 有分类列 + 数值列
   if (stringColumns.length > 0 && numericColumns.length > 0) {
     result.chartType = 'bar';
     const xCol = stringColumns[0];
-    result.xAxisData = rows.map((row) => String(row[xCol] || ''));
+    // 如果数据太多，只取前20条，避免柱状图太挤
+    const displayRows = rows.length > 50 ? rows.slice(0, 50) : rows;
+    
+    result.xAxisData = displayRows.map((row) => String(row[xCol] || ''));
     result.seriesData = numericColumns.map((col) => ({
       name: col,
-      data: rows.map((row) => Number(row[col]) || 0),
+      data: displayRows.map((row) => Number(row[col]) || 0),
     }));
     return result;
   }
 
-  // 两个数值列 → 散点图
+  // 4. 散点图: 两个以上数值列
   if (numericColumns.length >= 2) {
     result.chartType = 'scatter';
     result.seriesData = [{
@@ -140,7 +175,7 @@ function analyzeDataAndGetChartType(data: any): {
     return result;
   }
 
-  // 默认柱状图
+  // 5. 默认柱状图 (如果没有分类列，用行号)
   if (numericColumns.length > 0) {
     result.chartType = 'bar';
     result.xAxisData = rows.map((_, i) => `数据${i + 1}`);
@@ -148,8 +183,10 @@ function analyzeDataAndGetChartType(data: any): {
       name: col,
       data: rows.map((row) => Number(row[col]) || 0),
     }));
+    return result;
   }
 
+  // 如果没有数值列，只能返回 table
   return result;
 }
 
@@ -180,13 +217,13 @@ function generateChartOption(
     case 'pie':
       return {
         ...baseOption,
-        legend: { orient: 'vertical', left: 'left', top: 'middle' },
+        legend: { orient: 'vertical', left: 'left', top: 'middle', type: 'scroll' },
         series: [{
           type: 'pie',
           radius: ['40%', '70%'],
           avoidLabelOverlap: true,
           itemStyle: { borderRadius: 10, borderColor: '#fff', borderWidth: 2 },
-          label: { show: true, formatter: '{b}: {c} ({d}%)' },
+          label: { show: true, formatter: '{b}: {d}%' },
           emphasis: {
             label: { show: true, fontSize: 16, fontWeight: 'bold' },
           },
@@ -197,7 +234,7 @@ function generateChartOption(
     case 'line':
       return {
         ...baseOption,
-        legend: { data: seriesData.map((s) => s.name), bottom: 0 },
+        legend: { data: seriesData.map((s) => s.name), bottom: 0, type: 'scroll' },
         xAxis: { type: 'category', data: xAxisData, boundaryGap: false },
         yAxis: { type: 'value' },
         series: seriesData.map((s) => ({
@@ -211,7 +248,7 @@ function generateChartOption(
     case 'area':
       return {
         ...baseOption,
-        legend: { data: seriesData.map((s) => s.name), bottom: 0 },
+        legend: { data: seriesData.map((s) => s.name), bottom: 0, type: 'scroll' },
         xAxis: { type: 'category', data: xAxisData, boundaryGap: false },
         yAxis: { type: 'value' },
         series: seriesData.map((s) => ({
@@ -237,8 +274,7 @@ function generateChartOption(
       };
 
     case 'radar':
-      // 雷达图需要特殊处理数据
-      const indicators = xAxisData.map(name => ({ name, max: Math.max(...seriesData.flatMap(s => s.data)) }));
+      const indicators = xAxisData.map(name => ({ name, max: Math.max(...seriesData.flatMap(s => s.data)) || 100 }));
       return {
         ...baseOption,
         legend: { data: seriesData.map((s) => s.name), bottom: 0 },
@@ -255,10 +291,9 @@ function generateChartOption(
       };
 
     case 'funnel':
-      // 漏斗图使用pieData
       return {
         ...baseOption,
-        legend: { bottom: 0 },
+        legend: { bottom: 0, type: 'scroll' },
         series: [{
           type: 'funnel',
           left: '10%',
@@ -275,22 +310,6 @@ function generateChartOption(
             show: true,
             position: 'inside',
           },
-          labelLine: {
-            length: 10,
-            lineStyle: {
-              width: 1,
-              type: 'solid',
-            },
-          },
-          itemStyle: {
-            borderColor: '#fff',
-            borderWidth: 1,
-          },
-          emphasis: {
-            label: {
-              fontSize: 20,
-            },
-          },
           data: pieData.length > 0 ? pieData : seriesData[0]?.data.map((val, idx) => ({
             value: val,
             name: xAxisData[idx] || `项目${idx + 1}`,
@@ -299,7 +318,6 @@ function generateChartOption(
       };
 
     case 'heatmap':
-      // 热力图需要特殊的数据格式 [x, y, value]
       const heatmapData: any[] = [];
       seriesData.forEach((series, seriesIdx) => {
         series.data.forEach((value, dataIdx) => {
@@ -319,8 +337,8 @@ function generateChartOption(
           splitArea: { show: true },
         },
         visualMap: {
-          min: Math.min(...heatmapData.map(d => d[2])),
-          max: Math.max(...heatmapData.map(d => d[2])),
+          min: Math.min(...heatmapData.map(d => d[2])) || 0,
+          max: Math.max(...heatmapData.map(d => d[2])) || 100,
           calculable: true,
           orient: 'horizontal',
           left: 'center',
@@ -332,12 +350,6 @@ function generateChartOption(
           label: {
             show: true,
           },
-          emphasis: {
-            itemStyle: {
-              shadowBlur: 10,
-              shadowColor: 'rgba(0, 0, 0, 0.5)',
-            },
-          },
         }],
       };
 
@@ -345,8 +357,16 @@ function generateChartOption(
     default:
       return {
         ...baseOption,
-        legend: seriesData.length > 1 ? { data: seriesData.map((s) => s.name), bottom: 0 } : undefined,
-        xAxis: { type: 'category', data: xAxisData, axisLabel: { interval: 0, rotate: xAxisData.length > 5 ? 30 : 0 } },
+        legend: seriesData.length > 1 ? { data: seriesData.map((s) => s.name), bottom: 0, type: 'scroll' } : undefined,
+        xAxis: { 
+          type: 'category', 
+          data: xAxisData, 
+          axisLabel: { 
+            interval: 0, 
+            rotate: xAxisData.length > 8 ? 30 : 0,
+            hideOverlap: true
+          } 
+        },
         yAxis: { type: 'value' },
         series: seriesData.map((s) => ({
           name: s.name,
@@ -359,10 +379,10 @@ function generateChartOption(
   }
 }
 
-export const SmartChart: React.FC<SmartChartProps> = ({ data, title, height = 350, chartType: manualChartType }) => {
+export const SmartChart: React.FC<SmartChartProps> = ({ data, title, height = 350, chartType: manualChartType, debug = false }) => {
   const chartRef = useRef<ReactECharts>(null);
+  const [debugVisible, setDebugVisible] = React.useState(false);
 
-  // 清理函数，确保组件卸载时正常清理 ECharts 实例
   useEffect(() => {
     return () => {
       try {
@@ -373,94 +393,168 @@ export const SmartChart: React.FC<SmartChartProps> = ({ data, title, height = 35
           }
         }
       } catch (error) {
-        // 静默处理清理错误
         console.debug('Chart cleanup:', error);
       }
     };
   }, []);
 
-  const chartOption = useMemo(() => {
+  const { chartOption, normalizedData, error } = useMemo(() => {
     // 数据验证
-    if (!data) return null;
+    if (!data) return { chartOption: null, normalizedData: { rows: [], columns: [] }, error: null };
+    
+    // 检查后端返回的错误
+    if (data.error) {
+        return { chartOption: null, normalizedData: { rows: [], columns: [] }, error: data.error };
+    }
     
     try {
+      let finalChartType: ChartType;
+      let xAxisData: string[];
+      let seriesData: { name: string; data: number[] }[];
+      let pieData: { name: string; value: number }[];
+      let analyzedData: {
+        chartType: ChartType;
+        xAxisData: string[];
+        seriesData: { name: string; data: number[] }[];
+        pieData: { name: string; value: number }[];
+        normalizedData: NormalizedData;
+      };
 
-    // 如果手动指定了图表类型,使用指定的类型;否则自动分析
-    let finalChartType: ChartType;
-    let xAxisData: string[];
-    let seriesData: { name: string; data: number[] }[];
-    let pieData: { name: string; value: number }[];
+      // 分析数据
+      analyzedData = analyzeDataAndGetChartType(data);
 
-    if (manualChartType) {
-      // 使用手动指定的图表类型,但仍需要分析数据结构
-      const analyzed = analyzeDataAndGetChartType(data);
-      finalChartType = manualChartType as ChartType;
-      
-      // 如果指定的是饼图但数据不适合，使用分析出的类型数据
-      // 但仍尝试用指定的类型渲染（如果有数据的话）
-      if (manualChartType === 'pie' && analyzed.pieData.length === 0) {
-        // 饼图数据为空，但可能有其他类型的数据，尝试使用柱状图数据作为饼图
-        if (analyzed.seriesData.length > 0 && analyzed.xAxisData.length > 0) {
-          // 使用第一个系列的数据转换为饼图数据
-          pieData = analyzed.xAxisData.map((name, idx) => ({
-            name: name,
-            value: analyzed.seriesData[0].data[idx] || 0
-          }));
+      if (manualChartType) {
+        finalChartType = manualChartType as ChartType;
+        
+        // 尝试复用分析结果
+        if (manualChartType === 'pie' && analyzedData.pieData.length === 0) {
+          // 强制转换
+          if (analyzedData.seriesData.length > 0 && analyzedData.xAxisData.length > 0) {
+            pieData = analyzedData.xAxisData.map((name, idx) => ({
+              name: name,
+              value: analyzedData.seriesData[0].data[idx] || 0
+            }));
+          } else {
+            pieData = analyzedData.pieData;
+          }
         } else {
-          pieData = analyzed.pieData;
+          pieData = analyzedData.pieData;
         }
-        xAxisData = analyzed.xAxisData;
-        seriesData = analyzed.seriesData;
+        xAxisData = analyzedData.xAxisData;
+        seriesData = analyzedData.seriesData;
       } else {
-        xAxisData = analyzed.xAxisData;
-        seriesData = analyzed.seriesData;
-        pieData = analyzed.pieData;
+        finalChartType = analyzedData.chartType;
+        xAxisData = analyzedData.xAxisData;
+        seriesData = analyzedData.seriesData;
+        pieData = analyzedData.pieData;
       }
-    } else {
-      // 自动分析
-      const analyzed = analyzeDataAndGetChartType(data);
-      finalChartType = analyzed.chartType;
-      xAxisData = analyzed.xAxisData;
-      seriesData = analyzed.seriesData;
-      pieData = analyzed.pieData;
-    }
 
-    // 数据不足以生成图表
-    if (finalChartType === 'pie' && pieData.length === 0) return null;
-    if (finalChartType !== 'pie' && seriesData.length === 0) return null;
+      // 如果分析结果是 table 或数据不足，返回空 option 但保留 normalizedData 用于渲染表格
+      if (finalChartType === 'table') {
+          return { chartOption: null, normalizedData: analyzedData.normalizedData, error: null };
+      }
+      
+      if (finalChartType === 'pie' && pieData.length === 0) {
+          return { chartOption: null, normalizedData: analyzedData.normalizedData, error: null };
+      }
+      if (finalChartType !== 'pie' && seriesData.length === 0) {
+          return { chartOption: null, normalizedData: analyzedData.normalizedData, error: null };
+      }
 
-    return generateChartOption(finalChartType, xAxisData, seriesData, pieData, title);
+      const option = generateChartOption(finalChartType, xAxisData, seriesData, pieData, title);
+      return { chartOption: option, normalizedData: analyzedData.normalizedData, error: null };
+
     } catch (error) {
       console.error('图表配置生成失败:', error);
-      return null;
+      // 出错时尝试返回标准化数据以显示表格
+      const normData = normalizeData(data);
+      return { chartOption: null, normalizedData: normData, error: String(error) };
     }
   }, [data, title, manualChartType]);
 
+  const renderDebugInfo = () => (
+      <div style={{ position: 'absolute', right: 0, top: 0, zIndex: 10 }}>
+          <Button 
+            type="text" 
+            size="small" 
+            icon={<BugOutlined />} 
+            onClick={() => setDebugVisible(true)}
+            style={{ opacity: 0.3 }}
+          />
+          <Modal
+            title="数据调试"
+            open={debugVisible}
+            onCancel={() => setDebugVisible(false)}
+            footer={null}
+            width={800}
+          >
+              <pre style={{ maxHeight: '600px', overflow: 'auto', background: '#f5f5f5', padding: 10 }}>
+                  {JSON.stringify(data, null, 2)}
+              </pre>
+          </Modal>
+      </div>
+  );
+
+  if (error) {
+      return (
+          <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+              <Alert
+                  message="数据加载失败"
+                  description={error}
+                  type="error"
+                  showIcon
+              />
+              {renderDebugInfo()}
+          </div>
+      );
+  }
+
   if (!chartOption) {
+    // 降级渲染为表格
+    if (normalizedData.rows.length > 0 && normalizedData.columns.length > 0) {
+        const columns = normalizedData.columns.map(col => ({
+            title: col,
+            dataIndex: col,
+            key: col,
+            render: (text: any) => <span title={String(text)}>{String(text)}</span>
+        }));
+        
+        return (
+            <div style={{ height, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+                {title && <div style={{ textAlign: 'center', marginBottom: 10, fontWeight: 'bold' }}>{title}</div>}
+                <Table 
+                    dataSource={normalizedData.rows.map((r, i) => ({ ...r, key: i }))} 
+                    columns={columns} 
+                    pagination={{ pageSize: 5, size: 'small' }} 
+                    size="small" 
+                    scroll={{ y: height - 100 }}
+                    style={{ flex: 1, overflow: 'hidden' }}
+                />
+                {renderDebugInfo()}
+            </div>
+        );
+    }
+
     return (
-      <div style={{ 
-        height, 
-        display: 'flex', 
-        alignItems: 'center', 
-        justifyContent: 'center',
-        background: '#fafafa',
-        borderRadius: 8,
-        color: '#999'
-      }}>
-        数据格式不支持图表展示
+      <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" />
+        {renderDebugInfo()}
       </div>
     );
   }
 
   return (
-    <ReactECharts
-      ref={chartRef}
-      option={chartOption}
-      style={{ height, width: '100%' }}
-      opts={{ renderer: 'svg', locale: 'ZH' }}
-      notMerge={true}
-      lazyUpdate={true}
-    />
+    <div style={{ position: 'relative' }}>
+        <ReactECharts
+        ref={chartRef}
+        option={chartOption}
+        style={{ height, width: '100%' }}
+        opts={{ renderer: 'svg', locale: 'ZH' }}
+        notMerge={true}
+        lazyUpdate={true}
+        />
+        {renderDebugInfo()}
+    </div>
   );
 };
 
