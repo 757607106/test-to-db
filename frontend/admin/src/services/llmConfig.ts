@@ -42,3 +42,29 @@ export const deleteLLMConfig = (id: number) => api.delete<LLMConfig>(`/llm-confi
 
 // 测试连接
 export const testLLMConfig = (data: LLMConfigCreate) => api.post<{success: boolean, message: string}>('/llm-configs/test', data);
+
+// --- Agent Profile 辅助 (暂时放在这里，或移至专门的 agentProfile.ts) ---
+
+export interface AgentProfile {
+  id: number;
+  name: string;
+  role_description?: string;
+  system_prompt?: string;
+  tools?: any;
+  llm_config_id?: number;
+  is_active: boolean;
+}
+
+export const getAgentProfileByName = (name: string) => 
+  api.get<AgentProfile[]>(`/agent-profiles/?skip=0&limit=100`)
+  .then(res => {
+    // 客户端过滤，因为后端暂时不支持 ?name=xxx 查询
+    if (Array.isArray(res.data)) {
+        return res.data.find((p: AgentProfile) => p.name === name);
+    }
+    return undefined;
+  });
+
+export const createAgentProfile = (data: any) => api.post<AgentProfile>('/agent-profiles/', data);
+
+export const updateAgentProfile = (id: number, data: any) => api.put<AgentProfile>(`/agent-profiles/${id}`, data);

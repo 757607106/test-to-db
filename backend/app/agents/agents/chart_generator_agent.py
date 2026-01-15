@@ -10,13 +10,18 @@ from langgraph.prebuilt import create_react_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from app.core.state import SQLMessageState
-from app.core.llms import get_default_model
+from app.core.agent_config import get_agent_llm, CORE_AGENT_CHART_ANALYST
 from app.core.config import settings
 
 # 初始化MCP图表服务器客户端
 def _initialize_chart_client():
     """初始化图表生成客户端"""
     try:
+        # 检查 API Key 是否配置
+        if not settings.DASHSCOPE_API_KEY:
+            print("警告: 未配置 DASHSCOPE_API_KEY，将跳过 AntV 图表工具初始化")
+            return None, []
+
         # 使用用户提供的阿里云 AntV MCP 配置
         client = MultiServerMCPClient(
             {
@@ -329,7 +334,8 @@ class ChartGeneratorAgent:
     
     def __init__(self):
         self.name = "chart_generator_agent"
-        self.llm = get_default_model()
+        # 使用特定的核心配置
+        self.llm = get_agent_llm(CORE_AGENT_CHART_ANALYST)
         
         # 组合本地工具和MCP图表工具
         self.tools = [

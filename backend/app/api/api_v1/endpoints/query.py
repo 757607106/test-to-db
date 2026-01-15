@@ -71,12 +71,20 @@ async def chat_query(
             query_text = f"{query_text}\n\n澄清信息:\n{clarification_context}"
         
         # 创建 LangGraph 实例
-        active_agent_profile = None
-        if chat_request.agent_id:
-            from app.crud.crud_agent_profile import agent_profile as crud_agent_profile
-            active_agent_profile = crud_agent_profile.get(db=db, id=chat_request.agent_id)
+        active_agent_profiles = []
+        from app.crud.crud_agent_profile import agent_profile as crud_agent_profile
         
-        graph = IntelligentSQLGraph(active_agent_profile=active_agent_profile)
+        if chat_request.agent_ids:
+             for aid in chat_request.agent_ids:
+                 profile = crud_agent_profile.get(db=db, id=aid)
+                 if profile:
+                     active_agent_profiles.append(profile)
+        elif chat_request.agent_id:
+            profile = crud_agent_profile.get(db=db, id=chat_request.agent_id)
+            if profile:
+                active_agent_profiles.append(profile)
+        
+        graph = IntelligentSQLGraph(active_agent_profiles=active_agent_profiles)
         
         # 处理查询
         from app.core.state import SQLMessageState
@@ -103,17 +111,32 @@ async def chat_query(
                 for r in chat_request.clarification_responses
             ]
         
-        # 执行 graph
-        result = await graph.supervisor_agent.supervise(initial_state)
+        # 执行 graph (使用顶层图)
+        final_state = await graph.graph.ainvoke(initial_state)
         
-        if not result.get("success"):
+        # 检查路由结果
+        route_decision = final_state.get("route_decision")
+        if route_decision == "general_chat":
+            messages = final_state.get("messages", [])
+            last_msg = messages[-1] if messages else None
+            response_text = last_msg.content if last_msg else ""
             return schemas.ChatQueryResponse(
                 conversation_id=conversation_id,
-                error=result.get("error", "处理失败"),
+                stage="general_chat",
+                message=response_text
+            )
+
+        # 检查错误 (兼容之前的逻辑)
+        # 如果没有 generated_sql 且有 error_history，或者 current_stage 为 error
+        if final_state.get("current_stage") == "error":
+             # 尝试获取最后一个错误
+             errors = final_state.get("error_history", [])
+             error_msg = errors[-1].get("error") if errors else "处理失败"
+             return schemas.ChatQueryResponse(
+                conversation_id=conversation_id,
+                error=error_msg,
                 stage="error"
             )
-        
-        final_state = result.get("result", {})
         
         # 提取结果
         response = schemas.ChatQueryResponse(

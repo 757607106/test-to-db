@@ -22,14 +22,14 @@ class Settings(BaseSettings):
     # Database settings
     MYSQL_SERVER: str = os.getenv("MYSQL_SERVER", "localhost")
     MYSQL_USER: str = os.getenv("MYSQL_USER", "root")
-    MYSQL_PASSWORD: str = os.getenv("MYSQL_PASSWORD", "mysql")
+    MYSQL_PASSWORD: str = os.getenv("MYSQL_PASSWORD", "")
     MYSQL_DB: str = os.getenv("MYSQL_DB", "chatdb")
     MYSQL_PORT: str = os.getenv("MYSQL_PORT", "3306")
 
     # Neo4j settings
     NEO4J_URI: str = os.getenv("NEO4J_URI", "bolt://localhost:7687")
     NEO4J_USER: str = os.getenv("NEO4J_USER", "neo4j")
-    NEO4J_PASSWORD: str = os.getenv("NEO4J_PASSWORD", "65132090")
+    NEO4J_PASSWORD: str = os.getenv("NEO4J_PASSWORD", "")
 
     # LLM settings
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "deepseek")

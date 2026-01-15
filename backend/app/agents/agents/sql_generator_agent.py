@@ -9,7 +9,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 
 from app.core.state import SQLMessageState
-from app.core.llms import get_default_model
+from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 
 # 定义结构化输出模型
 class SQLOutput(BaseModel):
@@ -24,7 +24,8 @@ class SQLGeneratorAgent:
 
     def __init__(self):
         self.name = "sql_generator_agent"
-        self.llm = get_default_model()
+        # 使用特定的核心配置，如果不存在则自动回退到默认
+        self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
         # 绑定结构化输出
         self.structured_llm = self.llm.with_structured_output(SQLOutput)
         

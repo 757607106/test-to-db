@@ -45,12 +45,14 @@ class ChatQueryRequest(BaseModel):
     natural_language_query: str
     conversation_id: Optional[str] = None
     clarification_responses: Optional[List[ClarificationResponse]] = None
-    agent_id: Optional[int] = None
+    agent_id: Optional[int] = None # Deprecated: use agent_ids
+    agent_ids: Optional[List[int]] = None # New: support multiple agents
 
 
 class ChatQueryResponse(BaseModel):
     """聊天式查询响应"""
     conversation_id: str
+    message: Optional[str] = None # 通用文本回复
     needs_clarification: bool = False
     clarification_questions: Optional[List[ClarificationQuestion]] = None
     sql: Optional[str] = None
