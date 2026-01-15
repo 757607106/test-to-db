@@ -1,7 +1,7 @@
 from typing import Literal
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
-from app.core.agent_config import get_agent_llm, CORE_AGENT_ROUTER
+from app.core.agent_config import get_agent_llm, get_agent_profile, CORE_AGENT_ROUTER
 
 class RouteDecision(BaseModel):
     """Router decision model"""
@@ -15,6 +15,7 @@ def route_query(query: str) -> str:
     """
     # 使用特定的核心配置
     llm = get_agent_llm(CORE_AGENT_ROUTER)
+    profile = get_agent_profile(CORE_AGENT_ROUTER)
     
     # Use structured output for classification
     structured_llm = llm.with_structured_output(RouteDecision)
@@ -35,6 +36,9 @@ def route_query(query: str) -> str:
        
     Return only the decision.
     """
+    
+    if profile and profile.system_prompt:
+        system_prompt = profile.system_prompt
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),

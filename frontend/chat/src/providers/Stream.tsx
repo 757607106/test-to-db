@@ -5,7 +5,7 @@ import React, {
   useState,
   useEffect,
 } from "react";
-import { useStream } from "@langchain/langgraph-sdk/react";
+import { useStream, type UseStream } from "@langchain/langgraph-sdk/react";
 import { type Message } from "@langchain/langgraph-sdk";
 import {
   uiMessageReducer,
@@ -39,7 +39,17 @@ const useTypedStream = useStream<
   }
 >;
 
-type StreamContextType = ReturnType<typeof useTypedStream>;
+// 使用 UseStream 类型（包含完整的 getMessagesMetadata, setBranch 等方法）
+// 而不是 ReturnType<typeof useTypedStream>（TypeScript 会推断为 UseStreamCustom，缺少这些方法）
+type BagType = {
+  UpdateType: {
+    messages?: Message[] | Message | string;
+    ui?: (UIMessage | RemoveUIMessage)[] | UIMessage | RemoveUIMessage;
+    context?: Record<string, unknown>;
+  };
+  CustomEventType: UIMessage | RemoveUIMessage;
+};
+type StreamContextType = UseStream<StateType, BagType>;
 const StreamContext = createContext<StreamContextType | undefined>(undefined);
 
 async function sleep(ms = 4000) {

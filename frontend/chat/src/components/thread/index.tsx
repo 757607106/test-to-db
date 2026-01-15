@@ -1,9 +1,9 @@
 
 import { v4 as uuidv4 } from "uuid";
-import { ReactNode, useEffect, useRef } from "react";
+import { ReactNode, useEffect, useRef, useMemo } from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { useStreamContext } from "@/providers/Stream";
+import { useStreamContext, StateType } from "@/providers/Stream";
 import { useState, FormEvent } from "react";
 import { Button } from "../ui/button";
 import { Checkpoint, Message } from "@langchain/langgraph-sdk";
@@ -144,7 +144,32 @@ export function Thread() {
   const isLargeScreen = useMediaQuery("(min-width: 1024px)");
 
   const stream = useStreamContext();
-  const messages = Array.isArray(stream.messages) ? stream.messages : [];
+  const rawMessages = Array.isArray(stream.messages) ? stream.messages : [];
+  
+  // 去重消息：streamSubgraphs: true 会导致子图消息重复
+  // 按 message.id 去重，保留最后一个版本（可能包含更完整的信息）
+  const messages = useMemo(() => {
+    const seenMessageIds = new Set<string>();
+    const deduped: typeof rawMessages = [];
+    
+    // 从后向前遍历，保留最新版本的消息
+    for (let i = rawMessages.length - 1; i >= 0; i--) {
+      const msg = rawMessages[i];
+      
+      if (msg.id) {
+        if (!seenMessageIds.has(msg.id)) {
+          seenMessageIds.add(msg.id);
+          deduped.unshift(msg);
+        }
+      } else {
+        // 没有 id 的消息直接保留
+        deduped.unshift(msg);
+      }
+    }
+    
+    return deduped;
+  }, [rawMessages]);
+  
   const isLoading = stream.isLoading;
 
   const lastError = useRef<string | undefined>(undefined);
@@ -232,10 +257,10 @@ export function Thread() {
         agent_ids: selectedAgentId ? [selectedAgentId] : undefined,
       } as any,
       {
-        streamMode: ["values"],
+        streamMode: ["values", "messages", "updates"],  // 启用多种模式以实时显示工具调用
         streamSubgraphs: true,
         streamResumable: true,
-        optimisticValues: (prev) => ({
+        optimisticValues: (prev: StateType) => ({
           ...prev,
           context: Object.keys(context).length > 0 ? context : undefined,
           messages: [
@@ -244,7 +269,7 @@ export function Thread() {
             newHumanMessage,
           ],
         }),
-      },
+      } as any,  // 类型断言：CustomSubmitOptions 不包含 streamMode 等属性，但运行时需要这些选项
     );
 
     setInput("");
@@ -259,10 +284,10 @@ export function Thread() {
     setFirstTokenReceived(false);
     stream.submit(undefined, {
       checkpoint: parentCheckpoint,
-      streamMode: ["values"],
+      streamMode: ["values", "messages", "updates"],  // 启用多种模式
       streamSubgraphs: true,
       streamResumable: true,
-    });
+    } as any);  // 类型断言：CustomSubmitOptions 不包含 streamMode 等属性，但运行时需要这些选项
   };
 
   const chatStarted = !!threadId || !!messages.length;

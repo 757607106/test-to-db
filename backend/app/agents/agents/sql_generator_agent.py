@@ -9,7 +9,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 
 from app.core.state import SQLMessageState
-from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
+from app.core.agent_config import get_agent_llm, get_agent_profile, CORE_AGENT_SQL_GENERATOR
 
 # 定义结构化输出模型
 class SQLOutput(BaseModel):
@@ -26,6 +26,8 @@ class SQLGeneratorAgent:
         self.name = "sql_generator_agent"
         # 使用特定的核心配置，如果不存在则自动回退到默认
         self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
+        self.profile = get_agent_profile(CORE_AGENT_SQL_GENERATOR)
+        
         # 绑定结构化输出
         self.structured_llm = self.llm.with_structured_output(SQLOutput)
         
@@ -126,22 +128,12 @@ class SQLGeneratorAgent:
 
     def _build_system_prompt(self, db_type: str) -> str:
         """构建系统提示词"""
-        syntax_guide = ""
-        if db_type.lower() == "mysql":
-            syntax_guide = """
-- 日期处理: DATE_FORMAT(col, '%Y-%m'), DATE_SUB(NOW(), INTERVAL 7 DAY)
-- 字符串: CONCAT(a, b)
-- 限制: LIMIT n (而非 TOP/ROWNUM)
-- 聚合: 避免在 GROUP BY 中使用别名
-"""
-        elif db_type.lower() == "postgresql":
-            syntax_guide = """
-- 日期: DATE_TRUNC('month', col), CURRENT_DATE - INTERVAL '7 days'
-- 字符串: a || b
-- 限制: LIMIT n
-- 大小写: 标识符默认小写，如有大写需加双引号
-"""
+        syntax_guide = self._get_syntax_guide(db_type)
         
+        # 优先使用 Profile 中的 System Prompt
+        if self.profile and self.profile.system_prompt:
+             return self.profile.system_prompt.replace("{db_type}", db_type).replace("{syntax_guide}", syntax_guide)
+
         return f"""你是一个精通 {db_type} 的高级数据工程师。
 你的目标是将自然语言问题转换为**语法完美、性能高效**的 SQL 查询。
 
@@ -154,6 +146,23 @@ class SQLGeneratorAgent:
 **数据库规范 ({db_type})**：
 {syntax_guide}
 """
+
+    def _get_syntax_guide(self, db_type: str) -> str:
+        if db_type.lower() == "mysql":
+            return """
+- 日期处理: DATE_FORMAT(col, '%Y-%m'), DATE_SUB(NOW(), INTERVAL 7 DAY)
+- 字符串: CONCAT(a, b)
+- 限制: LIMIT n (而非 TOP/ROWNUM)
+- 聚合: 避免在 GROUP BY 中使用别名
+"""
+        elif db_type.lower() == "postgresql":
+            return """
+- 日期: DATE_TRUNC('month', col), CURRENT_DATE - INTERVAL '7 days'
+- 字符串: a || b
+- 限制: LIMIT n
+- 大小写: 标识符默认小写，如有大写需加双引号
+"""
+        return ""
 
     def _build_user_prompt(
         self, 

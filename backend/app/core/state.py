@@ -83,6 +83,8 @@ class SQLMessageState(AgentState):
     max_clarification_rounds: int = 2
     needs_clarification: bool = False
     clarification_questions: List[Dict[str, Any]] = field(default_factory=list)
+    clarification_responses: Optional[List[Dict[str, Any]]] = None
+    clarification_confirmed: bool = False
     conversation_id: Optional[str] = None
     original_query: Optional[str] = None
     enriched_query: Optional[str] = None

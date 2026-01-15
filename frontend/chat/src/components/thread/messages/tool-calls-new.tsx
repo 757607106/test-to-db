@@ -269,7 +269,9 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(({ toolCall, toolResult 
     // Extract images from the result text
     const extractedImages = resultAsText ? extractImagesFromText(resultAsText) : [];
 
-    const toolStatus = "completed"; // Default status
+    const toolStatus = toolResult 
+      ? ((toolResult as any).status === "error" ? "error" : "completed") 
+      : "pending";
 
     return {
       name: toolName,

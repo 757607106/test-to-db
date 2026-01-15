@@ -14,6 +14,7 @@ import { isAgentInboxInterruptSchema } from "@/lib/agent-inbox-interrupt";
 import { ThreadView } from "../agent-inbox";
 import { useQueryState, parseAsBoolean } from "nuqs";
 import { GenericInterruptView } from "./generic-interrupt";
+import { ClarificationInterruptView, isClarificationInterrupt } from "./clarification-interrupt";
 import { useArtifact } from "../artifact";
 
 function CustomComponent({
@@ -83,12 +84,21 @@ function Interrupt({
 }: InterruptProps) {
   return (
     <>
+      {/* 处理澄清类型的 interrupt */}
+      {isClarificationInterrupt(interruptValue) &&
+        (isLastMessage || hasNoAIOrToolMessages) && (
+          <ClarificationInterruptView interrupt={interruptValue} />
+        )}
+      {/* 处理 Agent Inbox 类型的 interrupt */}
       {isAgentInboxInterruptSchema(interruptValue) &&
+        !isClarificationInterrupt(interruptValue) &&
         (isLastMessage || hasNoAIOrToolMessages) && (
           <ThreadView interrupt={interruptValue} />
         )}
+      {/* 处理其他通用类型的 interrupt */}
       {interruptValue &&
       !isAgentInboxInterruptSchema(interruptValue) &&
+      !isClarificationInterrupt(interruptValue) &&
       (isLastMessage || hasNoAIOrToolMessages) ? (
         <GenericInterruptView interrupt={interruptValue} />
       ) : null}

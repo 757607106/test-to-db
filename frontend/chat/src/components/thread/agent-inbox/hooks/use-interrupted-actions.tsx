@@ -89,7 +89,9 @@ export default function useInterruptedActions({
           command: {
             resume: response,
           },
-        },
+          streamMode: ["values", "messages"],
+          streamSubgraphs: true,
+        } as any,
       );
       return true;
     } catch (e: any) {

@@ -10,7 +10,7 @@ from langgraph.prebuilt import create_react_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from app.core.state import SQLMessageState
-from app.core.agent_config import get_agent_llm, CORE_AGENT_CHART_ANALYST
+from app.core.agent_config import get_agent_llm, get_agent_profile, CORE_AGENT_CHART_ANALYST
 from app.core.config import settings
 
 # 初始化MCP图表服务器客户端
@@ -336,6 +336,7 @@ class ChartGeneratorAgent:
         self.name = "chart_generator_agent"
         # 使用特定的核心配置
         self.llm = get_agent_llm(CORE_AGENT_CHART_ANALYST)
+        self.profile = get_agent_profile(CORE_AGENT_CHART_ANALYST)
         
         # 组合本地工具和MCP图表工具
         self.tools = [
@@ -358,6 +359,9 @@ class ChartGeneratorAgent:
     
     def _create_system_prompt(self) -> str:
         """创建系统提示"""
+        if self.profile and self.profile.system_prompt:
+            return self.profile.system_prompt
+
         return """你是一个专业的数据可视化专家。你的任务是：
 
 1. 分析SQL查询结果数据的特征和结构

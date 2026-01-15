@@ -1,5 +1,5 @@
 
-import { useStreamContext } from "@/providers/Stream";
+import { useStreamContext, StateType } from "@/providers/Stream";
 import { Message } from "@langchain/langgraph-sdk";
 import { useState } from "react";
 import { getContentString } from "../utils";
@@ -58,10 +58,10 @@ export function HumanMessage({
       { messages: [newMessage] },
       {
         checkpoint: parentCheckpoint,
-        streamMode: ["values"],
+        streamMode: ["values", "messages"],
         streamSubgraphs: true,
         streamResumable: true,
-        optimisticValues: (prev) => {
+        optimisticValues: (prev: StateType) => {
           const values = meta?.firstSeenState?.values;
           if (!values) return prev;
 
@@ -70,7 +70,7 @@ export function HumanMessage({
             messages: [...(values.messages ?? []), newMessage],
           };
         },
-      },
+      } as any,  // 类型断言：CustomSubmitOptions 不包含 checkpoint、streamMode 等属性，但运行时需要这些选项
     );
   };
 
