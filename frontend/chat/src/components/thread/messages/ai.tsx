@@ -96,6 +96,44 @@ function Interrupt({
   );
 }
 
+// Helper function to check if content is pure JSON or partial JSON (should not be displayed as text)
+// This handles both complete JSON and streaming partial JSON responses
+function isPureJsonContent(text: string): boolean {
+  if (!text || text.length === 0) return false;
+  const trimmed = text.trim();
+  
+  // Check if it starts with JSON array or object syntax
+  if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+    // For complete JSON, try to parse it
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || 
+        (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try {
+        JSON.parse(trimmed);
+        return true;
+      } catch {
+        // Continue to pattern matching for partial JSON
+      }
+    }
+    
+    // For streaming/partial JSON, check if it looks like JSON structure
+    // Match patterns like: [{"key, {"key": , [{ "table_id", etc.
+    const jsonPatterns = [
+      /^\[\s*\{/,                    // Starts with [{ (JSON array of objects)
+      /^\{\s*"/,                     // Starts with {" (JSON object with string key)
+      /^\[\s*"/,                     // Starts with [" (JSON array of strings)
+      /^\{\s*'[a-zA-Z_]/,           // Starts with {'key (non-standard but possible)
+      /^\[\s*\d/,                    // Starts with [1 (JSON array of numbers)
+      /^\{\s*"[a-zA-Z_][a-zA-Z0-9_]*"\s*:/,  // Object with key pattern {"key":
+    ];
+    
+    if (jsonPatterns.some(pattern => pattern.test(trimmed))) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
 export function AssistantMessage({
   message,
   isLoading,
@@ -106,7 +144,9 @@ export function AssistantMessage({
   handleRegenerate: (parentCheckpoint: Checkpoint | null | undefined) => void;
 }) {
   const content = message?.content ?? [];
-  const contentString = getContentString(content);
+  const rawContentString = getContentString(content);
+  // Filter out pure JSON content that should not be displayed as text (internal tool results)
+  const contentString = isPureJsonContent(rawContentString) ? '' : rawContentString;
   const [hideToolCalls] = useQueryState(
     "hideToolCalls",
     parseAsBoolean.withDefault(false),
@@ -132,11 +172,6 @@ export function AssistantMessage({
     "tool_calls" in message &&
     message.tool_calls &&
     message.tool_calls.length > 0;
-  const toolCallsHaveContents =
-    hasToolCalls &&
-    message.tool_calls?.some(
-      (tc) => tc.args && Object.keys(tc.args).length > 0,
-    );
   const hasAnthropicToolCalls = !!anthropicStreamedToolCalls?.length;
   const isToolResult = message?.type === "tool";
 
@@ -157,7 +192,8 @@ export function AssistantMessage({
 
             {!hideToolCalls && (
               <>
-                {(hasToolCalls && toolCallsHaveContents && (
+                {/* Render tool calls - removed toolCallsHaveContents check since many transfer tools have empty args */}
+                {hasToolCalls && (
                   <ToolCalls
                     toolCalls={message.tool_calls}
                     toolResults={messages.filter(
@@ -166,27 +202,18 @@ export function AssistantMessage({
                         !!message.tool_calls?.some(tc => tc.id === (m as any).tool_call_id)
                     )}
                   />
-                )) ||
-                  (hasAnthropicToolCalls && (
-                    <ToolCalls
-                      toolCalls={anthropicStreamedToolCalls}
-                      toolResults={messages.filter(
-                        (m): m is import("@langchain/langgraph-sdk").ToolMessage =>
-                          m.type === "tool" &&
-                          anthropicStreamedToolCalls?.some(tc => tc.id === (m as any).tool_call_id)
-                      )}
-                    />
-                  )) ||
-                  (hasToolCalls && (
-                    <ToolCalls
-                      toolCalls={message.tool_calls}
-                      toolResults={messages.filter(
-                        (m): m is import("@langchain/langgraph-sdk").ToolMessage =>
-                          m.type === "tool" &&
-                          !!message.tool_calls?.some(tc => tc.id === (m as any).tool_call_id)
-                      )}
-                    />
-                  ))}
+                )}
+                {/* Fallback for Anthropic streamed tool calls */}
+                {!hasToolCalls && hasAnthropicToolCalls && (
+                  <ToolCalls
+                    toolCalls={anthropicStreamedToolCalls}
+                    toolResults={messages.filter(
+                      (m): m is import("@langchain/langgraph-sdk").ToolMessage =>
+                        m.type === "tool" &&
+                        anthropicStreamedToolCalls?.some(tc => tc.id === (m as any).tool_call_id)
+                    )}
+                  />
+                )}
               </>
             )}
 
