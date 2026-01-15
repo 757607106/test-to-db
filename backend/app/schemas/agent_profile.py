@@ -19,6 +19,7 @@ class AgentProfileUpdate(BaseModel):
     tools: Optional[List[str]] = None
     llm_config_id: Optional[int] = None
     is_active: Optional[bool] = None
+    is_system: Optional[bool] = None
 
 class AgentProfileInDBBase(AgentProfileBase):
     id: int

@@ -35,7 +35,8 @@ export function AgentSelector({
     setLoading(true);
     setError(null);
     try {
-      const response = await getAgentProfiles();
+      // 传递 is_system=false 参数，只显示自定义智能体
+      const response = await getAgentProfiles({ is_system: false });
       // Only show active agents
       const activeAgents = Array.isArray(response.data) 
         ? response.data.filter(a => a.is_active) 

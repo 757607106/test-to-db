@@ -5,11 +5,12 @@ import {
 } from 'antd';
 import { 
   PlusOutlined, EditOutlined, DeleteOutlined, 
-  CheckCircleOutlined, CloseCircleOutlined, UserOutlined 
+  CheckCircleOutlined, CloseCircleOutlined, UserOutlined,
+  ThunderboltOutlined
 } from '@ant-design/icons';
 import { 
   getAgentProfiles, createAgentProfile, updateAgentProfile, 
-  deleteAgentProfile, AgentProfile 
+  deleteAgentProfile, optimizeAgentPrompt, AgentProfile 
 } from '../../services/agentProfile';
 import { getLLMConfigs, LLMConfig } from '../../services/llmConfig';
 
@@ -22,6 +23,7 @@ const AgentProfilePage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [optimizing, setOptimizing] = useState(false);
   const [form] = Form.useForm();
 
   // 加载数据
@@ -29,7 +31,7 @@ const AgentProfilePage: React.FC = () => {
     setLoading(true);
     try {
       const [profilesRes, llmRes] = await Promise.all([
-        getAgentProfiles(),
+        getAgentProfiles({ is_system: false }),
         getLLMConfigs()
       ]);
       setProfiles(Array.isArray(profilesRes.data) ? profilesRes.data : []);
@@ -87,6 +89,27 @@ const AgentProfilePage: React.FC = () => {
       fetchData();
     } catch (error) {
       message.error('删除失败');
+    }
+  };
+
+  // 处理智能优化
+  const handleOptimize = async () => {
+    const description = form.getFieldValue('role_description');
+    if (!description) {
+      message.warning('请先填写角色描述，以便生成更准确的提示词');
+      return;
+    }
+    
+    setOptimizing(true);
+    try {
+      const res = await optimizeAgentPrompt(description);
+      form.setFieldsValue({ system_prompt: res.data });
+      message.success('提示词优化成功');
+    } catch (error) {
+      console.error('Optimization failed:', error);
+      message.error('优化失败，请稍后重试');
+    } finally {
+      setOptimizing(false);
     }
   };
 
@@ -167,6 +190,7 @@ const AgentProfilePage: React.FC = () => {
               form.resetFields();
               form.setFieldsValue({ 
                 is_active: true,
+                tools: ['chart_analyst_core']
               });
               setModalVisible(true);
             }}
@@ -214,7 +238,20 @@ const AgentProfilePage: React.FC = () => {
 
           <Form.Item
             name="system_prompt"
-            label="系统提示词 (System Prompt)"
+            label={
+              <Space>
+                <span>系统提示词 (System Prompt)</span>
+                <Button 
+                  type="link" 
+                  size="small" 
+                  icon={<ThunderboltOutlined />} 
+                  loading={optimizing}
+                  onClick={handleOptimize}
+                >
+                  一键优化
+                </Button>
+              </Space>
+            }
             tooltip="定义智能体的行为、语气和限制"
           >
             <TextArea rows={6} placeholder="你是一个专业的销售数据分析师..." />
@@ -236,12 +273,10 @@ const AgentProfilePage: React.FC = () => {
 
           <Form.Item
             name="tools"
-            label="启用工具 (Tools)"
+            label="专家能力配置 (Capabilities)"
           >
-            <Select mode="tags" placeholder="输入工具名称，如 chart_generator, sql_executor">
-              {/* 这里可以预置一些已知工具 */}
-              <Option value="chart_generator_agent">chart_generator_agent</Option>
-              <Option value="sql_generator_agent">sql_generator_agent</Option>
+            <Select mode="multiple" placeholder="请选择专家具备的能力">
+              <Option value="chart_analyst_core">图表生成与可视化分析</Option>
             </Select>
           </Form.Item>
 

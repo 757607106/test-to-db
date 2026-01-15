@@ -9,14 +9,40 @@ import {
 } from '@ant-design/icons';
 import { 
   getLLMConfigs, createLLMConfig, updateLLMConfig, 
-  deleteLLMConfig, testLLMConfig, LLMConfig 
+  deleteLLMConfig, testLLMConfig, LLMConfig,
+  getAgentProfileByName, createAgentProfile, updateAgentProfile
 } from '../../services/llmConfig';
+import { Divider, Typography, Row, Col } from 'antd';
 
 const { Option } = Select;
+const { Title, Text } = Typography;
+
+const CORE_AGENTS = [
+  { 
+    name: 'sql_generator_core', 
+    label: 'SQL 生成专家 (SQL Generator)', 
+    desc: '负责将自然语言转换为 SQL。推荐使用逻辑能力强的模型 (如 DeepSeek-V3, GPT-4o)。' 
+  },
+  { 
+    name: 'chart_analyst_core', 
+    label: '数据分析专家 (Data Analyst)', 
+    desc: '系统默认分析师。负责数据解读与可视化。当未指定行业专家时使用。' 
+  },
+  {
+    name: 'router_core',
+    label: '意图识别路由 (Router)',
+    desc: '负责判断用户意图（闲聊 vs 查询）。推荐使用轻量级快速模型 (如 GPT-4o-mini)。'
+  }
+];
 
 const LLMConfigPage: React.FC = () => {
   const [configs, setConfigs] = useState<LLMConfig[]>([]);
   const [loading, setLoading] = useState(false);
+  
+  // 系统组件配置状态
+  const [coreAgentConfigs, setCoreAgentConfigs] = useState<Record<string, number | null>>({});
+  const [agentLoading, setAgentLoading] = useState(false);
+
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [testingConnection, setTestingConnection] = useState(false);
@@ -37,9 +63,67 @@ const LLMConfigPage: React.FC = () => {
     }
   };
 
+  // 加载系统组件配置
+  const fetchCoreAgentConfigs = async () => {
+    setAgentLoading(true);
+    const newConfigs: Record<string, number | null> = {};
+    
+    try {
+      for (const agent of CORE_AGENTS) {
+        const profile = await getAgentProfileByName(agent.name);
+        if (profile && profile.llm_config_id) {
+          newConfigs[agent.name] = profile.llm_config_id;
+        } else {
+          newConfigs[agent.name] = null; // 默认为 null (使用全局)
+        }
+      }
+      setCoreAgentConfigs(newConfigs);
+    } catch (error) {
+      console.error('Failed to load core agent configs:', error);
+    } finally {
+      setAgentLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchConfigs();
+    fetchCoreAgentConfigs();
   }, []);
+
+  // 处理系统组件模型变更
+  const handleCoreAgentChange = async (agentName: string, llmConfigId: number | null) => {
+    setAgentLoading(true);
+    try {
+      // 1. 检查是否存在 Profile
+      let profile = await getAgentProfileByName(agentName);
+      
+      if (profile) {
+        // 更新
+        await updateAgentProfile(profile.id, { llm_config_id: llmConfigId });
+      } else {
+        // 创建
+        const agentDef = CORE_AGENTS.find(a => a.name === agentName);
+        await createAgentProfile({
+          name: agentName,
+          role_description: agentDef?.label || 'System Core Agent',
+          system_prompt: 'System Internal Agent',
+          is_active: true,
+          is_system: true,
+          llm_config_id: llmConfigId
+        });
+      }
+      
+      message.success('设置已更新');
+      // 更新本地状态
+      setCoreAgentConfigs(prev => ({ ...prev, [agentName]: llmConfigId }));
+      
+    } catch (error) {
+      console.error('Failed to update agent config:', error);
+      message.error('更新失败');
+    } finally {
+      setAgentLoading(false);
+    }
+  };
 
   // 处理表单提交
   const handleSubmit = async () => {
@@ -205,7 +289,44 @@ const LLMConfigPage: React.FC = () => {
           dataSource={configs} 
           rowKey="id" 
           loading={loading}
+          pagination={false}
         />
+        
+        <Divider style={{ margin: '32px 0' }} />
+        
+        <Title level={4}>系统核心组件模型绑定 (System Agent Binding)</Title>
+        <Text type="secondary">在此处为系统的核心功能指定专用的模型。未指定时将使用系统默认模型。</Text>
+        
+        <div style={{ marginTop: 24 }}>
+          <Row gutter={[24, 24]}>
+            {CORE_AGENTS.map(agent => (
+              <Col span={8} key={agent.name}>
+                <Card title={agent.label} size="small" hoverable>
+                  <p style={{ height: 60, color: '#666', fontSize: 13 }}>{agent.desc}</p>
+                  <div style={{ marginTop: 16 }}>
+                    <Text strong>绑定模型: </Text>
+                    <Select
+                      style={{ width: '100%', marginTop: 8 }}
+                      placeholder="使用全局默认"
+                      allowClear
+                      loading={agentLoading}
+                      value={coreAgentConfigs[agent.name]}
+                      onChange={(val) => handleCoreAgentChange(agent.name, val)}
+                    >
+                      {configs
+                        .filter(c => c.is_active && c.model_type === 'chat')
+                        .map(c => (
+                          <Option key={c.id} value={c.id}>
+                            {c.provider} - {c.model_name}
+                          </Option>
+                      ))}
+                    </Select>
+                  </div>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+        </div>
       </Card>
 
       <Modal

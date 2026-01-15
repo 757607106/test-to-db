@@ -8,3 +8,6 @@ from app.models.user import User
 from app.models.dashboard import Dashboard
 from app.models.dashboard_widget import DashboardWidget
 from app.models.dashboard_permission import DashboardPermission
+from app.models.agent_profile import AgentProfile
+from app.models.llm_config import LLMConfiguration
+from app.models.query_history import QueryHistory

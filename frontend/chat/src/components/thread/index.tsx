@@ -47,6 +47,7 @@ import {
   useArtifactContext,
 } from "./artifact";
 import { DatabaseConnectionSelector } from "@/components/database-connection-selector";
+import { AgentSelector } from "@/components/ui/agent-selector";
 
 function StickyToBottomContent(props: {
   content: ReactNode;
@@ -128,6 +129,7 @@ export function Thread() {
   );
   const [input, setInput] = useState("");
   const [selectedConnectionId, setSelectedConnectionId] = useState<number | null>(15); // 默认连接ID为15
+  const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const {
     contentBlocks,
     setContentBlocks,
@@ -226,8 +228,9 @@ export function Thread() {
     stream.submit(
       {
         messages: [...toolMessages, newHumanMessage],
-        context: Object.keys(context).length > 0 ? context : undefined
-      },
+        context: Object.keys(context).length > 0 ? context : undefined,
+        agent_ids: selectedAgentId ? [selectedAgentId] : undefined,
+      } as any,
       {
         streamMode: ["values"],
         streamSubgraphs: true,

@@ -28,10 +28,13 @@ class SQLValidationResult:
     suggestions: List[str] = field(default_factory=list)
 
 class SQLMessageState(AgentState):
-    """增强的SQL消息状态，支持多代理协作"""
+    # 增强的SQL消息状态，支持多代理协作
     # 数据库连接信息
     connection_id: int = 15
-
+    # 智能体ID
+    agent_id: Optional[int] = None
+    agent_ids: Optional[List[int]] = None
+    
     # 查询分析结果
     query_analysis: Optional[Dict[str, Any]] = None
 
@@ -90,6 +93,9 @@ class SQLMessageState(AgentState):
 
     # 相似问题
     similar_queries: Optional[List[Dict[str, Any]]] = None
+
+    # 路由决策
+    route_decision: Literal["general_chat", "data_query"] = "data_query"
 
 def extract_connection_id(state: SQLMessageState) -> int:
     """从状态中提取数据库连接ID"""

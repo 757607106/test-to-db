@@ -35,9 +35,10 @@ export interface AgentProfile {
   system_prompt?: string;
   is_active: boolean;
   llm_config_id?: number;
+  is_system?: boolean;
 }
 
 // 智能体相关API
-export const getAgentProfiles = () => api.get<AgentProfile[]>('/agent-profiles/');
+export const getAgentProfiles = (params?: { is_system?: boolean }) => api.get<AgentProfile[]>('/agent-profiles/', { params });
 
 export default api;
