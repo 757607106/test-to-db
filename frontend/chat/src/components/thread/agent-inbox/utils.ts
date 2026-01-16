@@ -41,8 +41,8 @@ export function baseMessageObject(item: unknown): string {
     }
     if ("type" in item) {
       return `${item.type}:${contentText ? ` ${contentText}` : ""}${toolCallText ? ` - Tool calls: ${toolCallText}` : ""}`;
-    } else if ("_getType" in item) {
-      return `${item._getType()}:${contentText ? ` ${contentText}` : ""}${toolCallText ? ` - Tool calls: ${toolCallText}` : ""}`;
+    } else if ("_getType" in item && typeof (item as any)._getType === 'function') {
+      return `${(item as any)._getType()}:${contentText ? ` ${contentText}` : ""}${toolCallText ? ` - Tool calls: ${toolCallText}` : ""}`;
     }
   } else if (
     typeof item === "object" &&

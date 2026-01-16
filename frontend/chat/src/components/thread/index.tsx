@@ -128,8 +128,11 @@ export function Thread() {
     parseAsBoolean.withDefault(false),
   );
   const [input, setInput] = useState("");
-  const [selectedConnectionId, setSelectedConnectionId] = useState<number | null>(15); // 默认连接ID为15
+  const [selectedConnectionId, setSelectedConnectionId] = useState<number | null>(null); // 修改: 默认为null，等待自动选择或用户选择
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
+  // 新增: 跟踪数据库和智能体的数量
+  const [connectionCount, setConnectionCount] = useState<number>(0);
+  const [agentCount, setAgentCount] = useState<number>(0);
   const {
     contentBlocks,
     setContentBlocks,
@@ -228,6 +231,30 @@ export function Thread() {
     e.preventDefault();
     if ((input.trim().length === 0 && contentBlocks.length === 0) || isLoading)
       return;
+    
+    // 新增: 检查是否需要选择数据库
+    if (!selectedConnectionId && connectionCount > 0) {
+      toast.error("请先选择数据库", {
+        description: connectionCount > 1 
+          ? `系统中有 ${connectionCount} 个数据库连接，请在底部工具栏选择一个数据库后再发送消息。`
+          : "请稍等数据库加载完成...",
+        richColors: true,
+        closeButton: true,
+      });
+      return;
+    }
+    
+    // 新增: 如果有多个智能体但未选择，提示用户
+    if (!selectedAgentId && agentCount > 1) {
+      toast.warning("提示: 您未选择智能体", {
+        description: `系统中有 ${agentCount} 个可用的智能体，当前使用默认分析模式。您可以在底部工具栏选择特定的智能体。`,
+        richColors: true,
+        closeButton: true,
+        duration: 5000,
+      });
+      // 这里不返回，只是提示，仍然允许发送（使用默认分析模式）
+    }
+    
     setFirstTokenReceived(false);
 
     const newHumanMessage: Message = {
@@ -561,12 +588,14 @@ export function Thread() {
                             <DatabaseConnectionSelector
                               value={selectedConnectionId}
                               onChange={setSelectedConnectionId}
+                              onLoaded={setConnectionCount}
                             />
                           </div>
                           <div className="border-l border-gray-200 pl-4">
                             <AgentSelector
                               value={selectedAgentId}
                               onChange={setSelectedAgentId}
+                              onLoaded={setAgentCount}
                             />
                           </div>
                         </div>

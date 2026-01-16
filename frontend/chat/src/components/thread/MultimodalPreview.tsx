@@ -1,10 +1,18 @@
 
 import React from "react";
 import { File, X as XIcon } from "lucide-react";
-import type { Base64ContentBlock } from "@langchain/core/messages";
 import type { OptimizedContentBlock } from "@/lib/multimodal-utils";
 import { cn } from "@/lib/utils";
 import Image from "next/image";
+
+// Local type definition for Base64ContentBlock (not exported from @langchain/core/messages)
+interface Base64ContentBlock {
+  type: "image" | "file";
+  source_type?: "base64";
+  mime_type?: string;
+  data?: string;
+  metadata?: Record<string, unknown>;
+}
 
 export interface MultimodalPreviewProps {
   block: Base64ContentBlock | OptimizedContentBlock;

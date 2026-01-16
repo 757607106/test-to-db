@@ -261,12 +261,21 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(({ toolCall, toolResult 
 
     // Determine tool status:
     // 1. Handoff tools (transfer_to_xxx) are always completed immediately
-    // 2. Tools with results are completed
-    // 3. Otherwise pending
+    // 2. Tools with error results are marked as error
+    // 3. Tools with results are completed
+    // 4. Otherwise pending
     const isHandoffTool = toolName.startsWith("transfer_to_");
     
+    // Check if the result indicates an error
+    const isError = toolResult_content && (
+      (typeof toolResult_content === 'object' && ('error' in toolResult_content || 'status' in toolResult_content && toolResult_content.status === 'error')) ||
+      (typeof toolResult_content === 'string' && toolResult_content.toLowerCase().includes('error'))
+    );
+    
     let toolStatus: "pending" | "completed" | "error";
-    if (toolResult) {
+    if (isError) {
+      toolStatus = "error";
+    } else if (toolResult) {
       toolStatus = "completed";
     } else if (isHandoffTool) {
       toolStatus = "completed";

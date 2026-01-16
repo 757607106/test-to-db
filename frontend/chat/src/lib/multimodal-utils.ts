@@ -1,5 +1,13 @@
-import type { Base64ContentBlock } from "@langchain/core/messages";
 import { toast } from "sonner";
+
+// Local type definition for Base64ContentBlock (not exported from @langchain/core/messages)
+interface Base64ContentBlock {
+  type: "image" | "file";
+  source_type?: "base64";
+  mime_type?: string;
+  data?: string;
+  metadata?: Record<string, unknown>;
+}
 
 // 定义期望的图片格式类型
 export interface ImageUrlContentBlock {

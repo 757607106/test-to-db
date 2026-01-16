@@ -17,31 +17,49 @@ interface DatabaseConnectionSelectorProps {
   value?: number | null;
   onChange: (connectionId: number | null) => void;
   className?: string;
+  // 新增: 加载完成后回调，通知父组件连接数量
+  onLoaded?: (count: number) => void;
 }
 
 export function DatabaseConnectionSelector({
   value,
   onChange,
-  className
+  className,
+  onLoaded
 }: DatabaseConnectionSelectorProps) {
   const [connections, setConnections] = useState<DBConnection[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [autoSelected, setAutoSelected] = useState(false);
 
   useEffect(() => {
     fetchConnections();
   }, []);
+
+  // 新增: 当只有一个数据库连接时自动选择
+  useEffect(() => {
+    if (!autoSelected && connections.length === 1 && !value) {
+      const singleConnection = connections[0];
+      onChange(singleConnection.id);
+      setAutoSelected(true);
+      console.log(`自动选择唯一的数据库连接: ${singleConnection.name} (ID: ${singleConnection.id})`);
+    }
+  }, [connections, value, onChange, autoSelected]);
 
   const fetchConnections = async () => {
     setLoading(true);
     setError(null);
     try {
       const response = await getConnections();
-      setConnections(response.data);
+      const data = response.data || [];
+      setConnections(data);
+      // 通知父组件连接数量
+      onLoaded?.(data.length);
     } catch (err) {
       console.error('获取数据库连接失败:', err);
       setError('获取数据库连接失败');
       setConnections([]);
+      onLoaded?.(0);
     } finally {
       setLoading(false);
     }

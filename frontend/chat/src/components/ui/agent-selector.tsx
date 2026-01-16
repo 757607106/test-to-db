@@ -16,20 +16,34 @@ interface AgentSelectorProps {
   value?: number | null;
   onChange: (agentId: number | null) => void;
   className?: string;
+  // 新增: 加载完成后回调，通知父组件智能体数量
+  onLoaded?: (count: number) => void;
 }
 
 export function AgentSelector({
   value,
   onChange,
-  className
+  className,
+  onLoaded
 }: AgentSelectorProps) {
   const [agents, setAgents] = useState<AgentProfile[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [autoSelected, setAutoSelected] = useState(false);
 
   useEffect(() => {
     fetchAgents();
   }, []);
+
+  // 新增: 当只有一个自定义智能体时自动选择
+  useEffect(() => {
+    if (!autoSelected && agents.length === 1 && !value) {
+      const singleAgent = agents[0];
+      onChange(singleAgent.id);
+      setAutoSelected(true);
+      console.log(`自动选择唯一的智能体: ${singleAgent.name} (ID: ${singleAgent.id})`);
+    }
+  }, [agents, value, onChange, autoSelected]);
 
   const fetchAgents = async () => {
     setLoading(true);
@@ -42,10 +56,13 @@ export function AgentSelector({
         ? response.data.filter(a => a.is_active) 
         : [];
       setAgents(activeAgents);
+      // 通知父组件智能体数量
+      onLoaded?.(activeAgents.length);
     } catch (err) {
       console.error('获取智能体失败:', err);
       setError('获取智能体失败');
       setAgents([]);
+      onLoaded?.(0);
     } finally {
       setLoading(false);
     }

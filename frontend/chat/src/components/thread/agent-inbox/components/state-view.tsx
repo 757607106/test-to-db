@@ -23,8 +23,8 @@ const messageTypeToLabel = (message: BaseMessage) => {
   let type = "";
   if ("type" in message) {
     type = message.type as string;
-  } else {
-    type = message._getType();
+  } else if (typeof (message as any)._getType === 'function') {
+    type = (message as any)._getType();
   }
 
   switch (type) {

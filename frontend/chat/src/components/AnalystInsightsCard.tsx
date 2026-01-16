@@ -231,7 +231,7 @@ export function AnalystInsightsCard({
                           {rec.type}
                         </span>
                       )}
-                      <span>{rec.content || rec}</span>
+                      <span>{typeof rec === 'string' ? rec : rec.content || JSON.stringify(rec)}</span>
                     </div>
                   </li>
                 ))}

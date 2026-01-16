@@ -11,6 +11,7 @@ from langgraph.prebuilt import create_react_agent
 
 from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
+from app.core.agent_config import get_custom_agent_llm, get_agent_llm, CORE_AGENT_SUPERVISOR
 from app.db.session import SessionLocal
 from app.models.agent_profile import AgentProfile
 from app.models.llm_config import LLMConfiguration
@@ -20,7 +21,8 @@ class SupervisorAgent:
 
     def __init__(self, worker_agents: List[Any] = None, active_agent_profiles: List[AgentProfile] = None):
         self.active_agent_profiles = active_agent_profiles or []
-        self.llm = get_default_model()
+        # Supervisor 使用特定配置的模型（需要支持 function calling）
+        self.llm = get_agent_llm(CORE_AGENT_SUPERVISOR)
         self.worker_agents = worker_agents or self._create_worker_agents()
         self.supervisor = self._create_supervisor()
 
@@ -51,6 +53,11 @@ class SupervisorAgent:
             # 2. 将 chart_generator_agent 的工具提取出来
             chart_tools = chart_generator_agent.tools
             
+            print(f"\n{'='*60}")
+            print(f"🔄 Supervisor: 加载自定义智能体")
+            print(f"   数量: {len(self.active_agent_profiles)}")
+            print(f"{'='*60}")
+            
             db = SessionLocal()
             try:
                 for profile in self.active_agent_profiles:
@@ -58,12 +65,8 @@ class SupervisorAgent:
                     if any(a.name == profile.name for a in agents):
                         continue
                     
-                    # 获取特定模型配置
-                    agent_llm = self.llm # 默认
-                    if profile.llm_config_id:
-                        llm_config = db.query(LLMConfiguration).filter(LLMConfiguration.id == profile.llm_config_id).first()
-                        if llm_config:
-                            agent_llm = get_default_model(config_override=llm_config)
+                    # 使用新的函数获取模型（会打印日志）
+                    agent_llm = get_custom_agent_llm(profile, db)
 
                     # 创建动态代理 (Custom Agent)
                     # 关键：注入图表工具！
@@ -74,13 +77,16 @@ class SupervisorAgent:
                         name=profile.name
                     )
                     agents.append(dynamic_agent)
+                    print(f"   ✅ 已创建自定义智能体: {profile.name}")
             except Exception as e:
-                print(f"Error loading dynamic agents: {e}")
+                print(f"❌ Error loading dynamic agents: {e}")
             finally:
                 db.close()
+                print(f"{'='*60}\n")
         else:
             # 方案：默认模式
             # 添加默认的数据分析师
+            print(f"\n📊 Supervisor: 使用默认数据分析师 (chart_generator_agent)\n")
             agents.append(chart_generator_agent.agent)
 
         return agents
@@ -145,12 +151,58 @@ class SupervisorAgent:
 
 **工作原则:**
 1. 快速响应，简洁高效
-2. 确保SQL准确性，优先正确执行
+2. 确保sql准确性，优先正确执行
 3. 分析阶段：专家负责解读数据，并有权调用图表工具生成可视化。
 4. 一次只分配一个代理
 5. 不要自己执行任何具体工作
 
-请根据当前状态选择合适的代理，保持流程简洁高效。"""
+**🔥🔥🔥 澄清流程特别规则 (最重要):**
+
+当clarification_agent返回后，如果它的输出包含以下关键词，说明已经输出了澄清问题：
+- "您的查询需要澄清"
+- "请提供这些信息"
+- "是指哪一年"
+- "按什么标准衡量"
+- "具体指哪"
+- "以便我为您生成"
+
+❗❗❗ **收到澄清问题后的行为:**
+1. **绝对不要重复生成澄清问题** - clarification_agent已经生成了
+2. **绝对不要输出任何新内容** - 直接结束
+3. **不要调用任何其他agent** - 等待用户回答
+4. **直接结束当前轮次** - 让用户看到并回答澄清问题
+
+正确的行为:
+```
+clarification_agent 返回: "您的查询需要澄清...请提供这些信息..."
+supervisor 应该: 直接结束，不输出任何内容
+```
+
+错误的行为 (绝对禁止):
+```
+clarification_agent 返回: "您的查询需要澄清..."
+supervisor 输出: "请明确以下信息..."  ❌ 这是重复!
+```
+
+**🔥 错误处理特别规则:**
+
+当schema_agent报告错误时，必须区分错误类型：
+
+✅ **技术性故障** (直接返回给用户，不要调用其他agent):
+- 如果错误信息包含"没有可用的表结构元数据"或"schema尚未发布"
+- 如果错误信息包含"数据库连接不存在"
+- 如果错误信息包含"请在Admin管理系统中完成"
+→ **直接将schema_agent的错误消息返回给用户**
+→ **不要**调用clarification_agent（这不是查询模糊问题）
+→ **不要**调用error_recovery_agent（这不是代码错误）
+
+❌ **业务逻辑模糊** (调用clarification_agent):
+- 用户查询中的时间范围不明确 (如"最近""上个月")
+- 用户查询中的筛选条件不明确 (如"一些用户""某些产品")
+- 用户查询中的指标定义不明确
+→ 调用clarification_agent生成澄清问题
+
+请严格遵守以上规则，保持流程简洁高效。"""
 
         return system_msg
 
