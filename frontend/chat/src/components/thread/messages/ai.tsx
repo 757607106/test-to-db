@@ -7,7 +7,7 @@ import { BranchSwitcher, CommandBar } from "./shared";
 import { MarkdownText } from "../markdown-text";
 import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 import { cn } from "@/lib/utils";
-import { ToolCalls } from "./tool-calls-new";
+import { ToolCalls } from "./tool-calls";
 import { MessageContentComplex } from "@langchain/core/messages";
 import { Fragment } from "react/jsx-runtime";
 import { isAgentInboxInterruptSchema } from "@/lib/agent-inbox-interrupt";
@@ -185,80 +185,76 @@ export function AssistantMessage({
   const hasAnthropicToolCalls = !!anthropicStreamedToolCalls?.length;
   const isToolResult = message?.type === "tool";
 
+  // Hide tool result messages - they are now displayed within ToolCalls component
   if (isToolResult) {
-    return null; // Hide individual tool results since they're now combined with tool calls
+    return null;
   }
 
+  // Get tool results for matching with tool calls
+  const toolResultMessages = messages.filter(
+    (m): m is import("@langchain/langgraph-sdk").ToolMessage => m.type === "tool"
+  );
+
   return (
-    <div className="group mr-auto w-full">
-      <div className="flex flex-col gap-2">
-        {!isToolResult && (
+    <div className="group mr-auto flex w-full items-start gap-2">
+      <div className="flex w-full flex-col gap-2">
+        {contentString.length > 0 && (
+          <div className="py-1">
+            <MarkdownText>{contentString}</MarkdownText>
+          </div>
+        )}
+
+        {!hideToolCalls && (
           <>
-            {contentString.length > 0 && (
-              <div className="py-3 px-5 bg-[#F2F2F7] dark:bg-[#1C1C1E] rounded-[20px] w-fit shadow-sm leading-relaxed text-black/90 dark:text-white/90">
-                <MarkdownText>{contentString}</MarkdownText>
-              </div>
-            )}
-
-            {!hideToolCalls && (
-              <>
-                {/* Render tool calls - removed toolCallsHaveContents check since many transfer tools have empty args */}
-                {hasToolCalls && (
-                  <ToolCalls
-                    toolCalls={message.tool_calls}
-                    toolResults={messages.filter(
-                      (m): m is import("@langchain/langgraph-sdk").ToolMessage =>
-                        m.type === "tool" &&
-                        !!message.tool_calls?.some(tc => tc.id === (m as any).tool_call_id)
-                    )}
-                  />
+            {hasToolCalls && (
+              <ToolCalls
+                toolCalls={message.tool_calls}
+                toolResults={toolResultMessages.filter(tr =>
+                  message.tool_calls?.some(tc => tc.id === tr.tool_call_id)
                 )}
-                {/* Fallback for Anthropic streamed tool calls */}
-                {!hasToolCalls && hasAnthropicToolCalls && (
-                  <ToolCalls
-                    toolCalls={anthropicStreamedToolCalls}
-                    toolResults={messages.filter(
-                      (m): m is import("@langchain/langgraph-sdk").ToolMessage =>
-                        m.type === "tool" &&
-                        anthropicStreamedToolCalls?.some(tc => tc.id === (m as any).tool_call_id)
-                    )}
-                  />
+              />
+            )}
+            {!hasToolCalls && hasAnthropicToolCalls && (
+              <ToolCalls
+                toolCalls={anthropicStreamedToolCalls}
+                toolResults={toolResultMessages.filter(tr =>
+                  anthropicStreamedToolCalls?.some(tc => tc.id === tr.tool_call_id)
                 )}
-              </>
-            )}
-
-            {message && (
-              <CustomComponent
-                message={message}
-                thread={thread}
               />
             )}
-            <Interrupt
-              interruptValue={threadInterrupt?.value}
-              isLastMessage={isLastMessage}
-              hasNoAIOrToolMessages={hasNoAIOrToolMessages}
-            />
-            <div
-              className={cn(
-                "mr-auto flex items-center gap-2 transition-opacity",
-                "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
-              )}
-            >
-              <BranchSwitcher
-                branch={meta?.branch}
-                branchOptions={meta?.branchOptions}
-                onSelect={(branch) => thread.setBranch(branch)}
-                isLoading={isLoading}
-              />
-              <CommandBar
-                content={contentString}
-                isLoading={isLoading}
-                isAiMessage={true}
-                handleRegenerate={() => handleRegenerate(parentCheckpoint)}
-              />
-            </div>
           </>
         )}
+
+        {message && (
+          <CustomComponent
+            message={message}
+            thread={thread}
+          />
+        )}
+        <Interrupt
+          interruptValue={threadInterrupt?.value}
+          isLastMessage={isLastMessage}
+          hasNoAIOrToolMessages={hasNoAIOrToolMessages}
+        />
+        <div
+          className={cn(
+            "mr-auto flex items-center gap-2 transition-opacity",
+            "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
+          )}
+        >
+          <BranchSwitcher
+            branch={meta?.branch}
+            branchOptions={meta?.branchOptions}
+            onSelect={(branch) => thread.setBranch(branch)}
+            isLoading={isLoading}
+          />
+          <CommandBar
+            content={contentString}
+            isLoading={isLoading}
+            isAiMessage={true}
+            handleRegenerate={() => handleRegenerate(parentCheckpoint)}
+          />
+        </div>
       </div>
     </div>
   );
