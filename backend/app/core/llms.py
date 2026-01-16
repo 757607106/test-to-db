@@ -14,20 +14,20 @@ logger = logging.getLogger(__name__)
 def get_active_llm_config(model_type: str = "chat") -> Optional[LLMConfiguration]:
     """
     Fetch the active LLM configuration from the database.
-    按 ID 升序返回第一个活跃配置（最早创建的）
+    按 ID 降序返回第一个活跃配置（最新创建的）
     """
     db: Session = SessionLocal()
     try:
         config = db.query(LLMConfiguration).filter(
             LLMConfiguration.is_active == True,
             LLMConfiguration.model_type == model_type
-        ).order_by(LLMConfiguration.id.asc()).first()  # 改为按 ID 升序
+        ).order_by(LLMConfiguration.id.desc()).first()  # 按 ID 降序，使用最新配置
         # If specific type not found, try any active one (fallback logic could be better)
         if not config and model_type == "chat":
-             config = db.query(LLMConfiguration).filter(LLMConfiguration.is_active == True).order_by(LLMConfiguration.id.asc()).first()
+             config = db.query(LLMConfiguration).filter(LLMConfiguration.is_active == True).order_by(LLMConfiguration.id.desc()).first()
         
         if config:
-            logger.info(f"Found active LLM config in DB: provider={config.provider}, model={config.model_name}, base_url={config.base_url}")
+            logger.info(f"Found active LLM config in DB: provider={config.provider}, model={config.model_name}, base_url={config.base_url}, id={config.id}")
         else:
             logger.info(f"No active LLM config found in DB for type {model_type}")
             
