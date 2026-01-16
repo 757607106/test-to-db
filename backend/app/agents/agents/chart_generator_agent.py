@@ -10,42 +10,41 @@ from langgraph.prebuilt import create_react_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from app.core.state import SQLMessageState
-from app.core.agent_config import get_agent_llm, get_agent_profile, CORE_AGENT_CHART_ANALYST
-from app.core.config import settings
+from app.core.llms import get_default_model
+from app.core.message_utils import MCPToolWrapper
+
 
 # 初始化MCP图表服务器客户端
 def _initialize_chart_client():
-    """初始化图表生成客户端"""
+    """初始化图表生成客户端并包装工具"""
     try:
-        # 检查 API Key 是否配置
-        if not settings.DASHSCOPE_API_KEY:
-            print("警告: 未配置 DASHSCOPE_API_KEY，将跳过 AntV 图表工具初始化")
-            return None, []
-
-        # 使用用户提供的阿里云 AntV MCP 配置
         client = MultiServerMCPClient(
             {
-                "antv-visualization-chart": {
-                    "transport": "sse",
-                    "url": "https://dashscope.aliyuncs.com/api/v1/mcps/antv-visualization-chart/sse",
-                    "headers": {
-                        "Authorization": f"Bearer {settings.DASHSCOPE_API_KEY}"
-                    }
+                "mcp-server-chart": {
+                    "command": "npx",
+                    "args": ["-y", "@antv/mcp-server-chart"],
+                    "transport": "stdio",
                 }
             }
         )
-        # 获取工具
-        # 注意：这里是一个异步操作，但在模块级别我们需要同步获取，或者延迟加载
-        # 为了简单起见，这里使用 asyncio.run，但在生产环境中最好在 agent 初始化时异步加载
         chart_tools = asyncio.run(client.get_tools())
-        print(f"成功加载 AntV 图表工具: {len(chart_tools)} 个")
-        return client, chart_tools
+        
+        # 使用MCPToolWrapper包装每个MCP工具
+        wrapped_tools = []
+        for tool in chart_tools:
+            tool_name = getattr(tool, "name", "unknown_tool")
+            wrapped_tool = MCPToolWrapper(tool, tool_name)
+            wrapped_tools.append(wrapped_tool)
+        
+        return client, wrapped_tools
     except Exception as e:
         print(f"图表客户端初始化失败: {e}")
         return None, []
 
-# 全局图表客户端和工具
+
+# 全局图表客户端和包装后的工具
 CHART_CLIENT, CHART_TOOLS = _initialize_chart_client()
+
 
 @tool
 def analyze_data_for_chart(data: Dict[str, Any], query_context: str) -> Dict[str, Any]:
@@ -122,6 +121,7 @@ def analyze_data_for_chart(data: Dict[str, Any], query_context: str) -> Dict[str
             "error": str(e)
         }
 
+
 def _recommend_chart_type(num_columns: int, num_rows: int, numeric_cols: List[str], 
                          text_cols: List[str], date_cols: List[str], context: str) -> Dict[str, Any]:
     """推荐图表类型的内部逻辑"""
@@ -183,13 +183,14 @@ def _recommend_chart_type(num_columns: int, num_rows: int, numeric_cols: List[st
             "x_axis": numeric_cols[0],
             "y_axis": numeric_cols[1]
         }
-
+    
     else:
         return {
             "type": "table",
             "reason": "数据结构复杂，建议使用表格显示",
             "columns": text_cols + numeric_cols
         }
+
 
 @tool
 def generate_chart_config(chart_type: str, data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
@@ -248,6 +249,7 @@ def generate_chart_config(chart_type: str, data: Dict[str, Any], config: Dict[st
             "success": False,
             "error": str(e)
         }
+
 
 @tool
 def should_generate_chart(query: str, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -328,28 +330,34 @@ def should_generate_chart(query: str, data: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
-
 class ChartGeneratorAgent:
     """图表生成代理"""
     
-    def __init__(self):
-        self.name = "chart_generator_agent"
-        # 使用特定的核心配置
-        self.llm = get_agent_llm(CORE_AGENT_CHART_ANALYST)
-        self.profile = get_agent_profile(CORE_AGENT_CHART_ANALYST)
+    def __init__(self, custom_prompt: str = None, llm = None):
+        """
+        初始化图表生成智能体
         
-        # 组合本地工具和MCP图表工具
+        Args:
+            custom_prompt: 自定义系统提示词（可选）
+            llm: 自定义LLM模型（可选）
+        """
+        self.name = "chart_generator_agent"
+        self.custom_prompt = custom_prompt
+        self.llm = llm or get_default_model()
+        
+        # 组合本地工具和包装后的MCP图表工具
         self.tools = [
-            analyze_data_for_chart,
-            generate_chart_config,
-            should_generate_chart
+            # analyze_data_for_chart,
+            # generate_chart_config,
+            # should_generate_chart
         ]
         
-        # 如果MCP图表工具可用，添加到工具列表
+        # 如果包装后的MCP图表工具可用，添加到工具列表
         if CHART_TOOLS:
             self.tools.extend(CHART_TOOLS)
+            print(f"图表生成代理已加载 {len(CHART_TOOLS)} 个MCP工具（已包装）")
         
-        # 创建ReAct代理
+        # 创建ReAct代理，使用包装后的工具
         self.agent = create_react_agent(
             self.llm,
             self.tools,
@@ -358,10 +366,13 @@ class ChartGeneratorAgent:
         )
     
     def _create_system_prompt(self) -> str:
-        """创建系统提示"""
-        if self.profile and self.profile.system_prompt:
-            return self.profile.system_prompt
-
+        """
+        创建系统提示
+        如果提供了custom_prompt，使用它；否则使用默认提示词
+        """
+        if self.custom_prompt:
+            return self.custom_prompt
+        
         return """你是一个专业的数据可视化专家。你的任务是：
 
 1. 分析SQL查询结果数据的特征和结构
@@ -370,10 +381,7 @@ class ChartGeneratorAgent:
 4. 生成高质量的数据可视化图表
 
 工作流程：
-- 首先使用 should_generate_chart 判断
-- 如果需要，使用 analyze_data_for_chart 分析
-- 使用 MCP 提供的图表工具（如 create_chart 等）来生成图表
-- 如果 MCP 工具不可用，使用 generate_chart_config 降级处理
+使用相应工具生成实际图表
 
 请确保：
 - 准确分析数据特征
@@ -382,6 +390,23 @@ class ChartGeneratorAgent:
 - 如果不适合生成图表，给出合理的解释
 
 你需要根据用户查询意图和数据特点做出最佳的可视化决策。"""
+
+    # 1.
+    # 首先使用
+    # should_generate_chart
+    # 工具判断是否需要生成图表
+    # 图表类型选择原则：
+    # - 用户有明确要求
+    # - 趋势分析：折线图(line
+    # chart)
+    # - 比较分析：柱状图(bar
+    # chart)
+    # - 占比分析：饼图(pie
+    # chart)
+    # - 相关性分析：散点图(scatter
+    # plot)
+    # - 复杂数据：表格(table)
+    # - 其它合适格式的图表
 
     async def generate_chart(self, state: SQLMessageState) -> Dict[str, Any]:
         """生成图表"""
@@ -393,7 +418,6 @@ class ChartGeneratorAgent:
                 "messages": result.get("messages", []),
                 "current_stage": "completed"
             }
-
             
         except Exception as e:
             # 记录错误
@@ -410,6 +434,10 @@ class ChartGeneratorAgent:
                 "messages": [AIMessage(content=f"图表生成失败: {str(e)}")],
                 "current_stage": "error_recovery"
             }
+
+
+# 2. 如果需要生成图表，使用 analyze_data_for_chart 工具分析数据特征
+# 3. 使用 generate_chart_config 工具生成图表配置
 
 # 创建全局实例
 chart_generator_agent = ChartGeneratorAgent()

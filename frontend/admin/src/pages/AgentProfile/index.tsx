@@ -66,9 +66,18 @@ const AgentProfilePage: React.FC = () => {
       form.resetFields();
       setEditingId(null);
       fetchData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Operation failed:', error);
-      message.error('操作失败，请检查输入');
+      // 显示详细的错误信息
+      if (error.response?.status === 400) {
+        message.error(error.response.data.detail || '操作失败，请检查输入');
+      } else if (error.response?.status === 403) {
+        message.error(error.response.data.detail || '系统内置智能体不允许修改');
+      } else if (error.response?.status === 404) {
+        message.error('智能体不存在');
+      } else {
+        message.error('操作失败，请检查输入');
+      }
     } finally {
       setLoading(false);
     }
@@ -87,8 +96,16 @@ const AgentProfilePage: React.FC = () => {
       await deleteAgentProfile(id);
       message.success('删除成功');
       fetchData();
-    } catch (error) {
-      message.error('删除失败');
+    } catch (error: any) {
+      console.error('Delete failed:', error);
+      // 显示详细的错误信息
+      if (error.response?.status === 403) {
+        message.error(error.response.data.detail || '系统内置智能体不允许删除');
+      } else if (error.response?.status === 404) {
+        message.error('智能体不存在');
+      } else {
+        message.error('删除失败，请稍后重试');
+      }
     }
   };
 

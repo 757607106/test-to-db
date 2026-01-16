@@ -9,6 +9,7 @@ from langgraph.prebuilt import create_react_agent
 
 from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
+from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 
 
 @tool
@@ -49,7 +50,6 @@ def analyze_error_pattern(error_history: List[Dict[str, Any]]) -> Dict[str, Any]
                 error_types["timeout_error"] = error_types.get("timeout_error", 0) + 1
             else:
                 error_types["unknown_error"] = error_types.get("unknown_error", 0) + 1
-
             
             # 统计错误阶段
             error_stages[stage] = error_stages.get(stage, 0) + 1
@@ -225,7 +225,7 @@ def auto_fix_sql_error(sql_query: str, error_message: str, schema_info: Dict[str
                     if table.lower() in fixed_sql.lower():
                         fixed_sql = fixed_sql.replace(table.lower(), table)
                         fixes_applied.append(f"修正表名为 {table}")
-
+        
         # 性能相关修复
         if "timeout" in error_lower or "too many rows" in error_lower:
             if "LIMIT" not in fixed_sql.upper():
@@ -263,7 +263,7 @@ class ErrorRecoveryAgent:
 
     def __init__(self):
         self.name = "error_recovery_agent"  # 添加name属性
-        self.llm = get_default_model()
+        self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
         self.tools = [analyze_error_pattern, generate_recovery_strategy, auto_fix_sql_error]
         
         # 创建ReAct代理

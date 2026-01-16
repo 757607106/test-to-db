@@ -3,228 +3,197 @@
 负责协调各个专门代理的工作流程
 pip install langgraph-supervisor
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
+import logging
 
 from langchain_core.runnables import RunnableConfig
 from langgraph_supervisor import create_supervisor
-from langgraph.prebuilt import create_react_agent
 
 from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
-from app.core.agent_config import get_custom_agent_llm, get_agent_llm, CORE_AGENT_SUPERVISOR
-from app.db.session import SessionLocal
-from app.models.agent_profile import AgentProfile
-from app.models.llm_config import LLMConfiguration
+from app.core.message_utils import validate_and_fix_message_history
+
+# 配置日志
+logger = logging.getLogger(__name__)
+
 
 class SupervisorAgent:
     """监督代理 - 基于LangGraph自带supervisor"""
 
-    def __init__(self, worker_agents: List[Any] = None, active_agent_profiles: List[AgentProfile] = None):
-        self.active_agent_profiles = active_agent_profiles or []
-        # Supervisor 使用特定配置的模型（需要支持 function calling）
-        self.llm = get_agent_llm(CORE_AGENT_SUPERVISOR)
+    def __init__(self, worker_agents: List[Any] = None, custom_analyst = None):
+        """
+        初始化Supervisor
+        
+        Args:
+            worker_agents: 工作智能体列表（可选）
+            custom_analyst: 自定义数据分析专家（可选），如果提供则替换默认的chart_analyst_core
+        """
+        self.llm = get_default_model()
+        self.custom_analyst = custom_analyst
         self.worker_agents = worker_agents or self._create_worker_agents()
         self.supervisor = self._create_supervisor()
 
     def _create_worker_agents(self) -> List[Any]:
-        """创建工作代理 - 包含核心代理、图表代理及动态配置的代理"""
+        """创建工作代理
+        
+        如果提供了custom_analyst，使用它替换默认的chart_generator_agent
+        
+        注意：SQL Validator Agent已被移除以简化流程
+        - 移除原因：减少不必要的验证步骤，提升响应速度
+        - 移除时间：2026-01-16
+        - 备份位置：backend/backups/agents_backup_20260116_175357
+        """
+        from app.agents.agents.schema_agent import schema_agent
+        from app.agents.agents.sample_retrieval_agent import sample_retrieval_agent
+        from app.agents.agents.sql_generator_agent import sql_generator_agent
+        # 已移除：from app.agents.agents.sql_validator_agent import sql_validator_agent
+        from app.agents.agents.sql_executor_agent import sql_executor_agent
+        from app.agents.agents.error_recovery_agent import error_recovery_agent
+        from app.agents.agents.chart_generator_agent import chart_generator_agent
 
-        # 核心代理：保证SQL查询的准确性和可靠性
-        from app.agents.agents.clarification_agent import clarification_agent      # 新增：澄清模糊查询
-        from app.agents.agents.schema_agent import schema_agent          # 核心：分析用户查询并获取准确的数据库模式
-        from app.agents.agents.sql_generator_agent import sql_generator_agent      # 核心：生成准确的SQL查询
-        from app.agents.agents.sql_executor_agent import sql_executor_agent        # 核心：安全地执行SQL查询
-        from app.agents.agents.error_recovery_agent import error_recovery_agent    # 保障：处理错误并修正
-        from app.agents.agents.chart_generator_agent import chart_generator_agent  # 核心：默认数据分析与可视化
-
-        # 基础代理列表 (始终存在)
+        # 返回agent对象而不是包装类
+        # 简化后只包含5个核心代理
         agents = [
-            clarification_agent.agent,
             schema_agent.agent,
+            # sample_retrieval_agent.agent,
             sql_generator_agent.agent,
+            # 已移除：sql_validator_agent.agent  # 验证步骤已移除
+            # parallel_sql_validator_agent.agent,
             sql_executor_agent.agent,
-            error_recovery_agent.agent
+            error_recovery_agent.agent,
         ]
-
-        # 逻辑分支：使用自定义专家 还是 默认分析师？
-        if self.active_agent_profiles:
-            # 方案：替换模式
-            # 1. 不添加 chart_generator_agent (Default Data Analyst)
-            # 2. 将 chart_generator_agent 的工具提取出来
-            chart_tools = chart_generator_agent.tools
-            
-            print(f"\n{'='*60}")
-            print(f"🔄 Supervisor: 加载自定义智能体")
-            print(f"   数量: {len(self.active_agent_profiles)}")
-            print(f"{'='*60}")
-            
-            db = SessionLocal()
-            try:
-                for profile in self.active_agent_profiles:
-                    # 避免重复
-                    if any(a.name == profile.name for a in agents):
-                        continue
-                    
-                    # 使用新的函数获取模型（会打印日志）
-                    agent_llm = get_custom_agent_llm(profile, db)
-
-                    # 创建动态代理 (Custom Agent)
-                    # 关键：注入图表工具！
-                    dynamic_agent = create_react_agent(
-                        model=agent_llm, 
-                        tools=chart_tools, # 继承默认分析师的工具
-                        prompt=profile.system_prompt or f"你是 {profile.name}，{profile.role_description}。请分析数据，并根据需要使用图表工具生成可视化配置。",
-                        name=profile.name
-                    )
-                    agents.append(dynamic_agent)
-                    print(f"   ✅ 已创建自定义智能体: {profile.name}")
-            except Exception as e:
-                print(f"❌ Error loading dynamic agents: {e}")
-            finally:
-                db.close()
-                print(f"{'='*60}\n")
+        
+        # 如果提供了自定义分析专家，使用它；否则使用默认的
+        if self.custom_analyst:
+            logger.info("Using custom analyst agent instead of default chart_generator_agent")
+            agents.append(self.custom_analyst.agent)
         else:
-            # 方案：默认模式
-            # 添加默认的数据分析师
-            print(f"\n📊 Supervisor: 使用默认数据分析师 (chart_generator_agent)\n")
+            logger.info("Using default chart_generator_agent")
             agents.append(chart_generator_agent.agent)
-
+        
         return agents
 
+    # def pre_model_hook(self, state):
+    #     print("哈哈哈哈哈：：：：", state)
     def _create_supervisor(self):
-        """创建LangGraph supervisor - 优化版"""
+        """创建LangGraph supervisor"""
         supervisor = create_supervisor(
             model=self.llm,
             agents=self.worker_agents,
             prompt=self._get_supervisor_prompt(),
             add_handoff_back_messages=True,
-            output_mode="last_message",  # 只保留最后消息，避免历史膨胀导致循环调用
-            parallel_tool_calls=False,   # 保证顺序执行
+            # pre_model_hook=self.pre_model_hook,
+            # parallel_tool_calls=True,
+            output_mode="full_history",
         )
 
         return supervisor.compile()
 
+    # 📚 ** sample_retrieval_agent **: 检索相关的SQL问答对样本，提供高质量参考
+    # sample_retrieval_agent →
+
+    # ** 样本检索优化: **
+    # - 基于用户查询语义检索相似问答对
+    # - 结合数据库结构进行结构化匹配
+    # - 提供高质量SQL生成参考样本
     def _get_supervisor_prompt(self) -> str:
-        """获取监督代理提示 - 动态生成"""
+        """获取监督代理提示
         
-        # 基础提示
-        system_msg = """你是高效的SQL查询与分析系统监督者。
+        简化后的流程不包含SQL验证步骤
+        """
 
-你管理以下代理：
+        system_msg = f"""你是一个智能的SQL Agent系统监督者。
+你管理以下专门代理：
 
-❓ **clarification_agent**: 检测模糊查询并生成澄清问题
-🔍 **schema_agent**: 分析用户查询，获取准确的数据库表结构
-⚙️ **sql_generator_agent**: 生成准确的SQL
+🔍 **schema_agent**: 分析用户查询，获取相关数据库表结构
+⚙️ **sql_generator_agent**: 根据模式信息生成高质量SQL语句
 🚀 **sql_executor_agent**: 安全执行SQL并返回结果
-🔧 **error_recovery_agent**: 处理错误并修正SQL
-"""
-        
-        # 动态调整 Prompt
-        if self.active_agent_profiles:
-             # 替换模式：不介绍默认分析师，只介绍自定义专家
-            for agent in self.worker_agents:
-                name = agent.name
-                if name not in ["schema_agent", "sql_generator_agent", "sql_executor_agent", "error_recovery_agent"]:
-                     system_msg += f"🧠 **{name}**: 行业数据分析专家（已授权图表生成能力）\n"
-        else:
-            # 默认模式：介绍默认分析师
-            system_msg += "📊 **chart_generator_agent**: 数据分析与可视化专家（默认）\n"
-
-
-        system_msg += """
-**核心工作流程:**
-1. 首先判断查询是否模糊: 
-   - 模糊查询（如"最近的销售"、"一些用户"）→ clarification_agent → 等待用户澄清 → 继续
-   - 明确查询 → 直接进入下一步
-2. SQL查询: schema_agent → sql_generator_agent → sql_executor_agent
-3. 分析与可视化: SQL执行成功后，将数据移交给分析专家
-"""
-        
-        if self.active_agent_profiles:
-             agent_names = [p.name for p in self.active_agent_profiles]
-             agent_names_str = ", ".join(agent_names)
-             system_msg += f"   - 当前指定专家: **{agent_names_str}** (请优先调用)\n"
-        else:
-             system_msg += "   - 当前分析师: chart_generator_agent\n"
-
-        system_msg += """3. 错误处理: 任何阶段出错 → error_recovery_agent
+📊 **chart_generator_agent**: 根据查询结果生成数据可视化图表
+🔧 **error_recovery_agent**: 处理错误并提供修复方案
 
 **工作原则:**
-1. 快速响应，简洁高效
-2. 确保sql准确性，优先正确执行
-3. 分析阶段：专家负责解读数据，并有权调用图表工具生成可视化。
-4. 一次只分配一个代理
+1. 根据当前任务阶段选择合适的代理
+2. 确保工作流程的连续性和一致性
+3. 智能处理错误和异常情况
+4. 一次只分配给一个代理，不要并行调用
 5. 不要自己执行任何具体工作
 
-**🔥🔥🔥 澄清流程特别规则 (最重要):**
+**标准流程:**
+用户查询 → schema_agent → sql_generator_agent → sql_executor_agent → [可选] chart_generator_agent → 完成
 
-当clarification_agent返回后，如果它的输出包含以下关键词，说明已经输出了澄清问题：
-- "您的查询需要澄清"
-- "请提供这些信息"
-- "是指哪一年"
-- "按什么标准衡量"
-- "具体指哪"
-- "以便我为您生成"
+**图表生成条件:**
+- 用户查询包含可视化意图（如"图表"、"趋势"、"分布"、"比较"等关键词）
+- 查询结果包含数值数据且适合可视化
+- 数据量适中（2-1000行）
 
-❗❗❗ **收到澄清问题后的行为:**
-1. **绝对不要重复生成澄清问题** - clarification_agent已经生成了
-2. **绝对不要输出任何新内容** - 直接结束
-3. **不要调用任何其他agent** - 等待用户回答
-4. **直接结束当前轮次** - 让用户看到并回答澄清问题
+**错误处理:**
+任何阶段出错 → error_recovery_agent → 尝试修复一次 → 如果仍失败则返回错误信息
 
-正确的行为:
-```
-clarification_agent 返回: "您的查询需要澄清...请提供这些信息..."
-supervisor 应该: 直接结束，不输出任何内容
-```
-
-错误的行为 (绝对禁止):
-```
-clarification_agent 返回: "您的查询需要澄清..."
-supervisor 输出: "请明确以下信息..."  ❌ 这是重复!
-```
-
-**🔥 错误处理特别规则:**
-
-当schema_agent报告错误时，必须区分错误类型：
-
-✅ **技术性故障** (直接返回给用户，不要调用其他agent):
-- 如果错误信息包含"没有可用的表结构元数据"或"schema尚未发布"
-- 如果错误信息包含"数据库连接不存在"
-- 如果错误信息包含"请在Admin管理系统中完成"
-→ **直接将schema_agent的错误消息返回给用户**
-→ **不要**调用clarification_agent（这不是查询模糊问题）
-→ **不要**调用error_recovery_agent（这不是代码错误）
-
-❌ **业务逻辑模糊** (调用clarification_agent):
-- 用户查询中的时间范围不明确 (如"最近""上个月")
-- 用户查询中的筛选条件不明确 (如"一些用户""某些产品")
-- 用户查询中的指标定义不明确
-→ 调用clarification_agent生成澄清问题
-
-请严格遵守以上规则，保持流程简洁高效。"""
+请根据当前状态和任务需求做出最佳的代理选择决策。特别注意：
+- 当用户查询包含可视化意图时，在SQL执行完成后应考虑调用chart_generator_agent
+- 当查询结果适合可视化时，主动建议生成图表
+- SQL生成后直接执行，不需要验证步骤"""
 
         return system_msg
 
     async def supervise(self, state: SQLMessageState) -> Dict[str, Any]:
         """监督整个流程"""
+        # 在执行前先验证并修复消息历史
+        if "messages" in state and state["messages"]:
+            original_count = len(state["messages"])
+            state["messages"] = validate_and_fix_message_history(state["messages"])
+            fixed_count = len(state["messages"])
+            
+            if fixed_count > original_count:
+                logger.info(
+                    f"执行前修复消息历史: 添加了 {fixed_count - original_count} 个占位ToolMessage"
+                )
+        
         try:
+            # 执行supervisor
             result = await self.supervisor.ainvoke(state)
+            
+            # 执行后再次验证并修复消息历史
+            if "messages" in result:
+                original_count = len(result["messages"])
+                result["messages"] = validate_and_fix_message_history(result["messages"])
+                fixed_count = len(result["messages"])
+                
+                # 如果添加了占位消息，记录日志
+                if fixed_count > original_count:
+                    logger.info(
+                        f"执行后修复消息历史: 添加了 {fixed_count - original_count} 个占位ToolMessage"
+                    )
+            
             return {
                 "success": True,
                 "result": result
             }
+                
         except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Supervisor执行出错: {error_msg}")
             return {
                 "success": False,
-                "error": str(e)
+                "error": error_msg
             }
 
-def create_supervisor_agent(worker_agents: List[Any] = None, active_agent_profiles: List[AgentProfile] = None) -> SupervisorAgent:
-    """创建监督代理实例"""
-    return SupervisorAgent(worker_agents, active_agent_profiles)
 
-def create_intelligent_sql_supervisor(active_agent_profiles: List[AgentProfile] = None) -> SupervisorAgent:
-    """创建智能SQL监督代理的便捷函数"""
-    return SupervisorAgent(active_agent_profiles=active_agent_profiles)
+def create_supervisor_agent(worker_agents: List[Any] = None, custom_analyst = None) -> SupervisorAgent:
+    """
+    创建监督代理实例
+    
+    Args:
+        worker_agents: 工作智能体列表（可选）
+        custom_analyst: 自定义数据分析专家（可选）
+    """
+    return SupervisorAgent(worker_agents, custom_analyst)
 
+def create_intelligent_sql_supervisor(custom_analyst = None) -> SupervisorAgent:
+    """
+    创建智能SQL监督代理的便捷函数
+    
+    Args:
+        custom_analyst: 自定义数据分析专家（可选）
+    """
+    return SupervisorAgent(custom_analyst=custom_analyst)

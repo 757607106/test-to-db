@@ -167,8 +167,18 @@ const LLMConfigPage: React.FC = () => {
       await deleteLLMConfig(id);
       message.success('删除成功');
       fetchConfigs();
-    } catch (error) {
-      message.error('删除失败');
+      // 重新加载系统智能体配置，因为可能有智能体使用了被删除的配置
+      fetchCoreAgentConfigs();
+    } catch (error: any) {
+      console.error('Delete failed:', error);
+      // 显示详细的错误信息
+      if (error.response?.status === 400) {
+        message.error(error.response.data.detail || '该配置正在被使用，请先解除绑定');
+      } else if (error.response?.status === 404) {
+        message.error('配置不存在');
+      } else {
+        message.error('删除失败，请稍后重试');
+      }
     }
   };
 

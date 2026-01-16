@@ -12,6 +12,7 @@ from app.core.llms import get_default_model
 from app.services.hybrid_retrieval_service import HybridRetrievalEngine, VectorServiceFactory
 from app.services.text2sql_utils import analyze_query_with_llm
 
+
 @tool
 def retrieve_similar_qa_pairs(
     user_query: str,
@@ -109,6 +110,7 @@ def retrieve_similar_qa_pairs(
             "qa_pairs": []
         }
 
+
 @tool
 def analyze_sample_relevance(
     user_query: str,
@@ -187,6 +189,7 @@ def analyze_sample_relevance(
             "best_samples": []
         }
 
+
 @tool
 def extract_sql_patterns(qa_pairs: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
@@ -230,7 +233,7 @@ def extract_sql_patterns(qa_pairs: List[Dict[str, Any]]) -> Dict[str, Any]:
         
         # 生成最佳实践建议
         best_practices = []
-
+        
         # 基于成功率高的样本提取实践
         high_success_samples = [qa for qa in qa_pairs if qa.get('success_rate', 0) > 0.8]
         if high_success_samples:
@@ -257,6 +260,7 @@ def extract_sql_patterns(qa_pairs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "patterns": [],
             "best_practices": []
         }
+
 
 class SampleRetrievalAgent:
     """样本检索代理"""
@@ -414,6 +418,7 @@ class SampleRetrievalAgent:
                 sample_data["analysis"] = content
         
         return sample_data
+
 
 # 创建代理实例
 sample_retrieval_agent = SampleRetrievalAgent()

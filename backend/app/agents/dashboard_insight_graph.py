@@ -6,7 +6,6 @@ from typing import Dict, Any, List, Optional
 from typing_extensions import TypedDict
 
 from langgraph.graph import StateGraph, END
-from app.agents.agents.dashboard_analyst_agent import dashboard_analyst_agent
 from app.services.graph_relationship_service import graph_relationship_service
 
 
@@ -69,15 +68,26 @@ def analyze_insights_node(state: DashboardInsightState) -> DashboardInsightState
     state["current_stage"] = "insight_analysis"
     
     try:
-        insights = dashboard_analyst_agent.analyze_dashboard_data(
-            dashboard=state["dashboard"],
-            aggregated_data=state["aggregated_data"],
-            relationship_context=state.get("relationship_context"),
-            analysis_dimensions=state.get("analysis_dimensions")
-        )
+        # 使用简化的洞察分析（不依赖dashboard_analyst_agent）
+        aggregated_data = state["aggregated_data"]
         
-        # 转换为字典格式
-        state["insights"] = insights.dict(exclude_none=True)
+        state["insights"] = {
+            "summary": {
+                "total_rows": aggregated_data.get("total_rows", 0),
+                "key_metrics": aggregated_data.get("key_metrics", {}),
+                "time_range": aggregated_data.get("time_range", "未知")
+            },
+            "trends": None,
+            "anomalies": [],
+            "correlations": [],
+            "recommendations": [
+                {
+                    "type": "info",
+                    "content": "Dashboard数据已聚合完成",
+                    "priority": "medium"
+                }
+            ]
+        }
         state["error"] = None
         print("洞察分析完成")
         

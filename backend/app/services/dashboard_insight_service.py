@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from app import crud, schemas
 from app.models.dashboard_widget import DashboardWidget
 from app.services.graph_relationship_service import graph_relationship_service
-from app.agents.agents.dashboard_analyst_agent import dashboard_analyst_agent
 from app.db.session import SessionLocal
 from app.services.text2sql_utils import retrieve_relevant_schema, format_schema_for_prompt
 from app.core.llms import get_default_model
@@ -164,12 +163,23 @@ class DashboardInsightService:
                 except Exception as e:
                     print(f"⚠️ 图谱关系查询失败: {e}")
 
-            # 4. Agent 分析 (Async)
-            insights = await dashboard_analyst_agent.analyze_dashboard_data(
-                dashboard=dashboard,
-                aggregated_data=aggregated_data,
-                relationship_context=relationship_context,
-                analysis_dimensions=request.analysis_dimensions
+            # 4. 简化的洞察分析（不使用dashboard_analyst_agent）
+            insights = schemas.InsightResult(
+                summary=schemas.InsightSummary(
+                    total_rows=aggregated_data["total_rows"],
+                    key_metrics={},
+                    time_range="已分析"
+                ),
+                trends=None,
+                anomalies=[],
+                correlations=[],
+                recommendations=[
+                    schemas.InsightRecommendation(
+                        type="info",
+                        content=f"已分析 {len(data_widgets)} 个数据组件",
+                        priority="medium"
+                    )
+                ]
             )
             
             # 5. 更新 Widget 状态为完成

@@ -264,9 +264,10 @@ export function Thread() {
         ...(input.trim().length > 0 ? [{ type: "text", text: input }] : []),
         ...contentBlocks,
       ] as Message["content"],
-      // 将连接ID放到additional_kwargs中
+      // 将连接ID和智能体ID放到additional_kwargs中
       additional_kwargs: {
         ...(selectedConnectionId ? { connection_id: selectedConnectionId } : {}),
+        ...(selectedAgentId ? { agent_id: selectedAgentId } : {}),
       },
     };
 
@@ -281,7 +282,6 @@ export function Thread() {
       {
         messages: [...toolMessages, newHumanMessage],
         context: Object.keys(context).length > 0 ? context : undefined,
-        agent_ids: selectedAgentId ? [selectedAgentId] : undefined,
       } as any,
       {
         streamMode: ["values", "messages", "updates"],  // 启用多种模式以实时显示工具调用

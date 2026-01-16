@@ -98,21 +98,15 @@ npm-debug.log*
 pids
 *.pid
 *.seed
-*.pid.lock
-.npm
-.eslintcache
-.node_repl_history
 
-# Next.js
-.next/
-out/
-build/
-.vercel
-*.tsbuildinfo
-next-env.d.ts
-
-# LangGraph
+# Custom exclusions
+.kiro/
+backend/backups/
+*.db
 .langgraph_api/
-
-# Trae
-.trae/
+.next/
+backend/venv/
+backend/.venv/
+.DS_Store
+.env.*
+*.tsbuildinfo

@@ -9,6 +9,7 @@ from langgraph.prebuilt import create_react_agent
 
 from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
+from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 
 
 @tool
@@ -80,7 +81,7 @@ SQL: {sample.get('sql', '')}
 7. 优先参考高成功率的样本
 """
         
-        llm = get_default_model()
+        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
         response = llm.invoke([HumanMessage(content=prompt)])
         
         # 提取SQL语句
@@ -191,7 +192,7 @@ def generate_sql_with_samples(
 - 优化查询性能
 """
 
-        llm = get_default_model()
+        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
         response = llm.invoke([HumanMessage(content=prompt)])
 
         # 清理SQL语句
@@ -208,6 +209,159 @@ def generate_sql_with_samples(
             "samples_used": len(best_samples),
             "best_sample_score": best_samples[0].get('final_score', 0) if best_samples else 0,
             "sample_analysis": sample_analysis
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+@tool
+def analyze_sql_optimization_need(sql_query: str, schema_info: Dict[str, Any] = None) -> Dict[str, Any]:
+    """
+    分析SQL查询是否需要优化
+
+    Args:
+        sql_query: SQL查询语句
+        schema_info: 模式信息
+
+    Returns:
+        优化需求分析结果
+    """
+    try:
+        # 基本的SQL复杂度分析
+        sql_upper = sql_query.upper().strip()
+
+        # 检查可能需要优化的模式
+        optimization_indicators = {
+            "complex_joins": False,
+            "subqueries": False,
+            "no_where_clause": False,
+            "select_star": False,
+            "multiple_tables": False,
+            "complex_functions": False,
+            "no_limit": False
+        }
+
+        # 检查复杂连接
+        join_count = sql_upper.count(' JOIN ')
+        if join_count >= 2:
+            optimization_indicators["complex_joins"] = True
+
+        # 检查子查询
+        if '(' in sql_query and ('SELECT' in sql_query[sql_query.find('('):]):
+            optimization_indicators["subqueries"] = True
+
+        # 检查是否缺少WHERE子句
+        if 'WHERE' not in sql_upper and 'JOIN' in sql_upper:
+            optimization_indicators["no_where_clause"] = True
+
+        # 检查SELECT *
+        if 'SELECT *' in sql_upper:
+            optimization_indicators["select_star"] = True
+
+        # 检查多表查询
+        from_clause = sql_query[sql_query.upper().find('FROM'):] if 'FROM' in sql_upper else ""
+        table_count = from_clause.count(',') + from_clause.count('JOIN')
+        if table_count >= 1:
+            optimization_indicators["multiple_tables"] = True
+
+        # 检查复杂函数
+        complex_functions = ['GROUP_CONCAT', 'SUBSTRING', 'REGEXP', 'CASE WHEN']
+        if any(func in sql_upper for func in complex_functions):
+            optimization_indicators["complex_functions"] = True
+
+        # 检查是否缺少LIMIT
+        if 'LIMIT' not in sql_upper and 'COUNT(' not in sql_upper:
+            optimization_indicators["no_limit"] = True
+
+        # 计算优化需求分数
+        optimization_score = sum(optimization_indicators.values())
+        needs_optimization = optimization_score >= 3  # 如果有3个或以上指标，建议优化
+
+        return {
+            "success": True,
+            "needs_optimization": needs_optimization,
+            "optimization_score": optimization_score,
+            "indicators": optimization_indicators,
+            "reason": _get_optimization_reason(optimization_indicators, needs_optimization)
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def _get_optimization_reason(indicators: Dict[str, bool], needs_optimization: bool) -> str:
+    """获取优化建议原因"""
+    if not needs_optimization:
+        return "SQL查询相对简单，性能应该良好，无需额外优化"
+
+    reasons = []
+    if indicators["complex_joins"]:
+        reasons.append("包含多个表连接")
+    if indicators["subqueries"]:
+        reasons.append("包含子查询")
+    if indicators["no_where_clause"]:
+        reasons.append("多表查询缺少WHERE条件")
+    if indicators["select_star"]:
+        reasons.append("使用SELECT *可能影响性能")
+    if indicators["complex_functions"]:
+        reasons.append("包含复杂函数")
+    if indicators["no_limit"]:
+        reasons.append("缺少LIMIT限制可能返回大量数据")
+
+    return f"建议优化原因: {', '.join(reasons)}"
+
+
+@tool
+def optimize_sql_query(sql_query: str, schema_info: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    优化SQL查询性能
+
+    Args:
+        sql_query: 原始SQL查询
+        schema_info: 模式信息
+
+    Returns:
+        优化后的SQL查句和优化建议
+    """
+    try:
+        # 构建优化提示
+        prompt = f"""
+请优化以下SQL查询的性能：
+
+原始SQL:
+{sql_query}
+
+表结构信息:
+{schema_info}
+
+请提供：
+1. 优化后的SQL语句
+2. 优化说明
+3. 性能改进建议
+
+优化重点：
+- 索引使用
+- 连接顺序
+- 查询条件优化
+- 避免全表扫描
+- 减少返回的列数
+- 添加适当的LIMIT
+"""
+
+        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
+        response = llm.invoke([HumanMessage(content=prompt)])
+
+        return {
+            "success": True,
+            "optimized_sql": response.content,
+            "original_sql": sql_query
         }
 
     except Exception as e:
@@ -241,7 +395,7 @@ def explain_sql_query(sql_query: str) -> Dict[str, Any]:
 4. 结果集预期
 """
         
-        llm = get_default_model()
+        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
         response = llm.invoke([HumanMessage(content=prompt)])
         
         return {
@@ -261,10 +415,10 @@ class SQLGeneratorAgent:
     """SQL生成代理"""
 
     def __init__(self):
-        self.name = "sql_generator_agent"
-        self.llm = get_default_model()
-        self.tools = [generate_sql_query, generate_sql_with_samples]
-        
+        self.name = "sql_generator_agent"  # 添加name属性
+        self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
+        self.tools = [generate_sql_query, generate_sql_with_samples, explain_sql_query]
+        # , analyze_sql_optimization_need, optimize_sql_query
         # 创建ReAct代理
         self.agent = create_react_agent(
             self.llm,
@@ -274,23 +428,41 @@ class SQLGeneratorAgent:
         )
     
     def _create_system_prompt(self) -> str:
-        """创建系统提示"""
-        return """你是一个专业的SQL生成专家。你的任务是根据用户查询和数据库模式信息生成准确的SQL语句。
+        """创建系统提示
+        
+        注意：简化流程后，SQL生成后直接执行，不再进行验证
+        因此需要在生成时就确保SQL的高质量
+        """
+        return """你是一个专业的SQL生成专家。你的任务是：
 
-工作流程：
+1. 根据用户查询和数据库模式信息生成准确的SQL语句
+2. 生成时就考虑SQL的正确性和安全性（因为不再有验证步骤）
+3. 提供SQL查询的详细解释
+
+智能工作流程：
 1. 检查是否有样本检索结果
 2. 如果有样本，优先使用 generate_sql_with_samples 工具
 3. 如果没有样本，使用 generate_sql_query 工具生成基础SQL
+4. 根据需要使用 explain_sql_query 工具解释查询逻辑
 
-SQL生成原则：
-- 确保语法正确性
+SQL生成原则（重要 - 因为不再有验证步骤）：
+- 确保语法绝对正确
 - 使用适当的连接方式
 - 应用正确的过滤条件
+- 生成时就考虑基本性能优化
 - 限制结果集大小（除非明确要求）
 - 使用正确的值映射
 - 充分利用样本提供的最佳实践
+- 避免危险操作（DROP, DELETE, UPDATE等）
 
-请始终生成高质量、可执行的SQL语句。"""
+样本利用策略：
+- 优先参考高相关性和高成功率的样本
+- 学习样本的SQL结构和模式
+- 适应当前查询的具体需求
+- 保持SQL的正确性和效率
+
+请始终生成高质量、可执行的SQL语句，并充分利用样本的指导作用。
+记住：生成的SQL将直接执行，不会经过验证步骤，所以必须确保质量！"""
 
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
         """处理SQL生成任务"""
@@ -343,15 +515,15 @@ SQL生成原则：
             # 提取生成的SQL
             generated_sql = self._extract_sql_from_result(result)
             
-            # 更新状态
+            # 更新状态 - 简化流程：直接进入执行阶段，跳过验证
             state["generated_sql"] = generated_sql
-            state["current_stage"] = "sql_validation"
+            state["current_stage"] = "sql_execution"  # 修改：跳过sql_validation
             state["agent_messages"]["sql_generator"] = result
             
             return {
                 "messages": result["messages"],
                 "generated_sql": generated_sql,
-                "current_stage": "sql_validation"
+                "current_stage": "sql_execution"  # 修改：跳过sql_validation
             }
             
         except Exception as e:

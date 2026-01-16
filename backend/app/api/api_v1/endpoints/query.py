@@ -51,6 +51,7 @@ async def chat_query(
     """
     支持多轮对话的智能查询接口
     包含澄清机制和分析洞察功能
+    支持自定义数据分析智能体
     """
     connection = crud.db_connection.get(db=db, id=chat_request.connection_id)
     if not connection:
@@ -70,21 +71,29 @@ async def chat_query(
             ])
             query_text = f"{query_text}\n\n澄清信息:\n{clarification_context}"
         
-        # 创建 LangGraph 实例
-        active_agent_profiles = []
-        from app.crud.crud_agent_profile import agent_profile as crud_agent_profile
-        
-        if chat_request.agent_ids:
-             for aid in chat_request.agent_ids:
-                 profile = crud_agent_profile.get(db=db, id=aid)
-                 if profile:
-                     active_agent_profiles.append(profile)
-        elif chat_request.agent_id:
+        # 处理自定义智能体
+        custom_analyst = None
+        if chat_request.agent_id:
+            # 使用单个智能体（优先使用agent_id作为自定义分析专家）
+            from app.crud.crud_agent_profile import agent_profile as crud_agent_profile
+            from app.agents.agent_factory import create_custom_analyst_agent
+            import logging
+            
+            logger = logging.getLogger(__name__)
+            
             profile = crud_agent_profile.get(db=db, id=chat_request.agent_id)
             if profile:
-                active_agent_profiles.append(profile)
+                if not profile.is_system:
+                    # 这是自定义智能体，用它替换默认的数据分析专家
+                    logger.info(f"Using custom analyst agent: {profile.name} (id={profile.id})")
+                    custom_analyst = create_custom_analyst_agent(profile, db)
+                else:
+                    logger.info(f"Agent {profile.name} is a system agent, using default workflow")
+            else:
+                logger.warning(f"Agent with id={chat_request.agent_id} not found, using default")
         
-        graph = IntelligentSQLGraph(active_agent_profiles=active_agent_profiles)
+        # 创建 LangGraph 实例（传入自定义智能体）
+        graph = IntelligentSQLGraph(custom_analyst=custom_analyst)
         
         # 处理查询
         from app.core.state import SQLMessageState
