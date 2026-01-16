@@ -83,6 +83,16 @@ class Settings(BaseSettings):
     MAX_EXAMPLES_PER_QUERY: int = int(os.getenv("MAX_EXAMPLES_PER_QUERY", "5"))
     PARALLEL_RETRIEVAL: bool = os.getenv("PARALLEL_RETRIEVAL", "true").lower() == "true"
 
+    # LangGraph Checkpointer 配置
+    CHECKPOINT_MODE: str = os.getenv("CHECKPOINT_MODE", "memory")  # memory | mysql | postgres
+    CHECKPOINT_DB_PATH: str = os.getenv("CHECKPOINT_DB_PATH", "./data/checkpoints.db")
+    CHECKPOINT_POSTGRES_URI: Optional[str] = os.getenv("CHECKPOINT_POSTGRES_URI", None)
+    
+    # 工作流配置
+    SQL_CONFIDENCE_THRESHOLD: float = float(os.getenv("SQL_CONFIDENCE_THRESHOLD", "0.7"))
+    MAX_WORKFLOW_RETRIES: int = int(os.getenv("MAX_WORKFLOW_RETRIES", "3"))
+    ENABLE_PARALLEL_EXECUTION: bool = os.getenv("ENABLE_PARALLEL_EXECUTION", "false").lower() == "true"
+
     class Config:
         case_sensitive = True
         env_file = ".env"

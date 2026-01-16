@@ -103,6 +103,14 @@ pids
 .eslintcache
 .node_repl_history
 
+# Next.js
+.next/
+out/
+build/
+.vercel
+*.tsbuildinfo
+next-env.d.ts
+
 # LangGraph
 .langgraph_api/
 

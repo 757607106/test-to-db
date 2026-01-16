@@ -11,7 +11,6 @@ from langgraph.prebuilt import create_react_agent
 
 from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
-from app.core.agent_config import CORE_AGENT_CHART_ANALYST
 from app.db.session import SessionLocal
 from app.models.agent_profile import AgentProfile
 from app.models.llm_config import LLMConfiguration
@@ -29,18 +28,18 @@ class SupervisorAgent:
         """创建工作代理 - 包含核心代理、图表代理及动态配置的代理"""
 
         # 核心代理：保证SQL查询的准确性和可靠性
+        from app.agents.agents.clarification_agent import clarification_agent      # 新增：澄清模糊查询
         from app.agents.agents.schema_agent import schema_agent          # 核心：分析用户查询并获取准确的数据库模式
         from app.agents.agents.sql_generator_agent import sql_generator_agent      # 核心：生成准确的SQL查询
-        from app.agents.agents.sql_validator_agent import sql_validator_agent      # 核心：验证SQL语法、安全性和性能
         from app.agents.agents.sql_executor_agent import sql_executor_agent        # 核心：安全地执行SQL查询
         from app.agents.agents.error_recovery_agent import error_recovery_agent    # 保障：处理错误并修正
         from app.agents.agents.chart_generator_agent import chart_generator_agent  # 核心：默认数据分析与可视化
 
         # 基础代理列表 (始终存在)
         agents = [
+            clarification_agent.agent,
             schema_agent.agent,
             sql_generator_agent.agent,
-            sql_validator_agent.agent,  # 重新启用 SQL 验证代理
             sql_executor_agent.agent,
             error_recovery_agent.agent
         ]
@@ -107,11 +106,11 @@ class SupervisorAgent:
 
 你管理以下代理：
 
+❓ **clarification_agent**: 检测模糊查询并生成澄清问题
 🔍 **schema_agent**: 分析用户查询，获取准确的数据库表结构
-⚙️ **sql_generator_agent**: 生成准确的SQL（已增强：智能处理模糊查询）
-✅ **sql_validator_agent**: 验证SQL语法、安全性和性能（可选但推荐）
+⚙️ **sql_generator_agent**: 生成准确的SQL
 🚀 **sql_executor_agent**: 安全执行SQL并返回结果
-🔧 **error_recovery_agent**: 处理错误并修正SQL，提高准确率
+🔧 **error_recovery_agent**: 处理错误并修正SQL
 """
         
         # 动态调整 Prompt
@@ -128,9 +127,11 @@ class SupervisorAgent:
 
         system_msg += """
 **核心工作流程:**
-1. SQL查询: 用户查询 → schema_agent → sql_generator_agent → sql_validator_agent(推荐) → sql_executor_agent
-2. 分析与可视化: 
-   - SQL执行成功后，必须将数据移交给分析专家。
+1. 首先判断查询是否模糊: 
+   - 模糊查询（如"最近的销售"、"一些用户"）→ clarification_agent → 等待用户澄清 → 继续
+   - 明确查询 → 直接进入下一步
+2. SQL查询: schema_agent → sql_generator_agent → sql_executor_agent
+3. 分析与可视化: SQL执行成功后，将数据移交给分析专家
 """
         
         if self.active_agent_profiles:

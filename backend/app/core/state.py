@@ -99,6 +99,19 @@ class SQLMessageState(AgentState):
     # 路由决策
     route_decision: Literal["general_chat", "data_query"] = "data_query"
 
+    # 图表配置
+    chart_config: Optional[Dict[str, Any]] = None
+    
+    # 分析结果
+    analysis_result: Optional[Dict[str, Any]] = None
+    
+    # 会话线程ID
+    thread_id: Optional[str] = None
+    
+    # 用户ID
+    user_id: Optional[str] = None
+
+
 def extract_connection_id(state: SQLMessageState) -> int:
     """从状态中提取数据库连接ID"""
     messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
