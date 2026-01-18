@@ -4,7 +4,7 @@ from app.api.api_v1.endpoints import (
     connections, schema, query, value_mappings, 
     graph_visualization, relationship_tips, hybrid_qa,
     dashboards, dashboard_widgets, dashboard_insights,
-    llm_configs, agent_profiles
+    llm_configs, agent_profiles, system_config
 )
 
 # 强制重新加载 - 修复API路由问题
@@ -44,3 +44,4 @@ api_router.include_router(dashboard_widgets.router, prefix="", tags=["widgets"])
 api_router.include_router(dashboard_insights.router, prefix="", tags=["insights"])
 api_router.include_router(llm_configs.router, prefix="/llm-configs", tags=["llm-configs"])
 api_router.include_router(agent_profiles.router, prefix="/agent-profiles", tags=["agent-profiles"])
+api_router.include_router(system_config.router, prefix="/system-config", tags=["system-config"])

@@ -8,3 +8,4 @@ from app.crud.crud_dashboard_widget import crud_dashboard_widget
 from app.crud.crud_dashboard_permission import crud_dashboard_permission
 from app.crud.crud_llm_config import llm_config
 from app.crud.crud_agent_profile import agent_profile
+from app.crud.crud_system_config import system_config

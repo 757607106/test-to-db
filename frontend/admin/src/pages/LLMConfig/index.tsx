@@ -1,17 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Table, Card, Button, Modal, Form, Input, 
-  Select, Switch, Space, Tag, message, Tooltip, Popconfirm 
+  Select, Switch, Space, Tag, message, Tooltip, Popconfirm, Badge 
 } from 'antd';
 import { 
   PlusOutlined, EditOutlined, DeleteOutlined, 
-  ApiOutlined, CheckCircleOutlined, CloseCircleOutlined 
+  ApiOutlined, CheckCircleOutlined, CloseCircleOutlined, StarOutlined, StarFilled 
 } from '@ant-design/icons';
 import { 
   getLLMConfigs, createLLMConfig, updateLLMConfig, 
   deleteLLMConfig, testLLMConfig, LLMConfig,
   getAgentProfileByName, createAgentProfile, updateAgentProfile
 } from '../../services/llmConfig';
+import { 
+  getDefaultEmbeddingModel, setDefaultEmbeddingModel, clearDefaultEmbeddingModel 
+} from '../../services/systemConfig';
 import { Divider, Typography, Row, Col } from 'antd';
 
 const { Option } = Select;
@@ -42,6 +45,9 @@ const LLMConfigPage: React.FC = () => {
   // 系统组件配置状态
   const [coreAgentConfigs, setCoreAgentConfigs] = useState<Record<string, number | null>>({});
   const [agentLoading, setAgentLoading] = useState(false);
+  
+  // Embedding默认模型配置
+  const [defaultEmbeddingId, setDefaultEmbeddingId] = useState<number | null>(null);
 
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -85,9 +91,24 @@ const LLMConfigPage: React.FC = () => {
     }
   };
 
+  // 加载默认Embedding配置
+  const fetchDefaultEmbedding = async () => {
+    try {
+      const response = await getDefaultEmbeddingModel();
+      if (response.data.source === 'database' && response.data.llm_config_id) {
+        setDefaultEmbeddingId(response.data.llm_config_id);
+      } else {
+        setDefaultEmbeddingId(null);
+      }
+    } catch (error) {
+      console.error('Failed to load default embedding config:', error);
+    }
+  };
+
   useEffect(() => {
     fetchConfigs();
     fetchCoreAgentConfigs();
+    fetchDefaultEmbedding();
   }, []);
 
   // 处理系统组件模型变更
@@ -169,6 +190,7 @@ const LLMConfigPage: React.FC = () => {
       fetchConfigs();
       // 重新加载系统智能体配置，因为可能有智能体使用了被删除的配置
       fetchCoreAgentConfigs();
+      fetchDefaultEmbedding();
     } catch (error: any) {
       console.error('Delete failed:', error);
       // 显示详细的错误信息
@@ -179,6 +201,30 @@ const LLMConfigPage: React.FC = () => {
       } else {
         message.error('删除失败，请稍后重试');
       }
+    }
+  };
+
+  // 处理设置默认Embedding
+  const handleSetDefaultEmbedding = async (id: number) => {
+    try {
+      await setDefaultEmbeddingModel(id);
+      message.success('已设置为默认Embedding模型');
+      setDefaultEmbeddingId(id);
+    } catch (error: any) {
+      console.error('Set default embedding failed:', error);
+      message.error(error.response?.data?.detail || '设置失败');
+    }
+  };
+
+  // 处理清除默认Embedding
+  const handleClearDefaultEmbedding = async () => {
+    try {
+      await clearDefaultEmbeddingModel();
+      message.success('已清除默认Embedding模型，将使用环境变量配置');
+      setDefaultEmbeddingId(null);
+    } catch (error: any) {
+      console.error('Clear default embedding failed:', error);
+      message.error('清除失败');
     }
   };
 
@@ -216,7 +262,14 @@ const LLMConfigPage: React.FC = () => {
       title: '模型名称',
       dataIndex: 'model_name',
       key: 'model_name',
-      render: (text: string) => <strong>{text}</strong>,
+      render: (text: string, record: LLMConfig) => (
+        <Space>
+          <strong>{text}</strong>
+          {record.model_type === 'embedding' && record.id === defaultEmbeddingId && (
+            <Badge count="默认" style={{ backgroundColor: '#52c41a' }} />
+          )}
+        </Space>
+      ),
     },
     {
       title: '类型',
@@ -249,6 +302,31 @@ const LLMConfigPage: React.FC = () => {
       key: 'action',
       render: (_: any, record: LLMConfig) => (
         <Space size="middle">
+          {record.model_type === 'embedding' && record.is_active && (
+            record.id === defaultEmbeddingId ? (
+              <Tooltip title="清除默认">
+                <Popconfirm
+                  title="确定清除默认Embedding模型吗？系统将使用环境变量配置。"
+                  onConfirm={handleClearDefaultEmbedding}
+                  okText="是"
+                  cancelText="否"
+                >
+                  <Button 
+                    type="text" 
+                    icon={<StarFilled style={{ color: '#faad14' }} />}
+                  />
+                </Popconfirm>
+              </Tooltip>
+            ) : (
+              <Tooltip title="设为默认">
+                <Button 
+                  type="text" 
+                  icon={<StarOutlined />} 
+                  onClick={() => handleSetDefaultEmbedding(record.id)} 
+                />
+              </Tooltip>
+            )
+          )}
           <Tooltip title="编辑">
             <Button 
               type="text" 
@@ -365,12 +443,13 @@ const LLMConfigPage: React.FC = () => {
             label="提供商 (Provider)"
             rules={[{ required: true, message: '请输入提供商名称' }]}
           >
-            <Select placeholder="选择或输入提供商" mode="tags">
+            <Select placeholder="选择或输入提供商" mode="tags" maxTagCount={1}>
               <Option value="OpenAI">OpenAI</Option>
               <Option value="Azure">Azure OpenAI</Option>
               <Option value="Anthropic">Anthropic</Option>
               <Option value="Ollama">Ollama</Option>
               <Option value="DeepSeek">DeepSeek</Option>
+              <Option value="Aliyun">Aliyun (阿里云)</Option>
             </Select>
           </Form.Item>
 

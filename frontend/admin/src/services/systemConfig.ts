@@ -1,0 +1,59 @@
+import axios from 'axios';
+
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000/api';
+
+export interface SystemConfigResponse {
+  id: number;
+  config_key: string;
+  config_value: string | null;
+  description: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface DefaultEmbeddingResponse {
+  source: 'database' | 'environment_variables';
+  llm_config_id: number | null;
+  provider?: string;
+  model_name?: string;
+  base_url?: string;
+  is_active?: boolean;
+  message?: string;
+}
+
+/**
+ * Get system configuration by key
+ */
+export const getSystemConfig = async (configKey: string) => {
+  return axios.get<SystemConfigResponse>(`${API_BASE_URL}/system-config/${configKey}`);
+};
+
+/**
+ * Update system configuration
+ */
+export const updateSystemConfig = async (configKey: string, configValue: string) => {
+  return axios.put<SystemConfigResponse>(`${API_BASE_URL}/system-config/${configKey}`, {
+    config_value: configValue
+  });
+};
+
+/**
+ * Get current default embedding model
+ */
+export const getDefaultEmbeddingModel = async () => {
+  return axios.get<DefaultEmbeddingResponse>(`${API_BASE_URL}/system-config/default-embedding/current`);
+};
+
+/**
+ * Set default embedding model
+ */
+export const setDefaultEmbeddingModel = async (llmConfigId: number) => {
+  return axios.post(`${API_BASE_URL}/system-config/default-embedding/${llmConfigId}`);
+};
+
+/**
+ * Clear default embedding model (fall back to environment variables)
+ */
+export const clearDefaultEmbeddingModel = async () => {
+  return axios.delete(`${API_BASE_URL}/system-config/default-embedding`);
+};

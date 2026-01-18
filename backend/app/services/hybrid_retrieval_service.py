@@ -19,6 +19,7 @@ from openai import AsyncOpenAI
 import numpy as np
 
 from app.core.config import settings
+from app.models.llm_config import LLMConfiguration
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -89,15 +90,39 @@ class RetrievalResult:
 # ===== 向量化服务 =====
 
 class VectorService:
-    """优化的向量化服务 - 支持Ollama和SentenceTransformer"""
+    """优化的向量化服务 - 支持多种Embedding提供商（OpenAI, Ollama, Aliyun等）"""
 
-    def __init__(self, service_type: str = None, model_name: str = None):
-        self.service_type = service_type or settings.VECTOR_SERVICE_TYPE
-        self.model_name = model_name or (
-            settings.OLLAMA_EMBEDDING_MODEL if self.service_type == "ollama"
-            else settings.EMBEDDING_MODEL
-        )
+    def __init__(self, llm_config: Optional[LLMConfiguration] = None, service_type: str = None, model_name: str = None):
+        """
+        初始化向量服务
+        
+        Args:
+            llm_config: LLM配置对象（优先级最高）
+            service_type: 服务类型（兼容旧代码，用于fallback）
+            model_name: 模型名称（兼容旧代码，用于fallback）
+        """
+        # 如果提供了llm_config，优先使用
+        if llm_config:
+            self.llm_config = llm_config
+            self.provider = llm_config.provider.lower()
+            self.model_name = llm_config.model_name
+            self.api_key = llm_config.api_key
+            self.base_url = llm_config.base_url
+            self.service_type = self._map_provider_to_service_type(self.provider)
+        else:
+            # Fallback到旧的参数模式
+            self.llm_config = None
+            self.service_type = service_type or settings.VECTOR_SERVICE_TYPE
+            self.model_name = model_name or (
+                settings.OLLAMA_EMBEDDING_MODEL if self.service_type == "ollama"
+                else settings.EMBEDDING_MODEL
+            )
+            self.provider = self.service_type
+            self.api_key = None
+            self.base_url = None
+        
         self.model = None
+        self.client = None  # For AsyncOpenAI
         self.dimension = None
         self._initialized = False
         self._cache = {} if settings.VECTOR_CACHE_ENABLED else None
@@ -108,11 +133,24 @@ class VectorService:
         self.max_retries = settings.VECTOR_MAX_RETRIES
         self.retry_delay = settings.VECTOR_RETRY_DELAY
 
+    def _map_provider_to_service_type(self, provider: str) -> str:
+        """将provider映射到service_type（用于兼容旧代码）"""
+        provider_lower = provider.lower()
+        if provider_lower == "ollama":
+            return "ollama"
+        elif provider_lower in ["openai", "azure", "deepseek", "aliyun", "volcengine"]:
+            return "aliyun"  # 使用aliyun的初始化方式（AsyncOpenAI）
+        else:
+            return "aliyun"  # 默认使用OpenAI兼容方式
+
     async def initialize(self):
         """初始化模型"""
         if not self._initialized:
             try:
-                if self.service_type == "ollama":
+                if self.llm_config:
+                    # 使用数据库配置初始化
+                    await self._initialize_from_config()
+                elif self.service_type == "ollama":
                     await self._initialize_ollama()
                 elif self.service_type == "aliyun":
                     await self._initialize_aliyun()
@@ -121,14 +159,65 @@ class VectorService:
                     # await self._initialize_sentence_transformer()
 
                 self._initialized = True
-                logger.info(f"Vector service initialized successfully with {self.service_type}")
+                logger.info(f"Vector service initialized successfully with provider={self.provider}, model={self.model_name}")
 
             except Exception as e:
                 logger.error(f"Failed to initialize vector service: {str(e)}")
                 raise
 
+    async def _initialize_from_config(self):
+        """从LLMConfiguration初始化模型"""
+        if not self.llm_config:
+            raise ValueError("llm_config is required for _initialize_from_config")
+        
+        provider = self.llm_config.provider.lower()
+        logger.info(f"Initializing embedding model from config: provider={provider}, model={self.model_name}")
+        
+        # OpenAI兼容的提供商（OpenAI, Azure, DeepSeek, Aliyun等）
+        if provider in ["openai", "azure", "deepseek", "aliyun", "volcengine"]:
+            api_key = self.llm_config.api_key
+            base_url = self.llm_config.base_url
+            
+            if not api_key:
+                raise ValueError(f"API key is required for provider '{provider}'")
+            
+            # 使用 AsyncOpenAI 客户端
+            self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+            
+            # 测试连接并获取维度
+            try:
+                response = await self.client.embeddings.create(
+                    model=self.model_name,
+                    input="test"
+                )
+                self.dimension = len(response.data[0].embedding)
+                logger.info(f"Embedding model loaded: provider={provider}, dimension={self.dimension}")
+            except Exception as e:
+                logger.error(f"Failed to connect to {provider}: {e}")
+                raise
+        
+        # Ollama
+        elif provider == "ollama":
+            base_url = self.llm_config.base_url or settings.OLLAMA_BASE_URL
+            
+            self.model = OllamaEmbeddings(
+                model=self.model_name,
+                base_url=base_url,
+                temperature=settings.OLLAMA_TEMPERATURE,
+            )
+            
+            # 测试连接并获取维度
+            test_text = "test"
+            test_embedding = await self._embed_with_retry(test_text)
+            self.dimension = len(test_embedding)
+            
+            logger.info(f"Ollama model loaded: model={self.model_name}, dimension={self.dimension}")
+        
+        else:
+            raise ValueError(f"Unsupported embedding provider: {provider}")
+
     async def _initialize_aliyun(self):
-        """初始化阿里云DashScope嵌入模型"""
+        """初始化阿里云DashScope嵌入模型（Fallback到环境变量）"""
         logger.info(f"Initializing Aliyun DashScope embedding model: {self.model_name}")
         
         api_key = settings.DASHSCOPE_API_KEY
@@ -153,7 +242,7 @@ class VectorService:
             raise
 
     async def _initialize_ollama(self):
-        """初始化Ollama嵌入模型"""
+        """初始化Ollama嵌入模型（Fallback到环境变量）"""
 
         logger.info(f"Initializing Ollama embedding model: {self.model_name}")
 
@@ -198,10 +287,7 @@ class VectorService:
         processed_question = self._preprocess_question(question)
 
         try:
-            if self.service_type == "ollama":
-                embedding = await self._embed_with_retry(processed_question)
-            else:
-                embedding = self.model.encode(processed_question).tolist()
+            embedding = await self._embed_with_retry(processed_question)
 
             # 存储到缓存
             if self._cache is not None:
@@ -241,12 +327,8 @@ class VectorService:
             processed_questions = [self._preprocess_question(q) for q in uncached_texts]
 
             try:
-                if self.service_type == "ollama":
-                    # Ollama批量处理
-                    embeddings = await self._batch_embed_ollama(processed_questions)
-                else:
-                    # SentenceTransformer批量处理
-                    embeddings = self.model.encode(processed_questions).tolist()
+                # 批量处理
+                embeddings = await self._batch_embed_ollama(processed_questions)
 
                 # 存储到缓存并合并结果
                 for i, (original_idx, original_question) in enumerate(uncached_questions):
@@ -278,18 +360,21 @@ class VectorService:
         """带重试的单个文本嵌入"""
         for attempt in range(self.max_retries):
             try:
-                if self.service_type == "ollama":
-                    # 使用异步方法
-                    embedding = await self.model.aembed_query(text)
-                    return embedding
-                elif self.service_type == "aliyun":
+                # 如果使用client（OpenAI兼容的API）
+                if self.client:
                     response = await self.client.embeddings.create(
                         model=self.model_name,
                         input=text
                     )
                     return response.data[0].embedding
+                
+                # 如果使用model（Ollama）
+                elif self.model:
+                    embedding = await self.model.aembed_query(text)
+                    return embedding
+                
                 else:
-                    return self.model.encode(text).tolist()
+                    raise ValueError("Neither client nor model is initialized")
 
             except Exception as e:
                 if attempt == self.max_retries - 1:
@@ -302,12 +387,21 @@ class VectorService:
         """带重试的批量文本嵌入"""
         for attempt in range(self.max_retries):
             try:
-                if self.service_type == "ollama":
-                    # Ollama批量嵌入
+                # 如果使用client（OpenAI兼容的API），批量调用
+                if self.client:
+                    response = await self.client.embeddings.create(
+                        model=self.model_name,
+                        input=texts
+                    )
+                    return [item.embedding for item in response.data]
+                
+                # 如果使用model（Ollama）
+                elif self.model:
                     embeddings = await self.model.aembed_documents(texts)
                     return embeddings
+                
                 else:
-                    return self.model.encode(texts).tolist()
+                    raise ValueError("Neither client nor model is initialized")
 
             except Exception as e:
                 if attempt == self.max_retries - 1:
@@ -327,11 +421,8 @@ class VectorService:
         # 移除多余的空白字符
         processed = re.sub(r'\s+', ' ', processed)
 
-        # 可选：转换为小写（根据模型需求）
-        # Ollama和Aliyun模型可能对大小写敏感，或者处理方式不同
+        # 对于Ollama和OpenAI兼容的API，保留大小写
         # 一般来说，保留大小写可能包含更多语义信息
-        if self.service_type not in ["ollama", "aliyun"]: 
-            processed = processed.lower()
 
         return processed
 
