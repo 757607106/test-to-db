@@ -7,17 +7,28 @@
 2. 管理LangGraph状态图的构建和编译
 3. 支持动态加载自定义分析专家Agent
 4. 提供便捷的查询处理方法
+5. 支持澄清模式（interrupt机制）
 
 架构说明:
 - 使用LangGraph的StateGraph管理整体流程
-- 包含两个核心节点: load_custom_agent 和 supervisor
+- 包含三个核心节点: load_custom_agent、clarification 和 supervisor
+- clarification节点使用interrupt()实现人机交互
 - supervisor节点委托给SupervisorAgent处理具体的Agent协调
+
+图结构:
+    START → load_custom_agent → clarification → supervisor → END
+    
+    其中clarification节点会:
+    - 检测用户查询是否模糊
+    - 如果模糊，使用interrupt()暂停等待用户回复
+    - 用户回复后，整合信息继续执行
 """
 from typing import Dict, Any, List, Optional
 import logging
 
 from app.core.state import SQLMessageState
 from app.agents.agents.supervisor_agent import create_intelligent_sql_supervisor
+from app.agents.nodes.clarification_node import clarification_node
 from app.models.agent_profile import AgentProfile
 
 # 配置日志
@@ -87,13 +98,15 @@ class IntelligentSQLGraph:
     2. 提供便捷的查询处理接口
     3. 支持动态加载自定义分析专家
     4. 协调Supervisor和Worker Agents的工作
+    5. 支持澄清模式（对模糊查询进行澄清）
     
     架构:
-    用户查询 → load_custom_agent节点 → supervisor节点 → 结束
+    用户查询 → load_custom_agent节点 → clarification节点 → supervisor节点 → 结束
     
     特性:
     - 支持自定义分析专家的动态加载
     - 使用LangGraph管理状态流转
+    - 支持澄清模式（使用interrupt机制）
     - 提供同步和异步接口
     """
 
@@ -126,11 +139,12 @@ class IntelligentSQLGraph:
             CompiledGraph: 编译后的状态图
             
         图结构:
-            START → load_custom_agent → supervisor → END
+            START → load_custom_agent → clarification → [supervisor | END]
             
         说明:
             - load_custom_agent: 检查并加载自定义Agent（如果需要）
-            - supervisor: 执行主要的查询处理流程
+            - clarification: 检测查询模糊性，如需澄清则生成AI消息并结束
+            - supervisor: 执行主要的查询处理流程（仅当不需要澄清时）
             - 使用SQLMessageState作为状态类型
             - 集成Checkpointer实现多轮对话和状态持久化
         """
@@ -147,6 +161,11 @@ class IntelligentSQLGraph:
         # 职责: 从消息中提取agent_id，如果存在则加载自定义Agent
         graph.add_node("load_custom_agent", self._load_custom_agent_node)
         
+        # ✅ 添加澄清节点
+        # 职责: 检测查询模糊性，如需澄清则生成AI消息
+        # 使用多轮对话机制，用户在聊天框回复
+        graph.add_node("clarification", clarification_node)
+        
         # 添加supervisor节点
         # 职责: 协调所有Worker Agents完成查询处理
         graph.add_node("supervisor", self._supervisor_node)
@@ -154,22 +173,47 @@ class IntelligentSQLGraph:
         # 设置入口点 - 所有查询首先进入load_custom_agent节点
         graph.set_entry_point("load_custom_agent")
         
-        # 定义边: load_custom_agent → supervisor
-        # 无条件转移，总是执行supervisor
-        graph.add_edge("load_custom_agent", "supervisor")
+        # 定义边: load_custom_agent → clarification
+        # 加载自定义Agent后，进入澄清检测
+        graph.add_edge("load_custom_agent", "clarification")
+        
+        # ✅ 条件边: clarification → [supervisor | END]
+        # 如果正在等待用户澄清回复，直接结束图（等待下一轮输入）
+        # 否则继续到supervisor执行查询
+        def after_clarification(state: SQLMessageState) -> str:
+            """判断澄清后的下一步"""
+            current_stage = state.get("current_stage", "")
+            pending_clarification = state.get("pending_clarification", False)
+            
+            if current_stage == "awaiting_clarification" or pending_clarification:
+                logger.info("等待用户澄清回复，结束当前图执行")
+                return "end"
+            else:
+                logger.info("澄清完成，继续到supervisor")
+                return "supervisor"
+        
+        graph.add_conditional_edges(
+            "clarification",
+            after_clarification,
+            {
+                "supervisor": "supervisor",
+                "end": END
+            }
+        )
         
         # 定义边: supervisor → END
         # Supervisor完成后结束整个流程
         graph.add_edge("supervisor", END)
         
         # ✅ 获取Checkpointer并编译图
-        # 如果Checkpointer已启用，图将支持状态持久化和多轮对话
+        # Checkpointer用于支持多轮对话和状态持久化
         checkpointer = get_checkpointer()
         
         if checkpointer:
             logger.info("✓ 使用 Checkpointer 编译图（支持多轮对话和状态持久化）")
             return graph.compile(checkpointer=checkpointer)
         else:
+            logger.warning("⚠ 未配置 Checkpointer，多轮对话功能可能受限")
             logger.info("✓ 不使用 Checkpointer 编译图（无状态模式）")
             return graph.compile()
     

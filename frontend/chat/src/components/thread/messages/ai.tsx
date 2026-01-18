@@ -13,6 +13,7 @@ import { isAgentInboxInterruptSchema } from "@/lib/agent-inbox-interrupt";
 import { ThreadView } from "../agent-inbox";
 import { useQueryState, parseAsBoolean } from "nuqs";
 import { GenericInterruptView } from "./generic-interrupt";
+import { ClarificationInterruptView, isClarificationInterrupt } from "./clarification-interrupt";
 import { useArtifact } from "../artifact";
 
 /**
@@ -124,17 +125,30 @@ function Interrupt({
   isLastMessage,
   hasNoAIOrToolMessages,
 }: InterruptProps) {
+  // 只在最后一条消息或没有AI/Tool消息时显示interrupt
+  const shouldShow = isLastMessage || hasNoAIOrToolMessages;
+  
+  if (!shouldShow || !interruptValue) {
+    return null;
+  }
+  
   return (
     <>
-      {isAgentInboxInterruptSchema(interruptValue) &&
-        (isLastMessage || hasNoAIOrToolMessages) && (
-          <ThreadView interrupt={interruptValue} />
-        )}
-      {interruptValue &&
-      !isAgentInboxInterruptSchema(interruptValue) &&
-      (isLastMessage || hasNoAIOrToolMessages) ? (
+      {/* Agent Inbox 类型的 interrupt */}
+      {isAgentInboxInterruptSchema(interruptValue) && (
+        <ThreadView interrupt={interruptValue} />
+      )}
+      
+      {/* 澄清类型的 interrupt - 使用专门的澄清组件 */}
+      {isClarificationInterrupt(interruptValue) && (
+        <ClarificationInterruptView interrupt={interruptValue} />
+      )}
+      
+      {/* 其他类型的 interrupt - 使用通用组件 */}
+      {!isAgentInboxInterruptSchema(interruptValue) &&
+       !isClarificationInterrupt(interruptValue) && (
         <GenericInterruptView interrupt={interruptValue} />
-      ) : null}
+      )}
     </>
   );
 }

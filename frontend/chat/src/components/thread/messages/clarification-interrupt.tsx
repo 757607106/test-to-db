@@ -25,6 +25,7 @@ export interface ClarificationInterruptData {
   message?: string;
   round?: number;
   max_rounds?: number;
+  session_id?: string;  // 用于验证 resume 数据是否匹配当前查询
 }
 
 interface ClarificationInterruptViewProps {
@@ -63,20 +64,25 @@ export function ClarificationInterruptView({
 
     setIsSubmitting(true);
 
-    // 格式化响应
-    const formattedResponses = questions.map((q) => ({
-      question_id: q.id,
-      answer: responses[q.id],
-    }));
+    // 格式化响应，包含 session_id 用于验证
+    const formattedResponses = {
+      session_id: interrupt.session_id,  // 包含 session_id 用于后端验证
+      answers: questions.map((q) => ({
+        question_id: q.id,
+        answer: responses[q.id],
+      })),
+    };
 
     try {
-      // 使用 Command(resume=...) 恢复图执行
+      // 使用 command.resume 恢复图执行（正确方式）
       stream.submit(
-        { resume: formattedResponses } as any,
+        {},  // 第一个参数为空对象
         {
+          command: {
+            resume: formattedResponses,  // resume 放在 command 对象中
+          },
           streamMode: ["values", "messages"],
           streamSubgraphs: true,
-          streamResumable: true,
         } as any
       );
     } finally {
@@ -87,11 +93,13 @@ export function ClarificationInterruptView({
   const handleSkip = () => {
     // 跳过澄清，直接继续
     stream.submit(
-      { resume: [] } as any,
+      {},  // 第一个参数为空对象
       {
+        command: {
+          resume: [],  // resume 放在 command 对象中
+        },
         streamMode: ["values", "messages"],
         streamSubgraphs: true,
-        streamResumable: true,
       } as any
     );
   };
