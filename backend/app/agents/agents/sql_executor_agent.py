@@ -48,12 +48,10 @@ def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> Dict[
             cached_result = _execution_cache[cache_key].copy()
             cached_result["from_cache"] = True
             cached_result["cache_age_seconds"] = int(cache_age)
-            print(f"🔄 使用缓存结果 (age: {int(cache_age)}s): {sql_query[:50]}...")
             return cached_result
     
     # 检查是否正在执行（防止并发重复）
     if cache_key in _cache_lock:
-        print(f"⏳ 查询正在执行中，等待结果: {sql_query[:50]}...")
         # 等待一小段时间后返回提示
         time.sleep(0.5)
         if cache_key in _execution_cache:
@@ -67,7 +65,6 @@ def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> Dict[
     _cache_lock[cache_key] = True
     
     try:
-        print(f"🔍 执行SQL查询: {sql_query[:50]}...")
         
         # 根据connection_id获取数据库连接并执行查询
         from app.services.db_service import get_db_connection_by_id, execute_query_with_connection
@@ -112,13 +109,10 @@ def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> Dict[
                 for key in keys_to_delete:
                     _execution_cache.pop(key, None)
                     _cache_timestamps.pop(key, None)
-                print(f"🧹 清理了 {len(keys_to_delete)} 个旧缓存")
         
-        print(f"✅ SQL执行成功: 返回 {len(result_data)} 行")
         return result
 
     except Exception as e:
-        print(f"❌ SQL执行失败: {str(e)}")
         return {
             "success": False,
             "error": str(e),

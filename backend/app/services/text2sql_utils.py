@@ -1,9 +1,15 @@
 """
 Text2SQL工具模块
 提供查询分析、表结构检索、SQL处理等工具函数
+
+优化历史:
+- 2026-01: 合并LLM调用，减少延迟
+- 2026-01: 添加缓存优化
 """
 import re
 import json
+import time
+import logging
 import sqlparse
 from typing import Dict, Any, List, Optional, Tuple, Set
 from sqlalchemy.orm import Session
@@ -14,18 +20,134 @@ from app.core.llms import get_default_model
 from app import crud
 
 
-# 查询分析缓存，避免重复的LLM调用
-query_analysis_cache = {}
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# 缓存配置（性能优化）
+# ============================================================================
+
+# 缓存TTL配置
+QUERY_ANALYSIS_CACHE_TTL = 600  # 查询分析缓存: 10分钟
+QUERY_ANALYSIS_CACHE_MAX_SIZE = 100  # 最大缓存条目数
+SCHEMA_CACHE_TTL = 1800  # Schema缓存: 30分钟（表结构不常变）
+
+# 查询分析缓存（带TTL和大小限制）
+query_analysis_cache: Dict[str, Dict[str, Any]] = {}
+query_analysis_cache_timestamps: Dict[str, float] = {}
+
+# Schema缓存（按connection_id缓存表结构信息）
+_schema_cache: Dict[int, Dict[str, Any]] = {}
+_schema_cache_timestamps: Dict[int, float] = {}
+
+
+def _is_query_cache_valid(query: str) -> bool:
+    """检查查询缓存是否有效"""
+    if query not in query_analysis_cache:
+        return False
+    cache_time = query_analysis_cache_timestamps.get(query, 0)
+    return (time.time() - cache_time) < QUERY_ANALYSIS_CACHE_TTL
+
+
+def _is_schema_cache_valid(connection_id: int) -> bool:
+    """检查Schema缓存是否有效"""
+    if connection_id not in _schema_cache:
+        return False
+    cache_time = _schema_cache_timestamps.get(connection_id, 0)
+    return (time.time() - cache_time) < SCHEMA_CACHE_TTL
+
+
+def _cleanup_query_cache():
+    """清理过期和超出大小的缓存"""
+    global query_analysis_cache, query_analysis_cache_timestamps
+    
+    current_time = time.time()
+    
+    # 移除过期条目
+    expired_keys = [
+        k for k, t in query_analysis_cache_timestamps.items()
+        if (current_time - t) >= QUERY_ANALYSIS_CACHE_TTL
+    ]
+    for k in expired_keys:
+        query_analysis_cache.pop(k, None)
+        query_analysis_cache_timestamps.pop(k, None)
+    
+    # 如果仍超过大小限制，移除最旧的条目
+    if len(query_analysis_cache) > QUERY_ANALYSIS_CACHE_MAX_SIZE:
+        sorted_items = sorted(query_analysis_cache_timestamps.items(), key=lambda x: x[1])
+        items_to_remove = len(query_analysis_cache) - QUERY_ANALYSIS_CACHE_MAX_SIZE
+        for k, _ in sorted_items[:items_to_remove]:
+            query_analysis_cache.pop(k, None)
+            query_analysis_cache_timestamps.pop(k, None)
+
+
+def get_cached_all_tables(connection_id: int, neo4j_session) -> List[Dict[str, Any]]:
+    """
+    获取缓存的所有表信息（优化Neo4j查询）
+    
+    Args:
+        connection_id: 数据库连接ID
+        neo4j_session: Neo4j会话
+        
+    Returns:
+        表信息列表
+    """
+    cache_key = f"tables:{connection_id}"
+    
+    # 检查缓存
+    if _is_schema_cache_valid(connection_id) and cache_key in _schema_cache:
+        logger.debug(f"Using cached schema for connection {connection_id}")
+        return _schema_cache[cache_key]
+    
+    # 从Neo4j查询
+    all_tables = neo4j_session.run(
+        """
+        MATCH (t:Table {connection_id: $connection_id})
+        RETURN t.id AS id, t.name AS name, t.description AS description
+        """,
+        connection_id=connection_id
+    ).data()
+    
+    # 缓存结果
+    _schema_cache[cache_key] = all_tables
+    _schema_cache_timestamps[connection_id] = time.time()
+    
+    logger.debug(f"Cached {len(all_tables)} tables for connection {connection_id}")
+    return all_tables
+
+
+def clear_schema_cache(connection_id: Optional[int] = None):
+    """
+    清除Schema缓存
+    
+    Args:
+        connection_id: 指定连接ID，如果为None则清除所有缓存
+    """
+    global _schema_cache, _schema_cache_timestamps
+    
+    if connection_id is not None:
+        cache_key = f"tables:{connection_id}"
+        _schema_cache.pop(cache_key, None)
+        _schema_cache_timestamps.pop(connection_id, None)
+        logger.info(f"Cleared schema cache for connection {connection_id}")
+    else:
+        _schema_cache.clear()
+        _schema_cache_timestamps.clear()
+        logger.info("Cleared all schema cache")
 
 
 def analyze_query_with_llm(query: str) -> Dict[str, Any]:
     """
     使用LLM分析自然语言查询，提取关键实体和意图
     返回包含实体、关系和查询意图的结构化分析
+    
+    优化：使用带TTL的缓存
     """
-    # 检查缓存
-    if query in query_analysis_cache:
+    # 检查缓存（带TTL验证）
+    if _is_query_cache_valid(query):
+        logger.debug(f"Using cached query analysis: {query[:30]}...")
         return query_analysis_cache[query]
+    
     try:
         # 为LLM准备提示
         prompt = f"""
@@ -46,7 +168,6 @@ def analyze_query_with_llm(query: str) -> Dict[str, Any]:
         """
         # 调用LLM
         model_client = get_default_model()
-        # 直接使用model_client以保持一致性
         response = model_client.invoke(
             [{"role": "user", "content": prompt}, {"role": "system", "content": "你是一名数据库专家，擅长根据自然语言分析相关的数据库表及列"}]
         )
@@ -65,14 +186,145 @@ def analyze_query_with_llm(query: str) -> Dict[str, Any]:
         else:
             analysis = _create_fallback_analysis(query)
 
-        # 缓存结果
+        # 缓存结果（带时间戳）
+        _cleanup_query_cache()  # 先清理过期缓存
         query_analysis_cache[query] = analysis
+        query_analysis_cache_timestamps[query] = time.time()
+        
         return analysis
     except Exception as e:
         # 如果发生任何错误，回退到关键词提取
+        logger.warning(f"LLM query analysis failed: {e}, using fallback")
         analysis = _create_fallback_analysis(query)
         query_analysis_cache[query] = analysis
+        query_analysis_cache_timestamps[query] = time.time()
         return analysis
+
+
+def analyze_query_and_find_tables_unified(
+    query: str, 
+    all_tables: List[Dict[str, Any]]
+) -> Tuple[Dict[str, Any], List[Tuple[int, float]]]:
+    """
+    统一的查询分析和表匹配函数 - 合并为一次LLM调用
+    
+    优化：将原来的两次LLM调用合并为一次，大幅减少延迟
+    
+    Args:
+        query: 用户自然语言查询
+        all_tables: 所有可用表的列表
+        
+    Returns:
+        Tuple[查询分析结果, 相关表列表(table_id, score)]
+    """
+    # 检查缓存
+    cache_key = f"{query}:{hash(str(all_tables))}"
+    if _is_query_cache_valid(cache_key):
+        cached = query_analysis_cache[cache_key]
+        return cached.get("analysis", {}), cached.get("tables", [])
+    
+    # 准备表信息
+    tables_info = "\n".join([
+        f"表ID: {t['id']} - 名称: {t['name']} - 描述: {t['description'] or '无描述'}"
+        for t in all_tables
+    ])
+    
+    # 统一提示词 - 一次完成分析和表匹配
+    unified_prompt = f"""你是一名数据库专家。请同时完成以下两个任务：
+
+**任务1: 分析查询**
+分析用户的自然语言查询，提取关键实体和意图。
+
+**任务2: 匹配相关表**
+从可用表中找出与查询相关的表，并按相关性评分。
+
+---
+用户查询: "{query}"
+
+可用表:
+{tables_info}
+---
+
+请以JSON格式返回（必须同时包含analysis和relevant_tables两部分）:
+{{
+    "analysis": {{
+        "entities": ["实体1", "实体2"],
+        "relationships": ["关系描述"],
+        "query_intent": "查询意图描述",
+        "likely_aggregations": ["count", "sum"],
+        "time_related": false,
+        "comparison_related": false
+    }},
+    "relevant_tables": [
+        {{
+            "table_id": 123,
+            "relevance_score": 8.5,
+            "reasoning": "相关原因"
+        }}
+    ]
+}}
+
+注意：
+- relevant_tables 中只包含相关性分数>3的表
+- table_id 必须是整数
+- relevance_score 范围是0-10
+只返回JSON，不要其他内容。"""
+
+    try:
+        model_client = get_default_model()
+        response = model_client.invoke(
+            [{"role": "user", "content": unified_prompt},
+             {"role": "system", "content": "你是一名数据库专家，擅长分析自然语言查询并匹配相关数据库表"}]
+        )
+        
+        response_text = response.content
+        
+        # 解析JSON
+        json_match = re.search(r'\{[\s\S]*\}', response_text)
+        if json_match:
+            result = json.loads(json_match.group(0))
+            
+            analysis = result.get("analysis", _create_fallback_analysis(query))
+            
+            # 处理表匹配结果
+            relevant_tables = []
+            for t in result.get("relevant_tables", []):
+                if "table_id" in t and "relevance_score" in t:
+                    if t["relevance_score"] > 3:
+                        table_id = t["table_id"]
+                        if not isinstance(table_id, int):
+                            try:
+                                table_id = int(table_id)
+                            except (ValueError, TypeError):
+                                continue
+                        relevant_tables.append((table_id, t["relevance_score"]))
+            
+            # 如果没有找到相关表，使用基本匹配
+            if not relevant_tables:
+                relevant_tables = basic_table_matching(query, all_tables)
+            
+            # 缓存结果
+            _cleanup_query_cache()
+            query_analysis_cache[cache_key] = {
+                "analysis": analysis,
+                "tables": relevant_tables
+            }
+            query_analysis_cache_timestamps[cache_key] = time.time()
+            
+            # 同时更新简单查询缓存
+            query_analysis_cache[query] = analysis
+            query_analysis_cache_timestamps[query] = time.time()
+            
+            logger.info(f"Unified analysis found {len(relevant_tables)} relevant tables")
+            return analysis, relevant_tables
+        else:
+            raise ValueError("Failed to parse LLM response")
+            
+    except Exception as e:
+        logger.warning(f"Unified analysis failed: {e}, using fallback")
+        analysis = _create_fallback_analysis(query)
+        relevant_tables = basic_table_matching(query, all_tables)
+        return analysis, relevant_tables
 
 
 def _create_fallback_analysis(query: str) -> Dict[str, Any]:
@@ -409,11 +661,10 @@ def retrieve_relevant_schema(db: Session, connection_id: int, query: str) -> Dic
     """
     基于自然语言查询检索相关的表结构信息
     使用Neo4j图数据库和LLM找到相关表和列
+    
+    优化：使用统一的LLM调用，减少延迟
     """
     try:
-        # 1. 使用LLM分析查询并提取关键实体和意图
-        query_analysis = analyze_query_with_llm(query)
-
         # 连接到Neo4j
         driver = GraphDatabase.driver(
             settings.NEO4J_URI,
@@ -425,21 +676,16 @@ def retrieve_relevant_schema(db: Session, connection_id: int, query: str) -> Dic
         relevant_columns = set()
         table_relevance_scores = {}
 
-        with driver.session() as session:
-            # 2. 首先，获取此连接的所有表及其描述
-            # 这将用于语义匹配
-            all_tables = session.run(
-                """
-                MATCH (t:Table {connection_id: $connection_id})
-                RETURN t.id AS id, t.name AS name, t.description AS description
-                """,
-                connection_id=connection_id
-            ).data()
+        with driver.session() as neo4j_session:
+            # 1. 优化：使用缓存获取所有表（减少Neo4j查询）
+            all_tables = get_cached_all_tables(connection_id, neo4j_session)
 
-            # 3. 使用语义搜索基于查询分析找到相关表
-            relevant_table_ids = find_relevant_tables_semantic(query, query_analysis, all_tables)
+            # 2. 优化：使用统一函数同时完成查询分析和表匹配（单次LLM调用）
+            query_analysis, relevant_table_ids = analyze_query_and_find_tables_unified(
+                query, all_tables
+            )
 
-            # 4. 按ID获取表并设置相关性分数
+            # 3. 按ID获取表并设置相关性分数
             for table_id, relevance_score in relevant_table_ids:
                 # 确保table_id是整数类型
                 if not isinstance(table_id, int):
@@ -457,10 +703,10 @@ def retrieve_relevant_schema(db: Session, connection_id: int, query: str) -> Dic
                     )
                     table_relevance_scores[table_info["id"]] = relevance_score
 
-            # 5. 找到与查询相关的列
-            for entity in query_analysis["entities"]:
+            # 4. 找到与查询相关的列
+            for entity in query_analysis.get("entities", []):
                 # 搜索匹配实体名称或描述的列
-                result = session.run(
+                result = neo4j_session.run(
                     """
                     MATCH (c:Column {connection_id: $connection_id})
                     WHERE toLower(c.name) CONTAINS $entity OR toLower(c.description) CONTAINS $entity
@@ -485,13 +731,13 @@ def retrieve_relevant_schema(db: Session, connection_id: int, query: str) -> Dic
                     # 为有匹配列的表增加相关性分数
                     table_relevance_scores[record["table_id"]] = table_relevance_scores.get(record["table_id"], 0) + 0.5
 
-            # 6. 如果找到了一些相关表/列，扩展以包含相关表
+            # 5. 如果找到了一些相关表/列，扩展以包含相关表
             if relevant_tables_dict or relevant_columns:
                 table_ids = list(relevant_tables_dict.keys())
 
                 # 通过外键找到连接的表（1跳）
                 if table_ids:
-                    result = session.run(
+                    result = neo4j_session.run(
                         """
                         MATCH (t1:Table {connection_id: $connection_id})-[:HAS_COLUMN]->
                               (c1:Column)-[:REFERENCES]->
@@ -518,18 +764,19 @@ def retrieve_relevant_schema(db: Session, connection_id: int, query: str) -> Dic
                         source_score = table_relevance_scores.get(record["source_table_id"], 0)
                         table_relevance_scores[record["id"]] = source_score * 0.7  # 相关表分数降低
 
-                # 7. 使用LLM评估扩展表是否真正与查询相关
+                # 6. 优化：只对较多扩展表使用LLM过滤（减少不必要的LLM调用）
                 expanded_tables = [t for t in relevant_tables_dict.values() if t[0] not in table_ids]
-                if expanded_tables:
+                if expanded_tables and len(expanded_tables) > 3:
+                    # 只有当扩展表超过3个时才调用LLM过滤
                     filtered_expanded_tables = filter_expanded_tables_with_llm(
                         query, query_analysis, expanded_tables, table_relevance_scores
                     )
                     # 移除LLM认为不相关的表
-                    # 只保留相关表
                     filtered_table_ids = set(table_ids).union({t[0] for t in filtered_expanded_tables})
                     relevant_tables_dict = {
                         tid: t for tid, t in relevant_tables_dict.items() if tid in filtered_table_ids
                     }
+                # 如果扩展表较少（<=3个），直接保留，跳过LLM过滤
 
         driver.close()
 

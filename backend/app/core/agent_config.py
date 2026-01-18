@@ -50,53 +50,24 @@ def get_agent_llm(agent_name: str, db: Optional[Session] = None) -> BaseChatMode
                 
                 # 检查配置是否存在
                 if not llm_config:
-                    logger.warning(
-                        f"Agent [{agent_name}] references non-existent LLM config (id={profile.llm_config_id}), "
-                        f"falling back to global default"
-                    )
-                    print(f"⚠️  Agent [{display_name}] 配置的模型 (id={profile.llm_config_id}) 不存在，使用全局默认")
+                    logger.warning(f"Agent [{agent_name}] LLM config not found, using default")
                     return get_default_model()
                 
                 # 检查配置是否启用
                 if not llm_config.is_active:
-                    logger.warning(
-                        f"Agent [{agent_name}] references disabled LLM config (id={profile.llm_config_id}), "
-                        f"falling back to global default"
-                    )
-                    print(f"⚠️  Agent [{display_name}] 配置的模型 (id={profile.llm_config_id}) 已禁用，使用全局默认")
+                    logger.warning(f"Agent [{agent_name}] LLM config disabled, using default")
                     return get_default_model()
                 
-                # 使用特定配置
-                print(f"\n{'='*60}")
-                print(f"🤖 Agent 模型调用")
-                print(f"   智能体: {display_name}")
-                print(f"   Agent Name: {agent_name}")
-                print(f"   模型提供商: {llm_config.provider}")
-                print(f"   模型名称: {llm_config.model_name}")
-                print(f"   API Base: {llm_config.base_url or '默认'}")
-                print(f"   配置ID: {llm_config.id}")
-                print(f"{'='*60}\n")
-                logger.info(
-                    f"Agent [{agent_name}] using specific LLM: "
-                    f"provider={llm_config.provider}, "
-                    f"model={llm_config.model_name}, "
-                    f"config_id={llm_config.id}"
-                )
+                # 使用特定配置（简化日志）
+                logger.debug(f"Agent [{agent_name}] using {llm_config.provider}/{llm_config.model_name}")
                 return get_default_model(config_override=llm_config)
         
         # 3. 回退到全局默认
-        print(f"\n{'='*60}")
-        print(f"🤖 Agent 模型调用 (使用全局默认)")
-        print(f"   智能体: {display_name}")
-        print(f"   Agent Name: {agent_name}")
-        print(f"   状态: 未配置特定模型，使用全局默认")
-        print(f"{'='*60}\n")
-        logger.info(f"Agent [{agent_name}] using global default LLM (no specific config)")
+        logger.debug(f"Agent [{agent_name}] using global default")
         return get_default_model()
         
     except Exception as e:
-        logger.error(f"Error fetching agent LLM for {agent_name}: {e}", exc_info=True)
-        print(f"❌ 获取Agent [{display_name}] 模型出错: {e}")
+        logger.error(f"Error fetching agent LLM for {agent_name}: {e}")
         return get_default_model()
     finally:
         if should_close:
@@ -115,48 +86,20 @@ def get_custom_agent_llm(profile: AgentProfile, db: Session) -> BaseChatModel:
         
         # 检查配置是否存在
         if not llm_config:
-            logger.warning(
-                f"Custom agent [{profile.name}] references non-existent LLM config (id={profile.llm_config_id}), "
-                f"falling back to global default"
-            )
-            print(f"⚠️  自定义智能体 [{profile.name}] 配置的模型 (id={profile.llm_config_id}) 不存在，使用全局默认")
+            logger.warning(f"Custom agent [{profile.name}] LLM config not found, using default")
             return get_default_model()
         
         # 检查配置是否启用
         if not llm_config.is_active:
-            logger.warning(
-                f"Custom agent [{profile.name}] references disabled LLM config (id={profile.llm_config_id}), "
-                f"falling back to global default"
-            )
-            print(f"⚠️  自定义智能体 [{profile.name}] 配置的模型 (id={profile.llm_config_id}) 已禁用，使用全局默认")
+            logger.warning(f"Custom agent [{profile.name}] LLM config disabled, using default")
             return get_default_model()
         
-        # 使用特定配置
-        print(f"\n{'='*60}")
-        print(f"🧠 自定义智能体模型调用")
-        print(f"   智能体名称: {profile.name}")
-        print(f"   角色描述: {profile.role_description or '未设置'}")
-        print(f"   模型提供商: {llm_config.provider}")
-        print(f"   模型名称: {llm_config.model_name}")
-        print(f"   API Base: {llm_config.base_url or '默认'}")
-        print(f"   配置ID: {llm_config.id}")
-        print(f"{'='*60}\n")
-        logger.info(
-            f"Custom agent [{profile.name}] (role: {profile.role_description}) using LLM: "
-            f"provider={llm_config.provider}, "
-            f"model={llm_config.model_name}, "
-            f"config_id={llm_config.id}"
-        )
+        # 使用特定配置（简化日志）
+        logger.debug(f"Custom agent [{profile.name}] using {llm_config.provider}/{llm_config.model_name}")
         return get_default_model(config_override=llm_config)
     
     # 回退到全局默认
-    print(f"\n{'='*60}")
-    print(f"🧠 自定义智能体模型调用 (使用全局默认)")
-    print(f"   智能体名称: {profile.name}")
-    print(f"   角色描述: {profile.role_description or '未设置'}")
-    print(f"   状态: 未配置特定模型，使用全局默认")
-    print(f"{'='*60}\n")
-    logger.info(f"Custom agent [{profile.name}] using global default LLM (no specific config)")
+    logger.debug(f"Custom agent [{profile.name}] using global default")
     return get_default_model()
 
 

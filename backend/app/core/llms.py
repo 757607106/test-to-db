@@ -1,6 +1,7 @@
 import os
+import time
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any
 from langchain_deepseek import ChatDeepSeek
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_ollama import OllamaEmbeddings
@@ -13,11 +14,113 @@ from app.models.system_config import SystemConfig
 
 logger = logging.getLogger(__name__)
 
-def get_active_llm_config(model_type: str = "chat") -> Optional[LLMConfiguration]:
+
+# ============================================================================
+# LLM实例缓存（性能优化）
+# ============================================================================
+
+# 缓存配置
+LLM_CACHE_TTL = 300  # 缓存有效期：5分钟
+LLM_CONFIG_CACHE_TTL = 60  # 配置缓存有效期：1分钟
+
+# LLM实例缓存
+_llm_cache: Dict[str, Any] = {}
+_llm_cache_timestamps: Dict[str, float] = {}
+
+# LLM配置缓存（减少数据库查询）
+_config_cache: Dict[str, Optional[LLMConfiguration]] = {}
+_config_cache_timestamps: Dict[str, float] = {}
+
+
+def _generate_llm_cache_key(config: Optional[LLMConfiguration]) -> str:
+    """
+    生成LLM实例的缓存键
+    
+    Args:
+        config: LLM配置对象
+        
+    Returns:
+        唯一的缓存键字符串
+    """
+    if config:
+        return f"llm:{config.id}:{config.provider}:{config.model_name}"
+    else:
+        # 使用环境变量配置
+        return f"llm:env:{settings.LLM_PROVIDER}:{settings.LLM_MODEL}"
+
+
+def _is_llm_cache_valid(cache_key: str) -> bool:
+    """
+    检查LLM缓存是否有效
+    
+    Args:
+        cache_key: 缓存键
+        
+    Returns:
+        缓存是否有效
+    """
+    if cache_key not in _llm_cache:
+        return False
+    
+    cache_time = _llm_cache_timestamps.get(cache_key, 0)
+    cache_age = time.time() - cache_time
+    
+    return cache_age < LLM_CACHE_TTL
+
+
+def _is_config_cache_valid(cache_key: str) -> bool:
+    """
+    检查配置缓存是否有效
+    
+    Args:
+        cache_key: 缓存键
+        
+    Returns:
+        缓存是否有效
+    """
+    if cache_key not in _config_cache:
+        return False
+    
+    cache_time = _config_cache_timestamps.get(cache_key, 0)
+    cache_age = time.time() - cache_time
+    
+    return cache_age < LLM_CONFIG_CACHE_TTL
+
+
+def clear_llm_cache():
+    """
+    清除LLM缓存（用于配置更新后强制刷新）
+    """
+    global _llm_cache, _llm_cache_timestamps, _config_cache, _config_cache_timestamps
+    _llm_cache.clear()
+    _llm_cache_timestamps.clear()
+    _config_cache.clear()
+    _config_cache_timestamps.clear()
+    logger.info("LLM cache cleared")
+
+def get_active_llm_config(model_type: str = "chat", use_cache: bool = True) -> Optional[LLMConfiguration]:
     """
     Fetch the active LLM configuration from the database.
     按 ID 降序返回第一个活跃配置（最新创建的）
+    
+    优化：支持配置缓存，减少数据库查询
+    
+    Args:
+        model_type: 模型类型 ("chat" 或 "embedding")
+        use_cache: 是否使用缓存（默认True）
+        
+    Returns:
+        LLMConfiguration对象或None
     """
+    cache_key = f"config:{model_type}"
+    
+    # 检查缓存
+    if use_cache and _is_config_cache_valid(cache_key):
+        cached_config = _config_cache.get(cache_key)
+        if cached_config:
+            logger.debug(f"Using cached LLM config: id={cached_config.id}")
+        return cached_config
+    
     db: Session = SessionLocal()
     try:
         config = db.query(LLMConfiguration).filter(
@@ -32,6 +135,10 @@ def get_active_llm_config(model_type: str = "chat") -> Optional[LLMConfiguration
             logger.info(f"Found active LLM config in DB: provider={config.provider}, model={config.model_name}, base_url={config.base_url}, id={config.id}")
         else:
             logger.info(f"No active LLM config found in DB for type {model_type}")
+        
+        # 更新缓存
+        _config_cache[cache_key] = config
+        _config_cache_timestamps[cache_key] = time.time()
             
         return config
     except Exception as e:
@@ -42,7 +149,9 @@ def get_active_llm_config(model_type: str = "chat") -> Optional[LLMConfiguration
 
 def get_default_model(config_override: Optional[LLMConfiguration] = None, caller: str = None):
     """
-    Get LLM model instance.
+    Get LLM model instance with caching support.
+    
+    优化：使用LLM实例缓存，避免重复创建实例和数据库查询
     
     Args:
         config_override: 指定的 LLM 配置
@@ -57,6 +166,14 @@ def get_default_model(config_override: Optional[LLMConfiguration] = None, caller
     try:
         # Try to get from DB if no override
         config = config_override or get_active_llm_config(model_type="chat")
+        
+        # 生成缓存键并检查缓存
+        cache_key = _generate_llm_cache_key(config)
+        
+        if _is_llm_cache_valid(cache_key):
+            cached_llm = _llm_cache[cache_key]
+            logger.debug(f"Using cached LLM instance: {cache_key}, caller={caller or 'unknown'}")
+            return cached_llm
 
         if config:
             api_key = config.api_key
@@ -64,19 +181,8 @@ def get_default_model(config_override: Optional[LLMConfiguration] = None, caller
             model_name = config.model_name
             provider = config.provider.lower()
             
-            # 打印详细的模型初始化日志
-            print(f"\n📡 LLM 模型初始化")
-            print(f"   提供商: {config.provider}")
-            print(f"   模型: {model_name}")
-            print(f"   API Base: {api_base or '默认'}")
-            if caller:
-                print(f"   调用者: {caller}")
-            
-            logger.info(
-                f"Initializing LLM model: provider={provider}, "
-                f"model={model_name}, base_url={api_base or 'default'}, "
-                f"caller={caller or 'unknown'}"
-            )
+            # 简化日志：只输出关键信息
+            logger.info(f"Creating LLM: {provider}/{model_name}")
         else:
             # Fallback to settings
             api_key = settings.OPENAI_API_KEY
@@ -84,24 +190,14 @@ def get_default_model(config_override: Optional[LLMConfiguration] = None, caller
             model_name = settings.LLM_MODEL
             provider = settings.LLM_PROVIDER.lower()
             
-            print(f"\n📡 LLM 模型初始化 (环境变量配置)")
-            print(f"   提供商: {provider}")
-            print(f"   模型: {model_name}")
-            print(f"   API Base: {api_base or '默认'}")
-            if caller:
-                print(f"   调用者: {caller}")
-            
-            logger.info(
-                f"Initializing LLM model from env: provider={provider}, "
-                f"model={model_name}, caller={caller or 'unknown'}"
-            )
+            logger.info(f"Creating LLM from env: {provider}/{model_name}")
 
         # Common parameters
         max_tokens = 8192
         temperature = 0.2
 
         if provider == "openai" or provider == "aliyun" or provider == "volcengine": 
-            return ChatOpenAI(
+            llm = ChatOpenAI(
                 model=model_name,
                 api_key=api_key,
                 base_url=api_base,
@@ -115,7 +211,7 @@ def get_default_model(config_override: Optional[LLMConfiguration] = None, caller
             if api_base:
                 os.environ["DEEPSEEK_API_BASE"] = api_base
             
-            return ChatDeepSeek(
+            llm = ChatDeepSeek(
                 model=model_name,
                 max_tokens=max_tokens,
                 temperature=temperature,
@@ -127,7 +223,7 @@ def get_default_model(config_override: Optional[LLMConfiguration] = None, caller
         else:
             # Default fallback to ChatOpenAI
             logger.warning(f"Unknown provider '{provider}', falling back to ChatOpenAI")
-            return ChatOpenAI(
+            llm = ChatOpenAI(
                 model=model_name,
                 api_key=api_key,
                 base_url=api_base,
@@ -136,6 +232,14 @@ def get_default_model(config_override: Optional[LLMConfiguration] = None, caller
                 timeout=30.0,
                 max_retries=3
             )
+        
+        # 缓存LLM实例
+        _llm_cache[cache_key] = llm
+        _llm_cache_timestamps[cache_key] = time.time()
+        logger.debug(f"LLM instance cached: {cache_key}")
+        
+        return llm
+        
     except Exception as e:
         logger.error(
             f"Failed to initialize LLM model: {e}, "
@@ -214,13 +318,7 @@ def create_embedding_from_config(config: LLMConfiguration):
         api_key = config.api_key
         base_url = config.base_url
         
-        logger.info(f"Creating embedding model from config: provider={provider}, model={model_name}")
-        
-        print(f"\n📡 Embedding 模型初始化 (数据库配置)")
-        print(f"   配置ID: {config.id}")
-        print(f"   提供商: {config.provider}")
-        print(f"   模型: {model_name}")
-        print(f"   API Base: {base_url or '默认'}")
+        logger.info(f"Creating embedding: {provider}/{model_name}")
         
         # OpenAI-compatible providers (OpenAI, Azure, DeepSeek, Aliyun, etc.)
         if provider in ["openai", "azure", "deepseek", "aliyun", "volcengine"]:
@@ -290,10 +388,7 @@ def get_default_embedding_model():
         model_name = config.model_name
         provider = config.provider.lower()
         
-        print(f"\n📡 Embedding 模型初始化")
-        print(f"   提供商: {config.provider}")
-        print(f"   模型: {model_name}")
-        print(f"   API Base: {api_base or '默认'}")
+        logger.info(f"Creating embedding: {provider}/{model_name}")
     else:
         # Fallback based on VECTOR_SERVICE_TYPE
         if settings.VECTOR_SERVICE_TYPE == "aliyun":
@@ -305,9 +400,7 @@ def get_default_embedding_model():
              api_base = settings.OPENAI_API_BASE
              model_name = "text-embedding-3-small" # Default fallback
         
-        print(f"\n📡 Embedding 模型初始化 (环境变量配置)")
-        print(f"   模型: {model_name}")
-        print(f"   API Base: {api_base or '默认'}")
+        logger.info(f"Creating embedding from env: {model_name}")
         
     return OpenAIEmbeddings(
         model=model_name,

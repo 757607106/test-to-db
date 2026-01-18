@@ -82,6 +82,7 @@ class SQLMessageState(AgentState):
     clarification_round: int = 0
     max_clarification_rounds: int = 2
     needs_clarification: bool = False
+    pending_clarification: bool = False  # 标记是否等待用户澄清回复
     clarification_questions: List[Dict[str, Any]] = field(default_factory=list)
     clarification_responses: Optional[List[Dict[str, Any]]] = None
     clarification_confirmed: bool = False

@@ -53,7 +53,7 @@ def retrieve_database_schema(query: str, connection_id: int) -> Dict[str, Any]:
         相关的表结构和值映射信息
     """
 
-    print("开始分析用户查询...", connection_id)
+    # 开始分析用户查询
     try:
         db = SessionLocal()
         try:

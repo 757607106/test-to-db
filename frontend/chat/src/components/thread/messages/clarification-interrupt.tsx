@@ -110,19 +110,14 @@ export function ClarificationInterruptView({
         <HelpCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
         <div className="flex-1">
           <h3 className="font-semibold text-blue-900 dark:text-blue-100 mb-1">
-            需要澄清一些信息
+            🤔 需要您补充一点信息
           </h3>
           <p className="text-sm text-blue-700 dark:text-blue-300">
-            {interrupt.message || "为了更准确地理解您的需求，请回答以下问题："}
+            {interrupt.message || "为了为您提供准确的查询结果，我需要确认以下细节："}
           </p>
           {interrupt.reason && (
-            <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
-              原因: {interrupt.reason}
-            </p>
-          )}
-          {interrupt.round && interrupt.max_rounds && (
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              澄清轮次: {interrupt.round}/{interrupt.max_rounds}
+            <p className="text-xs text-blue-600 dark:text-blue-400 mt-1 italic">
+              💡 {interrupt.reason}
             </p>
           )}
         </div>

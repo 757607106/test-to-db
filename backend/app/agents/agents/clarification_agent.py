@@ -34,10 +34,10 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# 澄清检测提示词
+# 澄清检测提示词（优化版：合并检测和问题生成为一次调用）
 # ============================================================================
 
-CLARIFICATION_CHECK_PROMPT = """你是一个专业的数据查询意图分析专家。请分析以下用户查询，判断是否存在模糊或不明确的地方。
+CLARIFICATION_UNIFIED_PROMPT = """你是一个专业的数据查询意图分析专家。请分析以下用户查询，判断是否存在模糊或不明确的地方，如果需要澄清则同时生成澄清问题。
 
 用户查询: {query}
 
@@ -55,8 +55,9 @@ CLARIFICATION_CHECK_PROMPT = """你是一个专业的数据查询意图分析专
 - 只有当模糊性会显著影响查询结果时才需要澄清
 - 简单查询（如"查询所有用户"）通常不需要澄清
 - 包含具体时间、具体数值、具体条件的查询不需要澄清
+- 只处理高/中严重度的模糊性，低严重度可以忽略
 
-请以JSON格式返回分析结果:
+请以JSON格式返回分析结果（一次性返回检测结果和澄清问题）:
 {{
     "needs_clarification": true/false,
     "reason": "需要/不需要澄清的原因",
@@ -66,29 +67,7 @@ CLARIFICATION_CHECK_PROMPT = """你是一个专业的数据查询意图分析专
             "description": "具体描述模糊之处",
             "severity": "high|medium|low"
         }}
-    ]
-}}
-
-只返回JSON，不要其他内容。"""
-
-
-QUESTION_GENERATION_PROMPT = """基于以下模糊性分析，生成澄清问题。
-
-用户原始查询: {query}
-
-模糊性分析:
-{ambiguities}
-
-请生成最多3个澄清问题，优先生成选择题（更便于用户回答）。
-
-对于每个问题，请提供:
-1. 一个唯一的问题ID（如 q1, q2, q3）
-2. 清晰的问题描述
-3. 问题类型: choice（选择题）或 text（文本题）
-4. 如果是选择题，提供3-5个选项
-
-请以JSON格式返回:
-{{
+    ],
     "questions": [
         {{
             "id": "q1",
@@ -96,18 +75,22 @@ QUESTION_GENERATION_PROMPT = """基于以下模糊性分析，生成澄清问题
             "type": "choice",
             "options": ["最近7天", "最近30天", "最近3个月", "今年", "自定义时间段"],
             "related_ambiguity": "时间范围模糊"
-        }},
-        {{
-            "id": "q2",
-            "question": "您关注哪些具体指标？",
-            "type": "choice",
-            "options": ["销售总额", "订单数量", "平均客单价", "全部"],
-            "related_ambiguity": "字段选择模糊"
         }}
     ]
 }}
 
+**注意**:
+- 如果 needs_clarification 为 false，questions 数组应为空
+- 如果 needs_clarification 为 true，必须提供 questions 数组
+- questions 最多3个问题，优先生成选择题（更便于用户回答）
+- 每个问题需要唯一的ID（如 q1, q2, q3）
+
 只返回JSON，不要其他内容。"""
+
+
+# 保留旧的提示词以备向后兼容（但不再使用）
+CLARIFICATION_CHECK_PROMPT = CLARIFICATION_UNIFIED_PROMPT
+QUESTION_GENERATION_PROMPT = """已废弃：问题生成已合并到 CLARIFICATION_UNIFIED_PROMPT 中"""
 
 
 # ============================================================================
@@ -117,6 +100,8 @@ QUESTION_GENERATION_PROMPT = """基于以下模糊性分析，生成澄清问题
 def _quick_clarification_check_impl(query: str, connection_id: int = 15) -> Dict[str, Any]:
     """
     快速检测用户查询是否需要澄清（内部实现，不使用 @tool 装饰器）
+    
+    优化版：使用单次LLM调用同时完成检测和问题生成，减少延迟
     
     注意：这个函数使用禁用流式输出的 LLM，确保检测结果不会被
     错误地流式传输到前端。
@@ -134,19 +119,19 @@ def _quick_clarification_check_impl(query: str, connection_id: int = 15) -> Dict
     try:
         logger.info(f"开始澄清检测: {query[:50]}...")
         
-        # Step 1: 检测模糊性
         # 获取 LLM 并禁用流式输出，防止 JSON 输出被流式传输到前端
         base_llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
         # 使用 with_config 禁用流式输出
         llm = base_llm.with_config({"callbacks": []})
         
-        check_prompt = CLARIFICATION_CHECK_PROMPT.format(
+        # 优化：使用统一提示词，一次LLM调用同时完成检测和问题生成
+        unified_prompt = CLARIFICATION_UNIFIED_PROMPT.format(
             query=query,
             connection_id=connection_id
         )
         
         # 使用 invoke 而不是 stream，并且不传递 callbacks
-        response = llm.invoke([HumanMessage(content=check_prompt)], config={"callbacks": []})
+        response = llm.invoke([HumanMessage(content=unified_prompt)], config={"callbacks": []})
         
         # 解析响应
         try:
@@ -160,7 +145,7 @@ def _quick_clarification_check_impl(query: str, connection_id: int = 15) -> Dict
                 content = content[:-3]
             content = content.strip()
             
-            check_result = json.loads(content)
+            result = json.loads(content)
         except json.JSONDecodeError as e:
             logger.warning(f"JSON解析失败: {e}, 内容: {response.content[:200]}")
             return {
@@ -169,23 +154,19 @@ def _quick_clarification_check_impl(query: str, connection_id: int = 15) -> Dict
                 "reason": "解析失败，默认不需要澄清"
             }
         
-        # 如果不需要澄清，直接返回
-        if not check_result.get("needs_clarification", False):
-            logger.info(f"查询明确，不需要澄清: {check_result.get('reason', '')}")
+        # 检查是否需要澄清
+        needs_clarification = result.get("needs_clarification", False)
+        
+        if not needs_clarification:
+            logger.info(f"查询明确，不需要澄清: {result.get('reason', '')}")
             return {
                 "needs_clarification": False,
                 "questions": [],
-                "reason": check_result.get("reason", "查询足够明确")
+                "reason": result.get("reason", "查询足够明确")
             }
         
-        # Step 2: 生成澄清问题
-        ambiguities = check_result.get("ambiguities", [])
-        if not ambiguities:
-            return {
-                "needs_clarification": False,
-                "questions": [],
-                "reason": "未检测到具体模糊点"
-            }
+        # 获取模糊性分析
+        ambiguities = result.get("ambiguities", [])
         
         # 只处理高/中严重度的模糊性
         significant_ambiguities = [
@@ -201,32 +182,11 @@ def _quick_clarification_check_impl(query: str, connection_id: int = 15) -> Dict
                 "reason": "模糊性较轻，可以继续执行"
             }
         
-        # 生成问题
-        question_prompt = QUESTION_GENERATION_PROMPT.format(
-            query=query,
-            ambiguities=json.dumps(significant_ambiguities, ensure_ascii=False, indent=2)
-        )
-        
-        # 同样禁用流式输出
-        question_response = llm.invoke([HumanMessage(content=question_prompt)], config={"callbacks": []})
-        
-        try:
-            content = question_response.content.strip()
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.startswith("```"):
-                content = content[3:]
-            if content.endswith("```"):
-                content = content[:-3]
-            content = content.strip()
-            
-            question_result = json.loads(content)
-            questions = question_result.get("questions", [])
-        except json.JSONDecodeError as e:
-            logger.warning(f"问题生成JSON解析失败: {e}")
-            questions = []
+        # 获取澄清问题（已在同一次调用中生成）
+        questions = result.get("questions", [])
         
         if not questions:
+            logger.warning("需要澄清但未生成问题，跳过澄清")
             return {
                 "needs_clarification": False,
                 "questions": [],
@@ -238,7 +198,7 @@ def _quick_clarification_check_impl(query: str, connection_id: int = 15) -> Dict
         return {
             "needs_clarification": True,
             "questions": questions,
-            "reason": check_result.get("reason", "查询存在模糊性"),
+            "reason": result.get("reason", "查询存在模糊性"),
             "ambiguities": significant_ambiguities
         }
         
@@ -351,31 +311,29 @@ def format_clarification_text(
     用户可以：
     - 输入选项对应的数字来选择
     - 直接输入内容来回答
+    - 输入「跳过」跳过澄清
     
     Args:
         questions: 格式化后的问题列表
         reason: 需要澄清的原因
-        round_num: 当前澄清轮次
-        max_rounds: 最大澄清轮次
+        round_num: 当前澄清轮次 (不再显示)
+        max_rounds: 最大澄清轮次 (不再显示)
         
     Returns:
         格式化的文本消息
     """
     lines = []
     
-    # 标题
-    lines.append("🤔 **需要澄清一些信息**")
+    # 标题 - 更自然
+    lines.append("🤔 **需要您补充一点信息**")
     lines.append("")
-    lines.append("为了更准确地理解您的需求，请回答以下问题：")
+    lines.append("为了为您提供准确的查询结果，我需要确认以下细节：")
     
-    # 原因（如果有）
+    # 原因（如果有）- 使用引用格式，更柔和
     if reason:
         lines.append(f"")
-        lines.append(f"原因: {reason}")
+        lines.append(f"> 💡 {reason}")
     
-    # 轮次信息
-    lines.append(f"")
-    lines.append(f"澄清轮次: {round_num}/{max_rounds}")
     lines.append("")
     
     # 问题列表
@@ -394,12 +352,12 @@ def format_clarification_text(
         
         lines.append("")
     
-    # 使用提示
+    # 使用提示 - 简化
     lines.append("---")
-    lines.append("💡 **回复方式**：")
-    lines.append("- 输入数字选择对应选项（如：1）")
-    lines.append("- 或直接输入您的具体需求")
-    lines.append("- 输入「跳过」可跳过澄清直接查询")
+    lines.append("💡 **您可以**：")
+    lines.append("- 输入数字选择对应选项")
+    lines.append("- 直接输入具体要求")
+    lines.append("- 输入「跳过」直接按默认条件查询")
     
     return "\n".join(lines)
 
@@ -504,7 +462,7 @@ def should_skip_clarification(query: str) -> bool:
     """
     快速判断是否可以跳过澄清检测（用于优化性能）
     
-    对于某些明显明确的查询，可以直接跳过LLM检测
+    对于某些明显明确的查询，可以直接跳过LLM检测，大幅减少延迟
     
     Args:
         query: 用户查询
@@ -512,14 +470,20 @@ def should_skip_clarification(query: str) -> bool:
     Returns:
         bool - 是否跳过澄清
     """
-    # 包含具体日期的查询通常不需要澄清
     import re
     
-    # 检测具体日期格式
+    query_lower = query.lower().strip()
+    
+    # ========================================
+    # 1. 包含具体日期的查询 - 不需要澄清
+    # ========================================
     date_patterns = [
         r'\d{4}[-/年]\d{1,2}[-/月]\d{1,2}',  # 2024-01-01, 2024年1月1日
         r'\d{4}[-/年]\d{1,2}[-/月]',           # 2024-01, 2024年1月
-        r'今[天日]|昨[天日]|前[天日]',          # 今天、昨天
+        r'今[天日]|昨[天日]|前[天日]',          # 今天、昨天、前天
+        r'本[周月季年]|上[周月季年]|下[周月季年]',  # 本周、上月、下季度
+        r'\d{1,2}月\d{1,2}[日号]',             # 1月15日
+        r'从.{2,10}到.{2,10}',                # 从1月到3月
     ]
     
     for pattern in date_patterns:
@@ -527,12 +491,37 @@ def should_skip_clarification(query: str) -> bool:
             logger.debug(f"查询包含具体日期，跳过澄清: {query[:30]}")
             return True
     
-    # 非常简单的查询可能不需要澄清
+    # ========================================
+    # 2. 包含具体数量的查询 - 不需要澄清
+    # ========================================
+    quantity_patterns = [
+        r'前\d+[个名条项]',           # 前10个、前5名
+        r'最[近新]的?\d+[个条项]',    # 最近10条
+        r'top\s*\d+',                # top 10
+        r'\d+[个条项]',              # 5个
+        r'limit\s*\d+',              # limit 10
+    ]
+    
+    for pattern in quantity_patterns:
+        if re.search(pattern, query_lower):
+            logger.debug(f"查询包含具体数量，跳过澄清: {query[:30]}")
+            return True
+    
+    # ========================================
+    # 3. 简单直接的查询模式 - 不需要澄清
+    # ========================================
     simple_patterns = [
         r'^查[询看]所有',
         r'^显示全部',
-        r'^列出.*表',
-        r'ID[=为是]\d+',
+        r'^列出.*(表|数据|记录)',
+        r'^获取.*列表',
+        r'^统计.*数[量目]',
+        r'^计算.*总[数量和额]',
+        r'^求.*平均',
+        r'^查询.*总[数量和额]',
+        r'ID[=为是:：]\s*\d+',        # ID=123
+        r'编号[=为是:：]\s*\d+',       # 编号=123
+        r'名[称字][=为是:：]',         # 名称=xxx
     ]
     
     for pattern in simple_patterns:
@@ -540,7 +529,71 @@ def should_skip_clarification(query: str) -> bool:
             logger.debug(f"查询模式简单，跳过澄清: {query[:30]}")
             return True
     
+    # ========================================
+    # 4. 聚合查询 - 通常足够明确
+    # ========================================
+    aggregation_patterns = [
+        r'^(统计|计算|求|查询).*(总数|总量|总额|平均|最大|最小|数量|金额)',
+        r'(count|sum|avg|max|min)\s*\(',  # SQL函数
+        r'(数量|金额|总计|合计)是多少',
+        r'有多少[个条项]',
+    ]
+    
+    for pattern in aggregation_patterns:
+        if re.search(pattern, query_lower):
+            logger.debug(f"聚合查询，跳过澄清: {query[:30]}")
+            return True
+    
+    # ========================================
+    # 5. 短查询且无模糊词 - 可能足够明确
+    # ========================================
+    ambiguous_words = [
+        '最近', '近期', '一些', '部分', '大概', '大约', '差不多',
+        '前几', '后几', '若干', '某些', '很多', '不少',
+        '大客户', '小客户', '热销', '畅销', '滞销',
+        '高', '低', '多', '少', '好', '差',
+    ]
+    
+    if len(query) < 20:  # 短查询
+        has_ambiguous = any(word in query for word in ambiguous_words)
+        if not has_ambiguous:
+            logger.debug(f"短查询无模糊词，跳过澄清: {query[:30]}")
+            return True
+    
+    # ========================================
+    # 6. 明确指定字段的查询 - 不需要澄清
+    # ========================================
+    field_patterns = [
+        r'(姓名|名称|名字|地址|电话|邮箱|日期|时间|金额|数量|价格|状态)',
+        r'(用户名|订单号|产品名|客户名)',
+    ]
+    
+    # 如果查询同时指定了字段和条件，通常足够明确
+    if any(re.search(p, query) for p in field_patterns):
+        if re.search(r'[=为是:：]|等于|大于|小于|包含', query):
+            logger.debug(f"查询指定字段和条件，跳过澄清: {query[:30]}")
+            return True
+    
     return False
+
+
+def _contains_ambiguous_words(query: str) -> bool:
+    """
+    检查查询是否包含模糊词汇
+    
+    Args:
+        query: 用户查询
+        
+    Returns:
+        bool - 是否包含模糊词
+    """
+    ambiguous_words = [
+        '最近', '近期', '一些', '部分', '大概', '大约', '差不多',
+        '前几', '后几', '若干', '某些', '很多', '不少',
+        '大客户', '小客户', '热销', '畅销', '滞销',
+        '高', '低', '好', '差',
+    ]
+    return any(word in query for word in ambiguous_words)
 
 
 # ============================================================================
