@@ -1,9 +1,29 @@
 """
-监督代理 - 使用LangGraph自带supervisor
-负责协调各个专门代理的工作流程
+监督代理 (Supervisor Agent) - 使用LangGraph内置supervisor模式
+
+核心职责:
+1. 协调所有Worker Agents的工作流程
+2. 根据任务阶段智能路由到合适的Agent
+3. 管理Agent间的消息传递和状态更新
+4. 处理错误和异常情况
+
+架构模式:
+- 使用LangGraph的create_supervisor创建协调器
+- 采用Supervisor-Worker模式
+- Worker Agents包括: schema, sql_generator, sql_executor, error_recovery, chart_generator
+
+工作流程:
+用户查询 → Supervisor分析 → 选择Worker Agent → Agent执行 → 
+更新状态 → Supervisor再次分析 → 继续或结束
+
+依赖:
 pip install langgraph-supervisor
+
+历史变更:
+- 2026-01-16: 移除SQL Validator Agent以简化流程
+- 备份位置: backend/backups/agents_backup_20260116_175357
 """
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import logging
 
 from langchain_core.runnables import RunnableConfig
@@ -136,8 +156,51 @@ class SupervisorAgent:
 
         return system_msg
 
-    async def supervise(self, state: SQLMessageState) -> Dict[str, Any]:
-        """监督整个流程"""
+    async def supervise(
+        self, 
+        state: SQLMessageState,
+        config: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        监督整个流程 - 支持配置传递和多轮对话
+        
+        Args:
+            state: SQL消息状态
+            config: LangGraph配置（可选）
+                   - 包含thread_id等配置信息
+                   - 用于状态持久化和会话恢复
+                   
+        Returns:
+            Dict[str, Any]: 执行结果
+                - success: bool - 是否成功
+                - result: Dict - 执行结果
+                - error: str - 错误信息（如果失败）
+                
+        说明:
+            - 在执行前后验证并修复消息历史
+            - 自动修剪消息历史以控制token使用
+            - 如果提供了config，将传递给LangGraph以启用持久化
+            - 支持多轮对话和会话恢复
+        """
+        # ✅ Phase 3: 在执行前修剪消息历史
+        from app.core.message_history import auto_trim_messages, get_message_stats
+        
+        if "messages" in state and state["messages"]:
+            # 获取修剪前的统计信息
+            before_stats = get_message_stats(state["messages"])
+            logger.info(f"执行前消息统计: {before_stats}")
+            
+            # 自动修剪消息（如果需要）
+            state["messages"] = auto_trim_messages(state["messages"])
+            
+            # 获取修剪后的统计信息
+            after_stats = get_message_stats(state["messages"])
+            if after_stats["total"] < before_stats["total"]:
+                logger.info(
+                    f"消息历史已修剪: {before_stats['total']} -> {after_stats['total']} "
+                    f"(估算token: {before_stats['estimated_tokens']} -> {after_stats['estimated_tokens']})"
+                )
+        
         # 在执行前先验证并修复消息历史
         if "messages" in state and state["messages"]:
             original_count = len(state["messages"])
@@ -150,8 +213,13 @@ class SupervisorAgent:
                 )
         
         try:
-            # 执行supervisor
-            result = await self.supervisor.ainvoke(state)
+            # ✅ 执行supervisor，传递config以启用状态持久化
+            if config:
+                logger.info(f"使用 config 执行 supervisor: {config.get('configurable', {})}")
+                result = await self.supervisor.ainvoke(state, config=config)
+            else:
+                logger.info("不使用 config 执行 supervisor（无状态模式）")
+                result = await self.supervisor.ainvoke(state)
             
             # 执行后再次验证并修复消息历史
             if "messages" in result:

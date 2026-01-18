@@ -17,6 +17,25 @@ depends_on = None
 
 
 def upgrade():
+    # 创建dbconnection表（必须在其他表之前创建，因为其他表会引用它）
+    op.create_table(
+        'dbconnection',
+        sa.Column('id', sa.BigInteger(), nullable=False, autoincrement=True),
+        sa.Column('name', sa.String(255), nullable=False),
+        sa.Column('db_type', sa.String(50), nullable=False),
+        sa.Column('host', sa.String(255), nullable=False),
+        sa.Column('port', sa.Integer(), nullable=False),
+        sa.Column('username', sa.String(255), nullable=False),
+        sa.Column('password_encrypted', sa.String(255), nullable=False),
+        sa.Column('database_name', sa.String(255), nullable=False),
+        sa.Column('created_at', sa.TIMESTAMP(), nullable=False, server_default=sa.text('CURRENT_TIMESTAMP')),
+        sa.Column('updated_at', sa.TIMESTAMP(), nullable=True, onupdate=sa.text('CURRENT_TIMESTAMP')),
+        sa.PrimaryKeyConstraint('id'),
+        mysql_charset='utf8mb4',
+        mysql_collate='utf8mb4_unicode_ci'
+    )
+    op.create_index('idx_dbconnection_name', 'dbconnection', ['name'], unique=True)
+    
     # 创建users表
     op.create_table(
         'users',
@@ -40,3 +59,4 @@ def upgrade():
 
 def downgrade():
     op.drop_table('users')
+    op.drop_table('dbconnection')

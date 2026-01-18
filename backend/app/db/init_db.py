@@ -93,20 +93,26 @@ def create_initial_data(db: Session) -> None:
         db.refresh(user)
         logger.info(f"Created default user: {user.username} (id: {user.id})")
     
-    # Check if we already have connections
-    connection = crud.db_connection.get_by_name(db, name="Sample Database")
-    if not connection:
-        connection_in = schemas.DBConnectionCreate(
-            name="Sample Database",
-            db_type="mysql",
-            host="localhost",
-            port=3306,
-            username="root",
-            password="mysql",
-            database_name="chat_db"
-        )
-        connection = crud.db_connection.create(db=db, obj_in=connection_in)
-        logger.info(f"Created sample connection: {connection.name}")
+    # 注释掉硬编码的示例数据库连接
+    # 用户应该在 Admin 后台手动添加数据库连接
+    # 可以使用以下数据库进行测试：
+    # - inventory_demo (简化版进销存系统)
+    # - erp_inventory (完整版进销存系统)
+    # 详见: backend/数据库连接信息.md
+    
+    # connection = crud.db_connection.get_by_name(db, name="Sample Database")
+    # if not connection:
+    #     connection_in = schemas.DBConnectionCreate(
+    #         name="Sample Database",
+    #         db_type="mysql",
+    #         host="localhost",
+    #         port=3306,
+    #         username="root",
+    #         password="mysql",
+    #         database_name="chat_db"
+    #     )
+    #     connection = crud.db_connection.create(db=db, obj_in=connection_in)
+    #     logger.info(f"Created sample connection: {connection.name}")
     
     # Initialize core agents
     init_core_agents(db)

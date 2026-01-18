@@ -11,7 +11,9 @@ from app.schemas.query import (
     ClarificationResponse,
     AnalystInsights,
     ChatQueryRequest,
-    ChatQueryResponse
+    ChatQueryResponse,
+    ConversationSummary,
+    ConversationDetail
 )
 from app.schemas.dashboard import (
     DashboardBase,

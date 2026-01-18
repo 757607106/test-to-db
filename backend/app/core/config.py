@@ -84,9 +84,16 @@ class Settings(BaseSettings):
     PARALLEL_RETRIEVAL: bool = os.getenv("PARALLEL_RETRIEVAL", "true").lower() == "true"
 
     # LangGraph Checkpointer 配置
-    CHECKPOINT_MODE: str = os.getenv("CHECKPOINT_MODE", "memory")  # memory | mysql | postgres
-    CHECKPOINT_DB_PATH: str = os.getenv("CHECKPOINT_DB_PATH", "./data/checkpoints.db")
-    CHECKPOINT_POSTGRES_URI: Optional[str] = os.getenv("CHECKPOINT_POSTGRES_URI", None)
+    CHECKPOINT_MODE: str = os.getenv("CHECKPOINT_MODE", "postgres")  # postgres | none
+    CHECKPOINT_POSTGRES_URI: Optional[str] = os.getenv(
+        "CHECKPOINT_POSTGRES_URI", 
+        "postgresql://langgraph:langgraph_password_2026@localhost:5433/langgraph_checkpoints"
+    )
+    
+    # 消息历史管理配置
+    MAX_MESSAGE_HISTORY: int = int(os.getenv("MAX_MESSAGE_HISTORY", "20"))
+    ENABLE_MESSAGE_SUMMARY: bool = os.getenv("ENABLE_MESSAGE_SUMMARY", "false").lower() == "true"
+    SUMMARY_THRESHOLD: int = int(os.getenv("SUMMARY_THRESHOLD", "10"))
     
     # 工作流配置
     SQL_CONFIDENCE_THRESHOLD: float = float(os.getenv("SQL_CONFIDENCE_THRESHOLD", "0.7"))

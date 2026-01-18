@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Card, Select, Button, message, Typography, Space, Tooltip, Spin } from 'antd';
-import { PlusOutlined, SaveOutlined, TableOutlined, ReloadOutlined, LayoutOutlined } from '@ant-design/icons';
+import { PlusOutlined, SaveOutlined, TableOutlined, ReloadOutlined, LayoutOutlined, FullscreenOutlined, FullscreenExitOutlined } from '@ant-design/icons';
 import ReactFlow, {
   ReactFlowProvider,
   Controls,
@@ -13,7 +13,8 @@ import ReactFlow, {
   Edge,
   useReactFlow,
   MarkerType,
-  Panel
+  Panel,
+  Position
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import '../styles/SchemaManagement.css';
@@ -26,6 +27,7 @@ import RelationshipModal from '../components/diagram/RelationshipModal';
 import TableEditModal from '../components/diagram/TableEditModal';
 import Marker from '../components/diagram/Marker';
 import CustomConnectionLine from '../components/diagram/CustomConnectionLine';
+import dagre from 'dagre';
 
 const { Option } = Select;
 const { Title } = Typography;
@@ -100,6 +102,7 @@ const SchemaManagementPage = () => {
   const [tableEditModalVisible, setTableEditModalVisible] = useState<boolean>(false);
   const [selectedTable, setSelectedTable] = useState<any>(null);
   const [publishLoading, setPublishLoading] = useState<boolean>(false);
+  const [isFullScreen, setIsFullScreen] = useState<boolean>(false);
 
   const reactFlowInstance = useReactFlow();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
@@ -417,6 +420,53 @@ const SchemaManagementPage = () => {
         'data-relationshiptype': rel.relationship_type
       });
     });
+
+    // Apply Dagre layout for initial display
+    if (newNodes.length > 0) {
+      try {
+        const g = new dagre.graphlib.Graph();
+        g.setGraph({ 
+          rankdir: 'LR', 
+          align: 'UL',
+          nodesep: 150, 
+          ranksep: 300, 
+          marginx: 100, 
+          marginy: 100 
+        });
+        g.setDefaultEdgeLabel(() => ({}));
+
+        const nodeWidth = 300;
+
+        newNodes.forEach((node) => {
+          // 动态计算高度: header(50) + columns * 32 + padding(20)
+          const columnsCount = node.data.columns ? node.data.columns.length : 0;
+          const height = 50 + (columnsCount * 32) + 20;
+          g.setNode(node.id, { width: nodeWidth, height: height });
+        });
+
+        newEdges.forEach((edge) => {
+          g.setEdge(edge.source, edge.target);
+        });
+
+        dagre.layout(g);
+
+        newNodes.forEach((node) => {
+          const nodeWithPosition = g.node(node.id);
+          const columnsCount = node.data.columns ? node.data.columns.length : 0;
+          const height = 50 + (columnsCount * 32) + 20;
+          
+          node.targetPosition = Position.Left;
+          node.sourcePosition = Position.Right;
+          node.position = {
+            x: nodeWithPosition.x - nodeWidth / 2,
+            y: nodeWithPosition.y - height / 2,
+          };
+        });
+        console.log('Applied auto layout for discovered relationships');
+      } catch (layoutError) {
+        console.error('Failed to apply auto layout:', layoutError);
+      }
+    }
 
     // 更新状态
     setNodes(newNodes);
@@ -1481,6 +1531,49 @@ const SchemaManagementPage = () => {
     };
   }, []);
 
+  // 处理全屏切换
+  const handleFullScreen = () => {
+    if (!isFullScreen) {
+      if (reactFlowWrapper.current) {
+        if (reactFlowWrapper.current.requestFullscreen) {
+          reactFlowWrapper.current.requestFullscreen()
+            .then(() => {
+              // 进入全屏后自动适应视图
+              setTimeout(() => {
+                reactFlowInstance.fitView({ padding: 0.2 });
+              }, 100);
+            })
+            .catch(err => {
+              console.error('Error attempting to enable full-screen mode:', err);
+              message.error('无法进入全屏模式');
+            });
+        }
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
+  };
+
+  // 监听全屏变化
+  useEffect(() => {
+    const handleFullScreenChange = () => {
+      const isCurrentlyFullScreen = !!document.fullscreenElement;
+      setIsFullScreen(isCurrentlyFullScreen);
+      
+      // 退出全屏或进入全屏时都适应一下视图
+      setTimeout(() => {
+        reactFlowInstance.fitView({ padding: 0.2 });
+      }, 100);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullScreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullScreenChange);
+    };
+  }, [reactFlowInstance]);
+
   // 处理刷新架构
   const handleRefreshSchema = () => {
     if (selectedConnection) {
@@ -1488,8 +1581,14 @@ const SchemaManagementPage = () => {
     }
   };
 
+  // 计算节点实际高度的辅助函数
+  const calculateNodeHeight = (columnsCount: number) => {
+    // 头部高度(约50px) + 每个列高度(约32px) + 底部填充(约20px)
+    return 50 + (columnsCount * 32) + 20;
+  };
+
   // 处理自动布局
-  const handleAutoLayout = () => {
+  const handleAutoLayout = useCallback(() => {
     if (nodes.length === 0) {
       message.info('没有表可以布局');
       return;
@@ -1497,60 +1596,58 @@ const SchemaManagementPage = () => {
 
     message.info('正在自动布局...');
 
-    // 计算新的节点位置
-    const newNodes = [...nodes];
-    const tableCount = newNodes.length;
+    // 创建 dagre 图
+    const g = new dagre.graphlib.Graph();
+    // 增加节点间距和层级间距，防止重叠
+    g.setGraph({ 
+      rankdir: 'LR', 
+      align: 'UL', // 尽可能向上对齐
+      nodesep: 150, // 同一层级节点间距
+      ranksep: 300, // 层级间距
+      marginx: 100, 
+      marginy: 100 
+    });
+    g.setDefaultEdgeLabel(() => ({}));
 
-    // 确定布局参数
-    const PADDING = 50;  // 节点之间的间距
-    const NODE_WIDTH = 250;  // 节点宽度
-    const NODE_HEIGHT = 300;  // 节点高度
+    // 设置节点尺寸
+    const nodeWidth = 300; // 稍微加宽一点
 
-    // 计算每行可以放置的节点数量
-    const containerWidth = reactFlowWrapper.current?.clientWidth || 1000;
-    const nodesPerRow = Math.max(1, Math.floor((containerWidth - PADDING) / (NODE_WIDTH + PADDING)));
-
-    // 计算行数
-    const rows = Math.ceil(tableCount / nodesPerRow);
-
-    // 先根据关系对节点进行排序
-    // 有关系的节点尽量放在一起
-    const nodeRelationships: Record<string, Set<string>> = {};
-    edges.forEach(edge => {
-      const sourceId = edge.source;
-      const targetId = edge.target;
-
-      if (!nodeRelationships[sourceId]) nodeRelationships[sourceId] = new Set<string>();
-      if (!nodeRelationships[targetId]) nodeRelationships[targetId] = new Set<string>();
-
-      nodeRelationships[sourceId].add(targetId);
-      nodeRelationships[targetId].add(sourceId);
+    // 添加节点，根据列数动态计算高度
+    nodes.forEach((node) => {
+      const columnsCount = node.data.columns ? node.data.columns.length : 0;
+      const height = calculateNodeHeight(columnsCount);
+      g.setNode(node.id, { width: nodeWidth, height: height });
     });
 
-    // 根据关系数量排序
-    newNodes.sort((a: any, b: any) => {
-      const aId = a.id as string;
-      const bId = b.id as string;
-      const aRelCount = nodeRelationships[aId]?.size || 0;
-      const bRelCount = nodeRelationships[bId]?.size || 0;
-      return bRelCount - aRelCount; // 关系多的先排
+    // 添加边
+    edges.forEach((edge) => {
+      g.setEdge(edge.source, edge.target);
     });
 
-    // 布局节点
-    newNodes.forEach((node: any, index: number) => {
-      const row = Math.floor(index / nodesPerRow);
-      const col = index % nodesPerRow;
+    // 计算布局
+    dagre.layout(g);
 
-      node.position = {
-        x: col * (NODE_WIDTH + PADDING) + PADDING,
-        y: row * (NODE_HEIGHT + PADDING) + PADDING
-      };
-
+    // 获取新的位置
+    const layoutedNodes = nodes.map((node) => {
+      const nodeWithPosition = g.node(node.id);
+      
       // 添加动画类
-      node.className = (node.className || '') + ' node-animating';
+      const className = (node.className || '') + ' node-animating';
+      
+      // 保持中心点定位逻辑
+      return {
+        ...node,
+        className,
+        targetPosition: Position.Left,
+        sourcePosition: Position.Right,
+        position: {
+          x: nodeWithPosition.x - nodeWidth / 2,
+          y: nodeWithPosition.y - (calculateNodeHeight(node.data.columns?.length || 0) / 2),
+        },
+      };
     });
 
-    setNodes(newNodes);
+    setNodes(layoutedNodes);
 
     // 适应视图
     setTimeout(() => {
@@ -1559,7 +1656,7 @@ const SchemaManagementPage = () => {
 
       // 移除动画类
       setTimeout(() => {
-        setNodes(nodes => nodes.map(node => {
+        setNodes((nds) => nds.map((node) => {
           const updatedNode = { ...node };
           if (updatedNode.className) {
             updatedNode.className = updatedNode.className.replace('node-animating', '').trim();
@@ -1568,7 +1665,7 @@ const SchemaManagementPage = () => {
         }));
       }, 500);
     }, 100);
-  };
+  }, [nodes, edges, reactFlowInstance, setNodes]);
 
   // 处理表点击
   const handleTableClick = (tableId: number, tableData: any) => {
@@ -1747,6 +1844,13 @@ const SchemaManagementPage = () => {
                   title="自动布局"
                 >
                   <LayoutOutlined />
+                </button>
+                <button
+                  className="react-flow__controls-button"
+                  onClick={handleFullScreen}
+                  title={isFullScreen ? "退出全屏" : "全屏预览"}
+                >
+                  {isFullScreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
                 </button>
               </Controls>
               <Background color="#f5f5f5" gap={16} />

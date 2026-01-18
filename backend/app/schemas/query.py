@@ -1,4 +1,5 @@
 from typing import Optional, List, Dict, Any, Literal
+from datetime import datetime
 from pydantic import BaseModel, Field
 
 
@@ -61,3 +62,25 @@ class ChatQueryResponse(BaseModel):
     chart_config: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     stage: Optional[str] = None  # 当前处理阶段
+
+
+# ✅ Phase 2 新增: 会话管理Schema
+
+class ConversationSummary(BaseModel):
+    """会话摘要"""
+    thread_id: str
+    created_at: datetime
+    updated_at: datetime
+    message_count: int
+    last_query: Optional[str] = None
+    status: str  # active, completed, error
+
+
+class ConversationDetail(BaseModel):
+    """会话详情"""
+    thread_id: str
+    created_at: datetime
+    updated_at: datetime
+    messages: List[Dict[str, Any]]
+    states: List[Dict[str, Any]]
+    metadata: Optional[Dict[str, Any]] = None
