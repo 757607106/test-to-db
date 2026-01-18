@@ -25,6 +25,7 @@
 """
 from typing import Dict, Any, List, Optional
 import logging
+import asyncio
 
 from app.core.state import SQLMessageState
 from app.agents.agents.supervisor_agent import create_intelligent_sql_supervisor
@@ -514,6 +515,62 @@ def graph():
         - LangGraph CLI 命令行工具
     """
     return get_global_graph().graph
+
+
+async def warmup_services(connection_ids: List[int] = None):
+    """
+    预热初始化检索服务
+    
+    Args:
+        connection_ids: 需要预热的数据库连接ID列表，如果为None则只初始化默认服务
+        
+    说明:
+        - 在应用启动时调用，提前初始化检索引擎
+        - 避免首次查询时的长时间等待
+        - 初始化Milvus、Neo4j和向量服务
+        
+    使用方式:
+        在应用启动脚本中调用:
+        ```python
+        import asyncio
+        from app.agents.chat_graph import warmup_services
+        
+        # 在FastAPI启动事件中
+        @app.on_event("startup")
+        async def startup_event():
+            await warmup_services(connection_ids=[10, 15])
+        ```
+    """
+    logger.info("开始预热SQL检索服务...")
+    
+    try:
+        # 导入HybridRetrievalEnginePool
+        from app.services.hybrid_retrieval_service import HybridRetrievalEnginePool
+        
+        # 预热检索引擎
+        await HybridRetrievalEnginePool.warmup(connection_ids=connection_ids)
+        
+        logger.info("✓ SQL检索服务预热完成")
+        
+    except Exception as e:
+        logger.warning(f"检索服务预热失败（不影响正常使用）: {str(e)}")
+        logger.info("系统将在首次调用时初始化服务")
+
+
+def warmup_services_sync(connection_ids: List[int] = None):
+    """
+    同步版本的预热初始化（用于非异步环境）
+    
+    Args:
+        connection_ids: 需要预热的数据库连接ID列表
+    """
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(warmup_services(connection_ids))
+        loop.close()
+    except Exception as e:
+        logger.warning(f"同步预热失败: {str(e)}")
 
 
 # ============================================================================

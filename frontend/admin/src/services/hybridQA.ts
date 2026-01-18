@@ -49,9 +49,30 @@ export const hybridQAService = {
     return response.data;
   },
 
+  // 获取问答对列表
+  async getQAPairs(connectionId?: number, limit: number = 100): Promise<any[]> {
+    const params: any = { limit };
+    if (connectionId) {
+      params.connection_id = connectionId;
+    }
+    const response = await api.get('/hybrid-qa/qa-pairs/', { params });
+    return response.data;
+  },
+
   // 提交反馈
   async submitFeedback(data: FeedbackRequest): Promise<{ status: string; message: string }> {
     const response = await api.post('/hybrid-qa/qa-pairs/feedback', data);
+    return response.data;
+  },
+
+  // 更新问答对
+  async updateQAPair(qaId: string, data: Partial<QAPairCreate>): Promise<{
+    status: string;
+    qa_id: string;
+    message: string;
+    updated_fields: string[];
+  }> {
+    const response = await api.put(`/hybrid-qa/qa-pairs/${qaId}`, data);
     return response.data;
   },
 

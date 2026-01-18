@@ -357,6 +357,22 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(({ toolCall, toolResult 
   }, []);
 
   const hasContent = result || Object.keys(args).length > 0 || images.length > 0;
+  
+  // 检测是否为SQL样本检索工具
+  const isRetrievalTool = name === "retrieve_similar_qa_pairs";
+  
+  // 提取错误信息（如果有）
+  const errorInfo = useMemo(() => {
+    if (status === "error" && result && typeof result === 'object') {
+      return {
+        error: result.error || "Unknown error",
+        errorType: result.error_type || "Error",
+        suggestion: result.suggestion || "",
+        troubleshooting: result.troubleshooting || null
+      };
+    }
+    return null;
+  }, [status, result]);
 
   return (
     <div className="w-full mb-2">
@@ -373,11 +389,66 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(({ toolCall, toolResult 
             <ChevronRight size={14} className="flex-shrink-0 text-gray-600" />
           )}
           {statusIcon}
-          <span className="text-sm font-medium text-gray-900">{name}</span>
+          <div className="flex-1">
+            <span className="text-sm font-medium text-gray-900">{name}</span>
+            
+            {/* 显示检索工具的pending状态提示 */}
+            {isRetrievalTool && status === "pending" && (
+              <div className="mt-1 text-xs text-yellow-600">
+                正在检索SQL样本，可能需要10-15秒...
+                <div className="text-xs text-gray-500 mt-0.5">
+                  首次调用需要初始化Milvus和Neo4j服务
+                </div>
+              </div>
+            )}
+            
+            {/* 显示错误概要（在折叠状态下） */}
+            {status === "error" && errorInfo && !isExpanded && (
+              <div className="mt-1 text-xs text-red-600">
+                {errorInfo.errorType}: {errorInfo.error.substring(0, 80)}
+                {errorInfo.error.length > 80 && "..."}
+              </div>
+            )}
+          </div>
         </button>
 
         {isExpanded && hasContent && (
           <div className="px-4 pb-4 bg-gray-50">
+            {/* 显示友好的错误信息（对于检索工具） */}
+            {status === "error" && errorInfo && isRetrievalTool && (
+              <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-md">
+                <h4 className="text-sm font-semibold text-red-800 mb-2">
+                  检索服务遇到问题
+                </h4>
+                <div className="text-sm text-red-700 mb-3">
+                  <strong>{errorInfo.errorType}:</strong> {errorInfo.error}
+                </div>
+                
+                {errorInfo.suggestion && (
+                  <div className="text-sm text-red-600 mb-3">
+                    <strong>建议:</strong> {errorInfo.suggestion}
+                  </div>
+                )}
+                
+                {errorInfo.troubleshooting && (
+                  <div className="text-xs text-gray-700">
+                    <strong>故障排查:</strong>
+                    <ul className="list-disc list-inside mt-2 space-y-1">
+                      {Object.entries(errorInfo.troubleshooting).map(([key, value]) => (
+                        <li key={key}>
+                          <span className="font-mono text-xs">{String(value)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                
+                <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
+                  💡 系统将继续使用基础模式生成SQL（无样本参考）
+                </div>
+              </div>
+            )}
+            
             {Object.keys(args).length > 0 && (
               <div className="mt-4">
                 <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">

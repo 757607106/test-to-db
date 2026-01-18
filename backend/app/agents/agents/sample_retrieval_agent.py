@@ -3,14 +3,19 @@
 负责从混合检索服务中查询与用户问题相关的SQL问答对，为高质量SQL生成提供准确的样本提示
 """
 from typing import Dict, Any, List, Optional
+import asyncio
+import logging
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.prebuilt import create_react_agent
 
 from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
-from app.services.hybrid_retrieval_service import HybridRetrievalEngine, VectorServiceFactory
+from app.services.hybrid_retrieval_service import HybridRetrievalEngine, VectorServiceFactory, HybridRetrievalEnginePool
 from app.services.text2sql_utils import analyze_query_with_llm
+
+# 配置日志
+logger = logging.getLogger(__name__)
 
 
 @tool
@@ -18,7 +23,8 @@ def retrieve_similar_qa_pairs(
     user_query: str,
     schema_context: Dict[str, Any],
     connection_id: int = 15,
-    top_k: int = 5
+    top_k: int = 5,
+    timeout: int = 15  # 超时设置（秒）
 ) -> Dict[str, Any]:
     """
     从混合检索服务中检索与用户查询相似的SQL问答对
@@ -28,47 +34,71 @@ def retrieve_similar_qa_pairs(
         schema_context: 数据库模式上下文信息
         connection_id: 数据库连接ID
         top_k: 返回的样本数量
+        timeout: 超时时间（秒），默认15秒
         
     Returns:
         检索到的相似问答对列表和相关信息
     """
+    logger.info(f"开始检索SQL样本 - 查询: '{user_query[:50]}...', connection_id: {connection_id}, top_k: {top_k}, timeout: {timeout}s")
+    
     try:
-        # 创建混合检索引擎实例
-        import asyncio
-        
-        async def _retrieve():
-            # 使用工厂创建向量服务
-            vector_service = await VectorServiceFactory.get_default_service()
-            engine = HybridRetrievalEngine(vector_service=vector_service)
+        async def _do_retrieve():
+            """执行实际的检索操作"""
+            # 使用池化的检索引擎实例（避免重复初始化）
+            logger.debug(f"正在从引擎池获取检索引擎实例 (connection_id={connection_id})...")
             
-            # 初始化引擎（在实际使用中可能已经初始化）
             try:
-                await engine.initialize()
+                # 从池中获取或创建引擎实例（自动处理初始化）
+                engine = await HybridRetrievalEnginePool.get_engine(connection_id)
+                logger.debug("成功获取检索引擎实例（已初始化）")
             except Exception as init_error:
-                # 如果初始化失败，尝试只使用向量服务
-                print(f"Engine initialization failed: {init_error}")
-                # 直接使用向量服务进行语义检索
-                query_vector = await vector_service.embed_question(user_query)
-                # 这里可以添加简化的检索逻辑
-                return []
+                logger.error(f"获取检索引擎失败: {init_error}")
+                # 如果获取失败，抛出详细错误
+                raise RuntimeError(f"检索服务初始化失败 - {type(init_error).__name__}: {str(init_error)}")
             
             # 执行混合检索
+            logger.debug(f"正在执行混合检索...")
             results = await engine.hybrid_retrieve(
                 query=user_query,
                 schema_context=schema_context,
                 connection_id=connection_id,
                 top_k=top_k
             )
-
+            
+            logger.debug(f"检索完成，找到 {len(results)} 个结果")
             return results
         
+        async def _retrieve_with_timeout():
+            """添加超时控制的检索"""
+            try:
+                return await asyncio.wait_for(_do_retrieve(), timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning(f"检索超时（{timeout}秒）")
+                raise
+        
         # 运行异步检索
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
         try:
-            results = loop.run_until_complete(_retrieve())
-        finally:
-            loop.close()
+            # 尝试获取当前事件循环
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # 如果在运行中的事件循环中，创建新的事件循环
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    results = loop.run_until_complete(_retrieve_with_timeout())
+                finally:
+                    loop.close()
+            else:
+                # 如果事件循环未运行，直接使用
+                results = loop.run_until_complete(_retrieve_with_timeout())
+        except RuntimeError:
+            # 没有事件循环，创建新的
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                results = loop.run_until_complete(_retrieve_with_timeout())
+            finally:
+                loop.close()
         
         # 格式化结果并过滤低质量样本
         formatted_results = []
@@ -93,6 +123,8 @@ def retrieve_similar_qa_pairs(
                     "explanation": result.explanation
                 })
 
+        logger.info(f"检索成功 - 找到 {len(formatted_results)} 个高质量样本（过滤前: {len(results)}个）")
+        
         return {
             "success": True,
             "qa_pairs": formatted_results,
@@ -100,14 +132,55 @@ def retrieve_similar_qa_pairs(
             "total_retrieved": len(results),
             "filtered_count": len(results) - len(formatted_results),
             "min_threshold": min_similarity_threshold,
-            "query_analyzed": user_query
+            "query_analyzed": user_query,
+            "execution_time": f"< {timeout}秒"
         }
         
-    except Exception as e:
+    except asyncio.TimeoutError:
+        error_msg = f"检索超时（{timeout}秒）- 可能是数据库连接问题或服务响应慢"
+        logger.error(error_msg)
         return {
             "success": False,
-            "error": str(e),
-            "qa_pairs": []
+            "error": error_msg,
+            "error_type": "TimeoutError",
+            "qa_pairs": [],
+            "suggestion": "请检查以下服务是否正常运行: 1) Milvus向量数据库 2) Neo4j图数据库 3) 网络连接",
+            "troubleshooting": {
+                "check_milvus": "docker ps | grep milvus",
+                "check_neo4j": "docker ps | grep neo4j",
+                "timeout_seconds": timeout
+            }
+        }
+    
+    except RuntimeError as e:
+        # 初始化失败
+        error_msg = str(e)
+        logger.error(f"检索服务初始化失败: {error_msg}")
+        return {
+            "success": False,
+            "error": error_msg,
+            "error_type": "InitializationError",
+            "qa_pairs": [],
+            "suggestion": "检索服务初始化失败，请确认Milvus和Neo4j服务已启动",
+            "troubleshooting": {
+                "milvus_status": "检查Milvus是否运行: docker ps | grep milvus",
+                "neo4j_status": "检查Neo4j是否运行: docker ps | grep neo4j",
+                "logs": "查看服务日志以获取更多信息"
+            }
+        }
+    
+    except Exception as e:
+        # 其他错误
+        error_msg = str(e)
+        error_type = type(e).__name__
+        logger.error(f"检索失败 - {error_type}: {error_msg}", exc_info=True)
+        return {
+            "success": False,
+            "error": error_msg,
+            "error_type": error_type,
+            "qa_pairs": [],
+            "suggestion": f"检索过程中出现 {error_type} 错误，系统将使用基础模式生成SQL（无样本参考）",
+            "details": "查看后端日志获取详细错误信息"
         }
 
 
@@ -291,14 +364,34 @@ class SampleRetrievalAgent:
 3. 仅在有高质量样本时才进行深度分析
 4. 为SQL生成提供准确的样本指导
 
+重要原则（快速降级策略）：
+- 如果检索服务出现问题（超时、连接失败、初始化错误），**立即报告错误并结束**，不要重试
+- 如果没有找到高质量样本，**快速结束**，让SQL生成器使用基础模式工作
+- **不要因为检索问题阻塞整个查询流程**
+- 系统可以在没有样本的情况下正常生成SQL，样本只是辅助优化
+
 智能工作流程：
 1. 首先使用 retrieve_similar_qa_pairs 工具检索相关样本
 2. 检查检索结果：
+   - 如果检索失败（success=False），立即报告错误详情，建议用户检查服务状态，然后**直接结束**
+   - 如果检索超时（TimeoutError），说明可能是数据库连接问题，**直接结束**
    - 如果没有样本被召回（total_found = 0），直接结束，不执行其他工具
    - 如果有样本但质量不高（相似度 < 0.6），直接结束
    - 只有在有高质量样本时才继续后续分析
 3. 有高质量样本时，使用 analyze_sample_relevance 工具分析样本相关性
 4. 最后使用 extract_sql_patterns 工具提取SQL模式
+
+检索失败时的标准响应格式：
+```
+检索服务遇到问题：[具体错误信息]
+
+建议：
+- 检查Milvus向量数据库服务是否正常运行
+- 检查Neo4j图数据库服务是否正常运行
+- 查看troubleshooting信息获取详细诊断
+
+系统将继续使用基础模式生成SQL（无样本参考）。
+```
 
 质量控制原则：
 - 只保留相似度 >= 0.6 的样本（系统自动过滤）
@@ -307,13 +400,18 @@ class SampleRetrievalAgent:
 - 确保样本与当前查询真正相关
 
 重点关注：
+- 检索结果的 success 字段（如果为False立即处理错误）
+- error_type 字段（TimeoutError、InitializationError等）
 - 样本的相似度分数（final_score >= 0.6）
 - 样本的成功率和验证状态
 - SQL结构的相似性
 - 查询类型的匹配度
 - 表结构的兼容性
 
-记住：宁缺毋滥，没有高质量样本时直接结束比使用低质量样本更好！"""
+记住：
+1. 宁缺毋滥，没有高质量样本时直接结束比使用低质量样本更好！
+2. 检索失败不是致命错误，SQL生成器可以在无样本情况下工作！
+3. 快速失败，不要阻塞用户的查询！"""
 
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
         """处理样本检索任务"""

@@ -68,6 +68,16 @@ class FeedbackRequest(BaseModel):
     user_satisfaction: float  # 0.0 - 1.0
     feedback_text: Optional[str] = None
 
+class QAPairUpdate(BaseModel):
+    """更新问答对的请求模型"""
+    question: Optional[str] = None
+    sql: Optional[str] = None
+    difficulty_level: Optional[int] = None
+    query_type: Optional[str] = None
+    verified: Optional[bool] = None
+    used_tables: Optional[List[str]] = None
+    mentioned_entities: Optional[List[str]] = None
+
 # ===== 全局变量 =====
 hybrid_engines = {}  # 缓存不同连接的引擎实例
 
@@ -193,33 +203,40 @@ async def get_qa_pairs_stats(
 ):
     """获取问答对统计信息"""
     try:
-        # 这里可以添加从数据库获取统计信息的逻辑
-        # 目前返回模拟数据
-        stats = {
-            "total_qa_pairs": 0,
-            "verified_qa_pairs": 0,
-            "query_types": {
-                "SELECT": 0,
-                "JOIN": 0,
-                "AGGREGATE": 0,
-                "GROUP_BY": 0,
-                "ORDER_BY": 0
-            },
-            "difficulty_distribution": {
-                "1": 0,
-                "2": 0,
-                "3": 0,
-                "4": 0,
-                "5": 0
-            },
-            "average_success_rate": 0.0
+        engine = await get_hybrid_engine(connection_id)
+        stats = await engine.get_stats(connection_id)
+        
+        # 格式化返回数据
+        return {
+            "total_qa_pairs": stats.get("total", 0),
+            "verified_qa_pairs": stats.get("verified", 0),
+            "query_types": stats.get("query_types", {}),
+            "difficulty_distribution": stats.get("difficulty_distribution", {}),
+            "average_success_rate": stats.get("average_success_rate", 0.0),
+            "collection_name": stats.get("collection_name", ""),
+            "error": stats.get("error")
         }
-
-        return stats
 
     except Exception as e:
         logger.error(f"获取统计信息失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"获取统计信息失败: {str(e)}")
+
+@router.get("/qa-pairs/", response_model=List[Dict[str, Any]])
+async def list_qa_pairs(
+    connection_id: Optional[int] = Query(None, description="数据库连接ID"),
+    limit: int = Query(100, description="返回数量限制"),
+    db: Session = Depends(deps.get_db)
+):
+    """获取问答对列表"""
+    try:
+        engine = await get_hybrid_engine(connection_id)
+        qa_pairs = await engine.get_all_qa_pairs(connection_id, limit)
+        
+        return qa_pairs
+
+    except Exception as e:
+        logger.error(f"获取问答对列表失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取问答对列表失败: {str(e)}")
 
 @router.post("/qa-pairs/feedback", response_model=Dict[str, Any])
 async def submit_feedback(
@@ -328,6 +345,42 @@ async def batch_create_qa_pairs(
         logger.error(f"批量创建问答对失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"批量创建失败: {str(e)}")
 
+@router.put("/qa-pairs/{qa_id}", response_model=Dict[str, Any])
+async def update_qa_pair(
+    qa_id: str,
+    qa_update: QAPairUpdate,
+    db: Session = Depends(deps.get_db)
+):
+    """更新问答对"""
+    try:
+        # 获取更新数据（只包含非空字段）
+        update_data = qa_update.dict(exclude_unset=True)
+        
+        if not update_data:
+            raise HTTPException(status_code=400, detail="没有提供需要更新的字段")
+        
+        # 从Milvus中获取原数据并更新
+        # 注意：Milvus不支持直接更新，需要删除后重新插入
+        engine = await get_hybrid_engine()
+        
+        # 更新问答对
+        await engine.update_qa_pair(qa_id, update_data)
+        
+        logger.info(f"更新问答对成功: {qa_id}")
+        
+        return {
+            "status": "success",
+            "qa_id": qa_id,
+            "message": "问答对更新成功",
+            "updated_fields": list(update_data.keys())
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新问答对失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"更新失败: {str(e)}")
+
 @router.delete("/qa-pairs/{qa_id}", response_model=Dict[str, Any])
 async def delete_qa_pair(
     qa_id: str,
@@ -335,8 +388,8 @@ async def delete_qa_pair(
 ):
     """删除问答对"""
     try:
-        # 这里可以添加删除逻辑
-        # 需要从Neo4j和Milvus中删除相应的数据
+        engine = await get_hybrid_engine()
+        await engine.delete_qa_pair(qa_id)
 
         logger.info(f"删除问答对: {qa_id}")
 

@@ -371,44 +371,49 @@ def optimize_sql_query(sql_query: str, schema_info: Dict[str, Any]) -> Dict[str,
         }
 
 
-@tool
-def explain_sql_query(sql_query: str) -> Dict[str, Any]:
-    """
-    解释SQL查询的逻辑和执行计划
-    
-    Args:
-        sql_query: SQL查询语句
-        
-    Returns:
-        SQL查询的解释和分析
-    """
-    try:
-        prompt = f"""
-请详细解释以下SQL查询：
-
-{sql_query}
-
-请提供：
-1. 查询逻辑说明
-2. 执行步骤分析
-3. 可能的性能瓶颈
-4. 结果集预期
-"""
-        
-        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
-        response = llm.invoke([HumanMessage(content=prompt)])
-        
-        return {
-            "success": True,
-            "explanation": response.content,
-            "sql_query": sql_query
-        }
-        
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+# ============================================================================
+# 性能优化：注释掉 SQL 解释功能以减少 LLM 调用次数，提升响应速度
+# 优化时间：2026-01-18
+# 如需恢复此功能，取消下方注释即可
+# ============================================================================
+# @tool
+# def explain_sql_query(sql_query: str) -> Dict[str, Any]:
+#     """
+#     解释SQL查询的逻辑和执行计划
+#     
+#     Args:
+#         sql_query: SQL查询语句
+#         
+#     Returns:
+#         SQL查询的解释和分析
+#     """
+#     try:
+#         prompt = f"""
+# 请详细解释以下SQL查询：
+# 
+# {sql_query}
+# 
+# 请提供：
+# 1. 查询逻辑说明
+# 2. 执行步骤分析
+# 3. 可能的性能瓶颈
+# 4. 结果集预期
+# """
+#         
+#         llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
+#         response = llm.invoke([HumanMessage(content=prompt)])
+#         
+#         return {
+#             "success": True,
+#             "explanation": response.content,
+#             "sql_query": sql_query
+#         }
+#         
+#     except Exception as e:
+#         return {
+#             "success": False,
+#             "error": str(e)
+#         }
 
 
 class SQLGeneratorAgent:
@@ -417,7 +422,8 @@ class SQLGeneratorAgent:
     def __init__(self):
         self.name = "sql_generator_agent"  # 添加name属性
         self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
-        self.tools = [generate_sql_query, generate_sql_with_samples, explain_sql_query]
+        self.tools = [generate_sql_query, generate_sql_with_samples]
+        # 性能优化：移除 explain_sql_query 以提升响应速度（2026-01-18）
         # , analyze_sql_optimization_need, optimize_sql_query
         # 创建ReAct代理
         self.agent = create_react_agent(
@@ -437,13 +443,11 @@ class SQLGeneratorAgent:
 
 1. 根据用户查询和数据库模式信息生成准确的SQL语句
 2. 生成时就考虑SQL的正确性和安全性（因为不再有验证步骤）
-3. 提供SQL查询的详细解释
 
 智能工作流程：
 1. 检查是否有样本检索结果
 2. 如果有样本，优先使用 generate_sql_with_samples 工具
 3. 如果没有样本，使用 generate_sql_query 工具生成基础SQL
-4. 根据需要使用 explain_sql_query 工具解释查询逻辑
 
 SQL生成原则（重要 - 因为不再有验证步骤）：
 - 确保语法绝对正确

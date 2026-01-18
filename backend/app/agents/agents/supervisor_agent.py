@@ -75,7 +75,7 @@ class SupervisorAgent:
         # 简化后只包含5个核心代理
         agents = [
             schema_agent.agent,
-            # sample_retrieval_agent.agent,
+            sample_retrieval_agent.agent,  # 修复：取消注释以启用样本检索功能
             sql_generator_agent.agent,
             # 已移除：sql_validator_agent.agent  # 验证步骤已移除
             # parallel_sql_validator_agent.agent,
@@ -126,7 +126,8 @@ class SupervisorAgent:
 你管理以下专门代理：
 
 🔍 **schema_agent**: 分析用户查询，获取相关数据库表结构
-⚙️ **sql_generator_agent**: 根据模式信息生成高质量SQL语句
+📚 **sample_retrieval_agent**: 检索相关的SQL问答对样本，提供高质量参考
+⚙️ **sql_generator_agent**: 根据模式信息和样本生成高质量SQL语句
 🚀 **sql_executor_agent**: 安全执行SQL并返回结果
 📊 **chart_generator_agent**: 根据查询结果生成数据可视化图表
 🔧 **error_recovery_agent**: 处理错误并提供修复方案
@@ -139,7 +140,7 @@ class SupervisorAgent:
 5. 不要自己执行任何具体工作
 
 **标准流程:**
-用户查询 → schema_agent → sql_generator_agent → sql_executor_agent → [可选] chart_generator_agent → 完成
+用户查询 → schema_agent → sample_retrieval_agent → sql_generator_agent → sql_executor_agent → [可选] chart_generator_agent → 完成
 
 **图表生成条件:**
 - 用户查询包含可视化意图（如"图表"、"趋势"、"分布"、"比较"等关键词）

@@ -360,7 +360,8 @@ Step 2: 立即结束任务
             tool_message = ToolMessage(
                 content=json.dumps(result, ensure_ascii=False),
                 tool_call_id=tool_call_id,
-                name="execute_sql_query"
+                name="execute_sql_query",
+                status="success" if result.get("success") else "error"  # 修复：明确设置status字段
             )
             
             # 保存到 agent_messages

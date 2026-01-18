@@ -49,28 +49,47 @@ const HybridQAPage: React.FC = () => {
   const [qaPairs, setQaPairs] = useState<QAPair[]>([]);
   const [loading, setLoading] = useState(false);
   const [createModalVisible, setCreateModalVisible] = useState(false);
+  const [editModalVisible, setEditModalVisible] = useState(false);
   const [searchModalVisible, setSearchModalVisible] = useState(false);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [feedbackModalVisible, setFeedbackModalVisible] = useState(false);
   const [selectedQAPair, setSelectedQAPair] = useState<QAPair | null>(null);
+  const [editingQAPair, setEditingQAPair] = useState<any>(null);
   const [searchResults, setSearchResults] = useState<SimilarQAPair[]>([]);
   const [stats, setStats] = useState<any>({});
   const [connections, setConnections] = useState<DBConnection[]>([]);
   const [selectedConnectionId, setSelectedConnectionId] = useState<number | null>(null);
   const [loadingConnections, setLoadingConnections] = useState(false);
   const [form] = Form.useForm();
+  const [editForm] = Form.useForm();
   const [searchForm] = Form.useForm();
 
   useEffect(() => {
     loadConnections();
     loadStats();
+    loadQAPairs();
   }, []);
 
   useEffect(() => {
     if (selectedConnectionId) {
       loadStats(selectedConnectionId);
+      loadQAPairs(selectedConnectionId);
+    } else {
+      loadQAPairs();
     }
   }, [selectedConnectionId]);
+
+  const loadQAPairs = async (connectionId?: number) => {
+    try {
+      setLoading(true);
+      const response = await hybridQAService.getQAPairs(connectionId, 100);
+      setQaPairs(response);
+    } catch (error) {
+      console.error('加载问答对列表失败:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const loadConnections = async () => {
     try {
@@ -102,6 +121,7 @@ const HybridQAPage: React.FC = () => {
       setCreateModalVisible(false);
       form.resetFields();
       loadStats(selectedConnectionId || undefined); // 重新加载统计信息
+      loadQAPairs(selectedConnectionId || undefined); // 重新加载问答对列表
     } catch (error) {
       message.error('创建失败');
       console.error('创建问答对失败:', error);
@@ -132,6 +152,62 @@ const HybridQAPage: React.FC = () => {
     setDetailModalVisible(true);
   };
 
+  const handleEditQAPair = (record: any) => {
+    setEditingQAPair(record);
+    editForm.setFieldsValue({
+      question: record.question,
+      sql: record.sql,
+      query_type: record.query_type,
+      difficulty_level: record.difficulty_level,
+      verified: record.verified
+    });
+    setEditModalVisible(true);
+  };
+
+  const handleUpdateQAPair = async (values: any) => {
+    if (!editingQAPair) return;
+    
+    try {
+      setLoading(true);
+      await hybridQAService.updateQAPair(editingQAPair.id, values);
+      message.success('问答对更新成功');
+      setEditModalVisible(false);
+      editForm.resetFields();
+      setEditingQAPair(null);
+      loadStats(selectedConnectionId || undefined);
+      loadQAPairs(selectedConnectionId || undefined);
+    } catch (error) {
+      message.error('更新失败');
+      console.error('更新问答对失败:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteQAPair = async (qaId: string) => {
+    Modal.confirm({
+      title: '确认删除',
+      content: '确定要删除这个问答对吗？此操作不可恢复。',
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          setLoading(true);
+          await hybridQAService.deleteQAPair(qaId);
+          message.success('删除成功');
+          loadStats(selectedConnectionId || undefined);
+          loadQAPairs(selectedConnectionId || undefined);
+        } catch (error) {
+          message.error('删除失败');
+          console.error('删除问答对失败:', error);
+        } finally {
+          setLoading(false);
+        }
+      }
+    });
+  };
+
   const getQueryTypeColor = (type: string) => {
     const colors: Record<string, string> = {
       'SELECT': 'blue',
@@ -147,6 +223,106 @@ const HybridQAPage: React.FC = () => {
     const colors = ['#52c41a', '#1890ff', '#faad14', '#ff7a45', '#f5222d'];
     return colors[level - 1] || '#d9d9d9';
   };
+
+  // 问答对列表的列定义
+  const listColumns = [
+    {
+      title: '问题',
+      dataIndex: 'question',
+      key: 'question',
+      ellipsis: true,
+      width: 300,
+    },
+    {
+      title: 'SQL',
+      dataIndex: 'sql',
+      key: 'sql',
+      ellipsis: true,
+      width: 400,
+      render: (sql: string) => (
+        <code style={{ fontSize: '12px', background: '#f5f5f5', padding: '2px 4px' }}>
+          {sql}
+        </code>
+      ),
+    },
+    {
+      title: '查询类型',
+      dataIndex: 'query_type',
+      key: 'query_type',
+      width: 100,
+      render: (type: string) => (
+        <Tag color={getQueryTypeColor(type)}>{type}</Tag>
+      ),
+    },
+    {
+      title: '难度',
+      dataIndex: 'difficulty_level',
+      key: 'difficulty_level',
+      width: 80,
+      render: (level: number) => (
+        <Tag style={{ backgroundColor: getDifficultyColor(level), color: '#fff' }}>
+          {level}
+        </Tag>
+      ),
+    },
+    {
+      title: '已验证',
+      dataIndex: 'verified',
+      key: 'verified',
+      width: 80,
+      render: (verified: boolean) => (
+        <Tag color={verified ? 'green' : 'default'}>
+          {verified ? '是' : '否'}
+        </Tag>
+      ),
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 150,
+      render: (_: any, record: any) => (
+        <Space size="small">
+          <Tooltip title="查看详情">
+            <Button
+              type="text"
+              icon={<EyeOutlined />}
+              onClick={() => {
+                const qaPair: QAPair = {
+                  id: record.id,
+                  question: record.question,
+                  sql: record.sql,
+                  connection_id: record.connection_id,
+                  query_type: record.query_type,
+                  difficulty_level: record.difficulty_level,
+                  success_rate: record.success_rate || 0,
+                  verified: record.verified || false,
+                  created_at: record.created_at || new Date().toISOString(),
+                  used_tables: [],
+                  mentioned_entities: []
+                };
+                handleViewDetail(qaPair);
+              }}
+            />
+          </Tooltip>
+          <Tooltip title="编辑">
+            <Button
+              type="text"
+              icon={<EditOutlined />}
+              onClick={() => handleEditQAPair(record)}
+            />
+          </Tooltip>
+          <Tooltip title="删除">
+            <Button
+              type="text"
+              danger
+              icon={<DeleteOutlined />}
+              onClick={() => handleDeleteQAPair(record.id)}
+            />
+          </Tooltip>
+        </Space>
+      ),
+    },
+  ];
 
   const searchColumns = [
     {
@@ -338,8 +514,27 @@ const HybridQAPage: React.FC = () => {
         </Space>
 
         <Tabs 
-          defaultActiveKey="search"
+          defaultActiveKey="list"
           items={[
+            {
+              key: 'list',
+              label: '问答对列表',
+              children: (
+                <Table
+                  columns={listColumns}
+                  dataSource={qaPairs}
+                  loading={loading}
+                  rowKey={(record) => record.id}
+                  pagination={{
+                    pageSize: 10,
+                    showSizeChanger: true,
+                    showQuickJumper: true,
+                    showTotal: (total) => `共 ${total} 条记录`,
+                  }}
+                  scroll={{ x: 1000 }}
+                />
+              )
+            },
             {
               key: 'search',
               label: '智能搜索',
@@ -547,6 +742,90 @@ const HybridQAPage: React.FC = () => {
                 创建
               </Button>
               <Button onClick={() => setCreateModalVisible(false)}>
+                取消
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 编辑问答对模态框 */}
+      <Modal
+        title="编辑问答对"
+        open={editModalVisible}
+        onCancel={() => {
+          setEditModalVisible(false);
+          editForm.resetFields();
+          setEditingQAPair(null);
+        }}
+        footer={null}
+        width={800}
+      >
+        <Form
+          form={editForm}
+          layout="vertical"
+          onFinish={handleUpdateQAPair}
+        >
+          <Form.Item
+            name="question"
+            label="自然语言问题"
+            rules={[{ required: true, message: '请输入问题' }]}
+          >
+            <TextArea rows={3} placeholder="输入自然语言问题" />
+          </Form.Item>
+
+          <Form.Item
+            name="sql"
+            label="SQL语句"
+            rules={[{ required: true, message: '请输入SQL语句' }]}
+          >
+            <TextArea rows={5} placeholder="输入对应的SQL语句" />
+          </Form.Item>
+
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item
+                name="query_type"
+                label="查询类型"
+              >
+                <Select>
+                  <Option value="SELECT">SELECT</Option>
+                  <Option value="JOIN">JOIN</Option>
+                  <Option value="AGGREGATE">AGGREGATE</Option>
+                  <Option value="GROUP_BY">GROUP_BY</Option>
+                  <Option value="ORDER_BY">ORDER_BY</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name="difficulty_level"
+                label="难度等级"
+              >
+                <InputNumber min={1} max={5} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name="verified"
+                label="已验证"
+                valuePropName="checked"
+              >
+                <Switch />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item>
+            <Space>
+              <Button type="primary" htmlType="submit" loading={loading}>
+                保存
+              </Button>
+              <Button onClick={() => {
+                setEditModalVisible(false);
+                editForm.resetFields();
+                setEditingQAPair(null);
+              }}>
                 取消
               </Button>
             </Space>

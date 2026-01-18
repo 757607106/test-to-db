@@ -21,6 +21,7 @@ import numpy as np
 from app.core.config import settings
 from app.models.llm_config import LLMConfiguration
 from sqlalchemy.orm import Session
+from app.core.llms import get_default_embedding_config
 
 logger = logging.getLogger(__name__)
 
@@ -113,10 +114,17 @@ class VectorService:
             # Fallback到旧的参数模式
             self.llm_config = None
             self.service_type = service_type or settings.VECTOR_SERVICE_TYPE
-            self.model_name = model_name or (
-                settings.OLLAMA_EMBEDDING_MODEL if self.service_type == "ollama"
-                else settings.EMBEDDING_MODEL
-            )
+            
+            # 根据服务类型选择正确的模型名称
+            if model_name:
+                self.model_name = model_name
+            elif self.service_type == "ollama":
+                self.model_name = settings.OLLAMA_EMBEDDING_MODEL
+            elif self.service_type == "aliyun":
+                self.model_name = settings.DASHSCOPE_EMBEDDING_MODEL
+            else:
+                self.model_name = settings.EMBEDDING_MODEL
+            
             self.provider = self.service_type
             self.api_key = None
             self.base_url = None
@@ -514,33 +522,39 @@ class VectorService:
 
 
 class VectorServiceFactory:
-    """向量服务工厂类"""
+    """向量服务工厂类 - 使用用户在模型配置页面设置的嵌入模型"""
 
     _instances = {}
 
     @classmethod
-    async def create_service(cls, service_type: str = None, model_name: str = None) -> VectorService:
-        """创建或获取向量服务实例"""
-        service_type = service_type or settings.VECTOR_SERVICE_TYPE
-        model_name = model_name or (
-            settings.OLLAMA_EMBEDDING_MODEL if service_type == "ollama"
-            else settings.EMBEDDING_MODEL
-        )
-
-        instance_key = f"{service_type}:{model_name}"
-
+    async def create_service_from_config(cls, llm_config: LLMConfiguration) -> VectorService:
+        """从数据库LLM配置创建向量服务实例"""
+        instance_key = f"config:{llm_config.id}:{llm_config.model_name}"
+        
         if instance_key not in cls._instances:
-            service = VectorService(service_type=service_type, model_name=model_name)
+            service = VectorService(llm_config=llm_config)
             await service.initialize()
             cls._instances[instance_key] = service
-            logger.info(f"Created new vector service instance: {instance_key}")
-
+            logger.info(f"Created vector service from DB config: id={llm_config.id}, model={llm_config.model_name}")
+        
         return cls._instances[instance_key]
 
     @classmethod
     async def get_default_service(cls) -> VectorService:
-        """获取默认向量服务"""
-        return await cls.create_service()
+        """
+        获取默认向量服务（使用用户在模型配置页面设置的嵌入模型）
+        """
+        # 从数据库获取用户配置的默认嵌入模型
+        default_config = get_default_embedding_config()
+        
+        if not default_config:
+            raise ValueError(
+                "未配置默认嵌入模型。请在管理后台的「模型配置」页面中添加一个嵌入(Embedding)模型，"
+                "并将其设置为默认模型。"
+            )
+        
+        logger.info(f"Using database embedding config: id={default_config.id}, model={default_config.model_name}")
+        return await cls.create_service_from_config(default_config)
 
     @classmethod
     def clear_instances(cls):
@@ -771,6 +785,9 @@ class MilvusService:
                 collection_name=self.collection_name,
                 data=[data]
             )
+            
+            # 立即刷新以确保插入生效
+            self.client.flush(collection_name=self.collection_name)
 
             logger.info(f"Inserted QA pair: {qa_pair.id}")
             return qa_pair.id
@@ -831,6 +848,173 @@ class MilvusService:
                 "similarity_score": result["distance"]
             })
         return formatted_results
+
+    async def get_stats(self, connection_id: Optional[int] = None) -> Dict[str, Any]:
+        """获取问答对统计信息"""
+        if not self._initialized:
+            return {"total": 0, "error": "Service not initialized"}
+
+        try:
+            # 获取集合中的实体数量
+            collection_info = self.client.describe_collection(collection_name=self.collection_name)
+            
+            # 查询所有数据以计算统计信息
+            filter_expr = f"connection_id == {connection_id}" if connection_id else None
+            
+            # 查询数据
+            results = self.client.query(
+                collection_name=self.collection_name,
+                filter=filter_expr if filter_expr else "id != ''",
+                output_fields=["id", "query_type", "difficulty_level", "verified", "success_rate"],
+                limit=10000  # 限制查询数量
+            )
+            
+            # 统计信息
+            total = len(results)
+            verified_count = sum(1 for r in results if r.get("verified", False))
+            
+            # 查询类型统计
+            query_types = {}
+            for r in results:
+                qt = r.get("query_type", "UNKNOWN")
+                query_types[qt] = query_types.get(qt, 0) + 1
+            
+            # 难度分布
+            difficulty_dist = {}
+            for r in results:
+                dl = str(r.get("difficulty_level", 3))
+                difficulty_dist[dl] = difficulty_dist.get(dl, 0) + 1
+            
+            # 平均成功率
+            success_rates = [r.get("success_rate", 0) for r in results]
+            avg_success_rate = sum(success_rates) / len(success_rates) if success_rates else 0.0
+            
+            return {
+                "total": total,
+                "verified": verified_count,
+                "query_types": query_types,
+                "difficulty_distribution": difficulty_dist,
+                "average_success_rate": round(avg_success_rate, 2),
+                "collection_name": self.collection_name
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get stats: {str(e)}")
+            return {"total": 0, "error": str(e)}
+
+    async def get_all_qa_pairs(self, connection_id: Optional[int] = None, limit: int = 100) -> List[Dict]:
+        """获取所有问答对"""
+        if not self._initialized:
+            return []
+
+        try:
+            filter_expr = f"connection_id == {connection_id}" if connection_id else "id != ''"
+            
+            results = self.client.query(
+                collection_name=self.collection_name,
+                filter=filter_expr,
+                output_fields=["id", "question", "sql", "connection_id", 
+                              "difficulty_level", "query_type", "success_rate", "verified"],
+                limit=limit
+            )
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Failed to get all QA pairs: {str(e)}")
+            return []
+
+    async def get_qa_pair_by_id(self, qa_id: str) -> Optional[Dict]:
+        """根据ID获取问答对"""
+        if not self._initialized:
+            return None
+
+        try:
+            results = self.client.query(
+                collection_name=self.collection_name,
+                filter=f'id == "{qa_id}"',
+                output_fields=["id", "question", "sql", "connection_id", 
+                              "difficulty_level", "query_type", "success_rate", "verified"]
+            )
+            
+            return results[0] if results else None
+            
+        except Exception as e:
+            logger.error(f"Failed to get QA pair by id {qa_id}: {str(e)}")
+            return None
+
+    async def update_qa_pair(self, qa_id: str, update_data: Dict, new_vector: List[float] = None) -> bool:
+        """更新问答对（Milvus不支持直接更新，需要删除后重新插入）"""
+        if not self._initialized:
+            raise RuntimeError("Milvus service not initialized")
+
+        try:
+            # 1. 获取原始数据
+            original = await self.get_qa_pair_by_id(qa_id)
+            if not original:
+                raise ValueError(f"QA pair with id {qa_id} not found")
+            
+            # 2. 合并更新数据
+            updated_data = {**original, **update_data}
+            
+            # 3. 删除原始记录
+            self.client.delete(
+                collection_name=self.collection_name,
+                filter=f'id == "{qa_id}"'
+            )
+            
+            # 立即刷新以确保删除生效
+            self.client.flush(collection_name=self.collection_name)
+            
+            # 4. 重新插入更新后的数据
+            data = {
+                "id": updated_data["id"],
+                "question": updated_data["question"],
+                "sql": updated_data["sql"],
+                "connection_id": updated_data["connection_id"],
+                "difficulty_level": updated_data["difficulty_level"],
+                "query_type": updated_data["query_type"],
+                "success_rate": updated_data.get("success_rate", 0.0),
+                "verified": updated_data.get("verified", False),
+                "vector": new_vector if new_vector else [0.0] * 1024  # 需要重新生成向量
+            }
+            
+            self.client.insert(
+                collection_name=self.collection_name,
+                data=[data]
+            )
+            
+            # 再次刷新以确保插入生效
+            self.client.flush(collection_name=self.collection_name)
+            
+            logger.info(f"Updated QA pair: {qa_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to update QA pair {qa_id}: {str(e)}")
+            raise
+
+    async def delete_qa_pair(self, qa_id: str) -> bool:
+        """删除问答对"""
+        if not self._initialized:
+            raise RuntimeError("Milvus service not initialized")
+
+        try:
+            # 执行删除
+            self.client.delete(
+                collection_name=self.collection_name,
+                filter=f'id == "{qa_id}"'
+            )
+            
+            # 立即刷新以确保删除生效
+            self.client.flush(collection_name=self.collection_name)
+            
+            logger.info(f"Deleted QA pair from Milvus: {qa_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to delete QA pair {qa_id}: {str(e)}")
+            raise
 
 # ===== 扩展的Neo4j服务 =====
 
@@ -1495,6 +1679,226 @@ class HybridRetrievalEngine:
 
         return status
 
+    async def get_stats(self, connection_id: Optional[int] = None) -> Dict[str, Any]:
+        """获取问答对统计信息"""
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            # 获取对应连接的Milvus服务
+            if connection_id:
+                milvus_service = await self.get_milvus_service_for_connection(connection_id)
+            else:
+                milvus_service = self.milvus_service
+            
+            # 从Milvus获取统计信息
+            stats = await milvus_service.get_stats(connection_id)
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Failed to get stats: {str(e)}")
+            return {
+                "total": 0,
+                "verified": 0,
+                "query_types": {},
+                "difficulty_distribution": {},
+                "average_success_rate": 0.0,
+                "error": str(e)
+            }
+
+    async def get_all_qa_pairs(self, connection_id: Optional[int] = None, limit: int = 100) -> List[Dict]:
+        """获取所有问答对"""
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            # 获取对应连接的Milvus服务
+            if connection_id:
+                milvus_service = await self.get_milvus_service_for_connection(connection_id)
+            else:
+                milvus_service = self.milvus_service
+            
+            return await milvus_service.get_all_qa_pairs(connection_id, limit)
+            
+        except Exception as e:
+            logger.error(f"Failed to get all QA pairs: {str(e)}")
+            return []
+
+    async def update_qa_pair(self, qa_id: str, update_data: Dict) -> bool:
+        """更新问答对"""
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            # 如果问题被更新，需要重新生成向量
+            new_vector = None
+            if "question" in update_data:
+                new_vector = await self.vector_service.embed_question(update_data["question"])
+            
+            # 策略：从 Milvus 获取所有 collections，然后在每个 collection 中查找
+            try:
+                collections = self.milvus_service.client.list_collections()
+                logger.info(f"Searching for QA pair {qa_id} in {len(collections)} collections")
+                
+                for collection_name in collections:
+                    try:
+                        # 尝试在这个 collection 中查询
+                        results = self.milvus_service.client.query(
+                            collection_name=collection_name,
+                            filter=f'id == "{qa_id}"',
+                            output_fields=["id", "connection_id"],
+                            limit=1
+                        )
+                        
+                        if results and len(results) > 0:
+                            # 找到了！获取 connection_id
+                            connection_id = results[0].get("connection_id")
+                            logger.info(f"Found QA pair {qa_id} in collection {collection_name}, connection_id={connection_id}")
+                            
+                            # 获取或创建对应的 MilvusService
+                            if connection_id:
+                                milvus_service = await self.get_milvus_service_for_connection(connection_id)
+                            else:
+                                milvus_service = self.milvus_service
+                            
+                            # 执行更新
+                            result = await milvus_service.update_qa_pair(qa_id, update_data, new_vector)
+                            if result:
+                                await self._update_neo4j_qa_pair(qa_id, update_data)
+                                logger.info(f"Successfully updated QA pair {qa_id}")
+                                return True
+                    except Exception as e:
+                        # 这个 collection 中没有找到或出错，继续下一个
+                        logger.debug(f"QA pair {qa_id} not found in collection {collection_name}: {str(e)}")
+                        continue
+                
+                raise ValueError(f"QA pair with id {qa_id} not found in any collection")
+                
+            except Exception as e:
+                logger.error(f"Failed to search collections: {str(e)}")
+                raise
+            
+        except Exception as e:
+            logger.error(f"Failed to update QA pair {qa_id}: {str(e)}")
+            raise
+
+    async def _update_neo4j_qa_pair(self, qa_id: str, update_data: Dict):
+        """更新Neo4j中的问答对数据"""
+        try:
+            if not self.neo4j_service._initialized:
+                await self.neo4j_service.initialize()
+            
+            with self.neo4j_service.driver.session() as session:
+                # 构建SET子句
+                set_clauses = []
+                params = {"qa_id": qa_id}
+                
+                field_mapping = {
+                    "question": "question",
+                    "sql": "sql",
+                    "difficulty_level": "difficulty_level",
+                    "query_type": "query_type",
+                    "verified": "verified",
+                    "success_rate": "success_rate"
+                }
+                
+                for field, neo4j_field in field_mapping.items():
+                    if field in update_data:
+                        set_clauses.append(f"qa.{neo4j_field} = ${field}")
+                        params[field] = update_data[field]
+                
+                if set_clauses:
+                    query = f"""
+                        MATCH (qa:QAPair {{id: $qa_id}})
+                        SET {', '.join(set_clauses)}
+                        RETURN qa
+                    """
+                    session.run(query, params)
+                    logger.info(f"Updated QA pair in Neo4j: {qa_id}")
+                    
+        except Exception as e:
+            logger.warning(f"Failed to update QA pair in Neo4j: {str(e)}")
+
+    async def delete_qa_pair(self, qa_id: str) -> bool:
+        """删除问答对"""
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            # 策略：从 Milvus 获取所有 collections，然后在每个 collection 中查找并删除
+            deleted = False
+            
+            try:
+                collections = self.milvus_service.client.list_collections()
+                logger.info(f"Searching for QA pair {qa_id} to delete in {len(collections)} collections")
+                
+                for collection_name in collections:
+                    try:
+                        # 尝试在这个 collection 中查询
+                        results = self.milvus_service.client.query(
+                            collection_name=collection_name,
+                            filter=f'id == "{qa_id}"',
+                            output_fields=["id", "connection_id"],
+                            limit=1
+                        )
+                        
+                        if results and len(results) > 0:
+                            # 找到了！获取 connection_id
+                            connection_id = results[0].get("connection_id")
+                            logger.info(f"Found QA pair {qa_id} in collection {collection_name}, connection_id={connection_id}")
+                            
+                            # 获取或创建对应的 MilvusService
+                            if connection_id:
+                                milvus_service = await self.get_milvus_service_for_connection(connection_id)
+                            else:
+                                milvus_service = self.milvus_service
+                            
+                            # 执行删除
+                            await milvus_service.delete_qa_pair(qa_id)
+                            deleted = True
+                            logger.info(f"Deleted QA pair {qa_id} from collection {collection_name}")
+                            break  # 找到并删除后退出循环
+                    except Exception as e:
+                        logger.debug(f"QA pair {qa_id} not found in collection {collection_name}: {str(e)}")
+                        continue
+                
+                if not deleted:
+                    raise ValueError(f"QA pair with id {qa_id} not found in any collection")
+                
+            except Exception as e:
+                if "not found" in str(e).lower():
+                    raise
+                logger.error(f"Failed to search collections: {str(e)}")
+                raise
+            
+            # 从Neo4j中删除
+            await self._delete_neo4j_qa_pair(qa_id)
+            
+            logger.info(f"Successfully deleted QA pair: {qa_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to delete QA pair {qa_id}: {str(e)}")
+            raise
+
+    async def _delete_neo4j_qa_pair(self, qa_id: str):
+        """从Neo4j中删除问答对"""
+        try:
+            if not self.neo4j_service._initialized:
+                await self.neo4j_service.initialize()
+            
+            with self.neo4j_service.driver.session() as session:
+                # 删除问答对及其关系
+                session.run("""
+                    MATCH (qa:QAPair {id: $qa_id})
+                    DETACH DELETE qa
+                """, qa_id=qa_id)
+                logger.info(f"Deleted QA pair from Neo4j: {qa_id}")
+                
+        except Exception as e:
+            logger.warning(f"Failed to delete QA pair from Neo4j: {str(e)}")
+
     async def clear_caches(self):
         """清理所有缓存"""
         if self.vector_service:
@@ -1567,3 +1971,164 @@ def clean_sql(sql: str) -> str:
 def generate_qa_id() -> str:
     """生成问答对ID"""
     return f"qa_{uuid.uuid4().hex[:12]}"
+
+
+# ===== 混合检索引擎池 =====
+
+class HybridRetrievalEnginePool:
+    """
+    混合检索引擎池 - 复用服务实例，避免重复初始化
+    
+    特性：
+    - 单例模式管理默认引擎
+    - 按connection_id缓存引擎实例
+    - 自动初始化和健康检查
+    - 线程安全
+    """
+    
+    _default_engine: Optional[HybridRetrievalEngine] = None
+    _instances: Dict[int, HybridRetrievalEngine] = {}
+    _lock = asyncio.Lock()
+    _initialized = False
+    
+    @classmethod
+    async def get_engine(cls, connection_id: Optional[int] = None) -> HybridRetrievalEngine:
+        """
+        获取或创建检索引擎实例
+        
+        Args:
+            connection_id: 数据库连接ID，如果为None则返回默认引擎
+            
+        Returns:
+            HybridRetrievalEngine: 检索引擎实例
+        """
+        async with cls._lock:
+            if connection_id is None:
+                # 返回默认引擎
+                if cls._default_engine is None:
+                    logger.info("创建默认混合检索引擎实例...")
+                    cls._default_engine = await cls._create_engine()
+                    logger.info("默认混合检索引擎实例创建成功")
+                return cls._default_engine
+            else:
+                # 按connection_id缓存
+                if connection_id not in cls._instances:
+                    logger.info(f"为connection_id={connection_id}创建混合检索引擎实例...")
+                    cls._instances[connection_id] = await cls._create_engine(connection_id)
+                    logger.info(f"connection_id={connection_id}的检索引擎实例创建成功")
+                return cls._instances[connection_id]
+    
+    @classmethod
+    async def _create_engine(cls, connection_id: Optional[int] = None) -> HybridRetrievalEngine:
+        """
+        创建并初始化检索引擎实例
+        
+        Args:
+            connection_id: 数据库连接ID
+            
+        Returns:
+            HybridRetrievalEngine: 初始化完成的检索引擎
+        """
+        try:
+            # 获取向量服务（复用全局实例）
+            vector_service = await VectorServiceFactory.get_default_service()
+            
+            # 创建检索引擎
+            engine = HybridRetrievalEngine(
+                vector_service=vector_service,
+                connection_id=connection_id
+            )
+            
+            # 初始化引擎
+            await engine.initialize()
+            
+            logger.info(f"检索引擎初始化成功 - connection_id: {connection_id}")
+            return engine
+            
+        except Exception as e:
+            logger.error(f"创建检索引擎失败 - connection_id: {connection_id}, error: {str(e)}")
+            raise
+    
+    @classmethod
+    async def warmup(cls, connection_ids: List[int] = None):
+        """
+        预热初始化检索引擎
+        
+        Args:
+            connection_ids: 需要预热的连接ID列表，如果为None则只初始化默认引擎
+        """
+        logger.info("开始预热混合检索引擎...")
+        
+        try:
+            # 初始化默认引擎
+            await cls.get_engine(None)
+            logger.info("默认引擎预热完成")
+            
+            # 如果提供了连接ID列表，预热这些连接的引擎
+            if connection_ids:
+                for conn_id in connection_ids:
+                    try:
+                        await cls.get_engine(conn_id)
+                        logger.info(f"连接 {conn_id} 的引擎预热完成")
+                    except Exception as e:
+                        logger.warning(f"连接 {conn_id} 的引擎预热失败: {str(e)}")
+            
+            cls._initialized = True
+            logger.info("混合检索引擎预热完成")
+            
+        except Exception as e:
+            logger.error(f"混合检索引擎预热失败: {str(e)}")
+            raise
+    
+    @classmethod
+    async def health_check(cls) -> Dict[str, Any]:
+        """
+        健康检查
+        
+        Returns:
+            Dict: 健康状态信息
+        """
+        status = {
+            "initialized": cls._initialized,
+            "default_engine": cls._default_engine is not None,
+            "cached_engines": len(cls._instances),
+            "connection_ids": list(cls._instances.keys()),
+            "healthy": True,
+            "errors": []
+        }
+        
+        # 检查默认引擎
+        if cls._default_engine:
+            try:
+                if not cls._default_engine._initialized:
+                    status["healthy"] = False
+                    status["errors"].append("默认引擎未初始化")
+            except Exception as e:
+                status["healthy"] = False
+                status["errors"].append(f"默认引擎检查失败: {str(e)}")
+        
+        return status
+    
+    @classmethod
+    def clear_cache(cls):
+        """清理所有缓存的引擎实例"""
+        logger.info("清理混合检索引擎缓存...")
+        cls._default_engine = None
+        cls._instances.clear()
+        cls._initialized = False
+        logger.info("混合检索引擎缓存已清理")
+    
+    @classmethod
+    def get_stats(cls) -> Dict[str, Any]:
+        """
+        获取统计信息
+        
+        Returns:
+            Dict: 统计信息
+        """
+        return {
+            "initialized": cls._initialized,
+            "has_default_engine": cls._default_engine is not None,
+            "cached_engines_count": len(cls._instances),
+            "cached_connection_ids": list(cls._instances.keys())
+        }
