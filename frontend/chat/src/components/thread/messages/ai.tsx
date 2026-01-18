@@ -1,6 +1,6 @@
 import { parsePartialJson } from "@langchain/core/output_parsers";
 import { useStreamContext } from "@/providers/Stream";
-import { AIMessage, Checkpoint, Message } from "@langchain/langgraph-sdk";
+import { AIMessage, Checkpoint, Message, ToolMessage } from "@langchain/langgraph-sdk";
 import { getContentString } from "../utils";
 import { BranchSwitcher, CommandBar } from "./shared";
 import { MarkdownText } from "../markdown-text";
@@ -14,6 +14,50 @@ import { ThreadView } from "../agent-inbox";
 import { useQueryState, parseAsBoolean } from "nuqs";
 import { GenericInterruptView } from "./generic-interrupt";
 import { useArtifact } from "../artifact";
+
+/**
+ * Fix duplicated tool_call_id issue from LangGraph backend
+ * Some tool_call_ids are incorrectly duplicated (e.g., "call_xxxcall_xxx" instead of "call_xxx")
+ * This function detects and fixes such duplications
+ */
+function fixDuplicatedToolCallId(toolCallId: string): string {
+  if (!toolCallId) return toolCallId;
+  
+  // Check if the ID is duplicated (e.g., "call_xxxcall_xxx")
+  // Pattern: if the string is exactly twice the length of its first half and both halves are identical
+  const len = toolCallId.length;
+  if (len % 2 === 0) {
+    const half = len / 2;
+    const firstHalf = toolCallId.substring(0, half);
+    const secondHalf = toolCallId.substring(half);
+    if (firstHalf === secondHalf) {
+      return firstHalf;
+    }
+  }
+  
+  return toolCallId;
+}
+
+/**
+ * Check if a tool call ID matches a tool result's tool_call_id
+ * Handles the case where tool_call_id might be duplicated
+ */
+function toolCallIdMatches(toolCallId: string, toolResultId: string): boolean {
+  if (!toolCallId || !toolResultId) return false;
+  
+  // Direct match
+  if (toolCallId === toolResultId) return true;
+  
+  // Try fixing duplicated ID
+  const fixedResultId = fixDuplicatedToolCallId(toolResultId);
+  if (toolCallId === fixedResultId) return true;
+  
+  // Also check if the tool call ID itself might be duplicated (less common)
+  const fixedCallId = fixDuplicatedToolCallId(toolCallId);
+  if (fixedCallId === toolResultId || fixedCallId === fixedResultId) return true;
+  
+  return false;
+}
 
 function CustomComponent({
   message,
@@ -160,9 +204,9 @@ export function AssistantMessage({
                   <ToolCalls
                     toolCalls={message.tool_calls}
                     toolResults={messages.filter(
-                      (m): m is import("@langchain/langgraph-sdk").ToolMessage =>
+                      (m): m is ToolMessage =>
                         m.type === "tool" &&
-                        !!message.tool_calls?.some(tc => tc.id === (m as any).tool_call_id)
+                        !!message.tool_calls?.some(tc => toolCallIdMatches(tc.id || "", (m as any).tool_call_id || ""))
                     )}
                   />
                 )) ||
@@ -170,9 +214,9 @@ export function AssistantMessage({
                     <ToolCalls
                       toolCalls={anthropicStreamedToolCalls}
                       toolResults={messages.filter(
-                        (m): m is import("@langchain/langgraph-sdk").ToolMessage =>
+                        (m): m is ToolMessage =>
                           m.type === "tool" &&
-                          anthropicStreamedToolCalls?.some(tc => tc.id === (m as any).tool_call_id)
+                          anthropicStreamedToolCalls?.some(tc => toolCallIdMatches(tc.id || "", (m as any).tool_call_id || ""))
                       )}
                     />
                   )) ||
@@ -180,9 +224,9 @@ export function AssistantMessage({
                     <ToolCalls
                       toolCalls={message.tool_calls}
                       toolResults={messages.filter(
-                        (m): m is import("@langchain/langgraph-sdk").ToolMessage =>
+                        (m): m is ToolMessage =>
                           m.type === "tool" &&
-                          !!message.tool_calls?.some(tc => tc.id === (m as any).tool_call_id)
+                          !!message.tool_calls?.some(tc => toolCallIdMatches(tc.id || "", (m as any).tool_call_id || ""))
                       )}
                     />
                   ))}

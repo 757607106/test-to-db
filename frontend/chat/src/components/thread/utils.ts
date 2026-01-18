@@ -26,7 +26,56 @@ export function getContentString(content: Message["content"]): string {
 function filterToolResultJson(text: string): string {
   if (!text) return "";
   
-  // 匹配工具返回的JSON结果模式
+  const trimmed = text.trim();
+  
+  // 检查是否是纯 JSON 对象或数组
+  const startsWithJson = trimmed.startsWith("{") || trimmed.startsWith("[");
+  const endsWithJson = trimmed.endsWith("}") || trimmed.endsWith("]");
+  
+  if (startsWithJson && endsWithJson) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      
+      // 检查是否是工具返回的特征字段（对象格式）
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        if (
+          parsed.needs_clarification !== undefined ||
+          parsed.success !== undefined ||
+          parsed.questions !== undefined ||
+          parsed.error !== undefined ||
+          parsed.analysis !== undefined ||
+          parsed.schema_context !== undefined ||
+          parsed.value_mappings !== undefined ||
+          parsed.entities !== undefined ||
+          parsed.relationships !== undefined ||
+          parsed.query_intent !== undefined
+        ) {
+          return "";
+        }
+      }
+      
+      // 检查是否是工具返回的数组格式（如 schema 结果）
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const firstItem = parsed[0];
+        if (typeof firstItem === "object" && firstItem !== null) {
+          // 检查是否有工具结果的特征字段
+          if (
+            firstItem.table_id !== undefined ||
+            firstItem.relevance_score !== undefined ||
+            firstItem.reasoning !== undefined ||
+            firstItem.column_id !== undefined ||
+            firstItem.schema_name !== undefined
+          ) {
+            return "";
+          }
+        }
+      }
+    } catch {
+      // 不是有效的JSON，保持原样
+    }
+  }
+  
+  // 匹配工具返回的JSON结果模式（用于混合内容）
   const toolResultPatterns = [
     // 澄清检查结果
     /\{\s*["']needs_clarification["']\s*:\s*(?:true|false)[^}]*\}/gi,
@@ -41,24 +90,6 @@ function filterToolResultJson(text: string): string {
   // 移除匹配的JSON
   for (const pattern of toolResultPatterns) {
     result = result.replace(pattern, "").trim();
-  }
-  
-  // 如果整个内容看起来像一个工具返回JSON，直接返回空
-  if (result.trim().startsWith("{") && result.trim().endsWith("}")) {
-    try {
-      const parsed = JSON.parse(result);
-      // 检查是否是工具返回的特征字段
-      if (
-        parsed.needs_clarification !== undefined ||
-        parsed.success !== undefined ||
-        parsed.questions !== undefined ||
-        parsed.error !== undefined
-      ) {
-        return "";
-      }
-    } catch {
-      // 不是有效的JSON，保持原样
-    }
   }
   
   return result;
