@@ -8,7 +8,11 @@ import {
   CopyCheck,
   ChevronLeft,
   ChevronRight,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react";
+import { submitFeedback, type FeedbackContext } from "@/lib/feedback-service";
+import { toast } from "sonner";
 import { TooltipIconButton } from "../tooltip-icon-button";
 import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
@@ -125,6 +129,7 @@ export function CommandBar({
   handleSubmitEdit,
   handleRegenerate,
   isLoading,
+  feedbackContext,
 }: {
   content: string;
   isHumanMessage?: boolean;
@@ -134,7 +139,61 @@ export function CommandBar({
   handleSubmitEdit?: () => void;
   handleRegenerate?: () => void;
   isLoading: boolean;
+  /** 反馈上下文，包含问题和SQL，用于点赞/点踩功能 */
+  feedbackContext?: FeedbackContext;
 }) {
+  // 点赞/点踩状态
+  const [feedbackGiven, setFeedbackGiven] = useState<'up' | 'down' | null>(null);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+
+  // 处理点赞
+  const handleThumbsUp = async () => {
+    if (!feedbackContext || feedbackLoading || feedbackGiven) return;
+    
+    setFeedbackLoading(true);
+    try {
+      const result = await submitFeedback(feedbackContext, 'thumbs_up');
+      if (result.status === 'success') {
+        setFeedbackGiven('up');
+        toast.success('感谢您的反馈！', {
+          description: '问答对已保存到智能训练中心',
+        });
+      } else if (result.status === 'error') {
+        toast.error('提交反馈失败', {
+          description: result.message,
+        });
+      }
+    } catch (error) {
+      toast.error('提交反馈失败', {
+        description: '请稍后重试',
+      });
+    } finally {
+      setFeedbackLoading(false);
+    }
+  };
+
+  // 处理点踩
+  const handleThumbsDown = async () => {
+    if (!feedbackContext || feedbackLoading || feedbackGiven) return;
+    
+    setFeedbackLoading(true);
+    try {
+      const result = await submitFeedback(feedbackContext, 'thumbs_down');
+      setFeedbackGiven('down');
+      toast.info('感谢您的反馈！', {
+        description: '我们会持续改进',
+      });
+    } catch (error) {
+      toast.error('提交反馈失败', {
+        description: '请稍后重试',
+      });
+    } finally {
+      setFeedbackLoading(false);
+    }
+  };
+
+  // 是否显示反馈按钮（只有AI消息且有SQL时才显示）
+  const showFeedbackButtons = isAiMessage && feedbackContext?.sql;
   if (isHumanMessage && isAiMessage) {
     throw new Error(
       "Can only set one of isHumanMessage or isAiMessage to true, not both.",
@@ -191,6 +250,32 @@ export function CommandBar({
 
   return (
     <div className="flex items-center gap-2">
+      {/* 点赞/点踩按钮 - 只在AI消息且有SQL时显示 */}
+      {showFeedbackButtons && (
+        <>
+          <TooltipIconButton
+            disabled={isLoading || feedbackLoading || feedbackGiven !== null}
+            tooltip={feedbackGiven === 'up' ? '已点赞' : '这个回答很有帮助'}
+            variant="ghost"
+            onClick={handleThumbsUp}
+          >
+            <ThumbsUp 
+              className={feedbackGiven === 'up' ? 'text-green-500 fill-green-500' : ''} 
+            />
+          </TooltipIconButton>
+          <TooltipIconButton
+            disabled={isLoading || feedbackLoading || feedbackGiven !== null}
+            tooltip={feedbackGiven === 'down' ? '已反馈' : '这个回答需要改进'}
+            variant="ghost"
+            onClick={handleThumbsDown}
+          >
+            <ThumbsDown 
+              className={feedbackGiven === 'down' ? 'text-orange-500 fill-orange-500' : ''} 
+            />
+          </TooltipIconButton>
+          <div className="h-4 w-px bg-border mx-1" /> {/* 分隔线 */}
+        </>
+      )}
       <ContentCopyable
         content={content}
         disabled={isLoading}

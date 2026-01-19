@@ -1,8 +1,15 @@
 """
 SQL生成代理
 负责根据模式信息和用户查询生成高质量的SQL语句
+
+优化历史:
+- 2026-01-19: 集成样本检索功能，自动从 QA 库中检索相似样本
+  - 避免了独立 sample_retrieval_agent 的 ReAct 调度延迟（原 2+ 分钟）
+  - 先快速检查是否有样本，没有则跳过检索步骤
 """
 from typing import Dict, Any, List
+import logging
+import asyncio
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.prebuilt import create_react_agent
@@ -11,6 +18,51 @@ from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 
+logger = logging.getLogger(__name__)
+
+
+def _fetch_qa_samples_sync(user_query: str, schema_info: Dict[str, Any], connection_id: int) -> List[Dict[str, Any]]:
+    """
+    同步包装器：获取 QA 样本
+    
+    在同步上下文中安全地调用异步检索方法
+    """
+    try:
+        from app.services.hybrid_retrieval_service import HybridRetrievalEnginePool
+        
+        # 在新的事件循环中运行异步代码
+        def _run_async():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(
+                    HybridRetrievalEnginePool.quick_retrieve(
+                        user_query=user_query,
+                        schema_context=schema_info,
+                        connection_id=connection_id,
+                        top_k=3,
+                        min_similarity=0.6
+                    )
+                )
+            finally:
+                loop.close()
+        
+        # 检查是否在事件循环中
+        try:
+            loop = asyncio.get_running_loop()
+            # 有运行中的事件循环，使用线程池
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_run_async)
+                return future.result(timeout=10)  # 10秒超时
+        except RuntimeError:
+            # 没有运行中的事件循环
+            return _run_async()
+            
+    except Exception as e:
+        logger.warning(f"Failed to fetch QA samples: {e}")
+        return []
+
 
 @tool
 def generate_sql_query(
@@ -18,22 +70,36 @@ def generate_sql_query(
     schema_info: Dict[str, Any],
     value_mappings: Dict[str, Any] = None,
     db_type: str = "mysql",
+    connection_id: int = None,
     sample_qa_pairs: List[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     根据用户查询和模式信息生成SQL语句
+    
+    自动集成样本检索：如果提供了 connection_id，会自动从 QA 库中检索相似样本。
+    这避免了独立 sample_retrieval_agent 的 ReAct 调度延迟（原 2+ 分钟）。
 
     Args:
         user_query: 用户的自然语言查询
         schema_info: 数据库模式信息
         value_mappings: 值映射信息
         db_type: 数据库类型
-        sample_qa_pairs: 相关的SQL问答对样本
+        connection_id: 数据库连接ID（用于自动检索相关样本）
+        sample_qa_pairs: 相关的SQL问答对样本（如果为空且有connection_id，会自动检索）
 
     Returns:
         生成的SQL语句和相关信息
     """
     try:
+        # 自动检索样本：如果提供了 connection_id 且没有手动提供样本
+        if connection_id and not sample_qa_pairs:
+            logger.info(f"Auto-fetching QA samples for connection_id={connection_id}")
+            sample_qa_pairs = _fetch_qa_samples_sync(user_query, schema_info, connection_id)
+            if sample_qa_pairs:
+                logger.info(f"Found {len(sample_qa_pairs)} relevant QA samples")
+            else:
+                logger.info("No relevant QA samples found, proceeding without samples")
+        
         # 构建详细的上下文信息
         context = f"""
 数据库类型: {db_type}
@@ -59,6 +125,7 @@ def generate_sql_query(
 SQL: {sample.get('sql', '')}
 查询类型: {sample.get('query_type', '')}
 成功率: {sample.get('success_rate', 0):.2f}
+相似度: {sample.get('similarity', 0):.2f}
 """
 
         # 构建SQL生成提示

@@ -2110,6 +2110,115 @@ class HybridRetrievalEnginePool:
         return status
     
     @classmethod
+    async def has_qa_samples(cls, connection_id: int) -> bool:
+        """
+        快速检查指定连接是否有 QA 样本数据
+        
+        Args:
+            connection_id: 数据库连接ID
+            
+        Returns:
+            bool: 是否有样本数据
+        """
+        try:
+            from pymilvus import MilvusClient
+            
+            # 获取数据库名称并生成集合名
+            database_name = get_database_name_by_connection_id(connection_id)
+            if database_name:
+                clean_name = "".join(c if c.isascii() and (c.isalnum() or c == "_") else "_" for c in database_name.lower())
+                if clean_name and not (clean_name[0].isalpha() or clean_name[0] == "_"):
+                    clean_name = "db_" + clean_name
+                if not clean_name or clean_name.replace("_", "") == "":
+                    clean_name = "db_unknown"
+                clean_name = clean_name[:50]
+                collection_name = f"{clean_name}_qa_pairs"
+            else:
+                collection_name = "default_qa_pairs"
+            
+            # 快速连接 Milvus 检查
+            uri = f"http://{settings.MILVUS_HOST}:{settings.MILVUS_PORT}"
+            client = MilvusClient(uri=uri)
+            
+            # 检查集合是否存在
+            if not client.has_collection(collection_name=collection_name):
+                logger.debug(f"Collection {collection_name} does not exist, no QA samples")
+                return False
+            
+            # 检查是否有数据（使用 query 统计）
+            results = client.query(
+                collection_name=collection_name,
+                filter=f"connection_id == {connection_id}",
+                output_fields=["id"],
+                limit=1  # 只需要知道是否有数据
+            )
+            
+            has_data = len(results) > 0
+            logger.debug(f"QA samples check for connection_id={connection_id}: {has_data}")
+            return has_data
+            
+        except Exception as e:
+            logger.warning(f"Failed to check QA samples for connection_id={connection_id}: {e}")
+            return False
+    
+    @classmethod
+    async def quick_retrieve(cls, user_query: str, schema_context: Dict[str, Any], 
+                            connection_id: int, top_k: int = 3, 
+                            min_similarity: float = 0.6) -> List[Dict[str, Any]]:
+        """
+        轻量级快速检索 QA 样本
+        
+        专为集成到 sql_generator_agent 设计，特点：
+        - 先检查是否有样本，没有则立即返回
+        - 只返回格式化后的结果，不返回复杂对象
+        - 自动过滤低质量样本
+        
+        Args:
+            user_query: 用户查询
+            schema_context: 模式上下文
+            connection_id: 数据库连接ID
+            top_k: 返回数量
+            min_similarity: 最低相似度阈值
+            
+        Returns:
+            List[Dict]: 格式化的样本列表，如果没有样本则返回空列表
+        """
+        try:
+            # 先快速检查是否有样本
+            if not await cls.has_qa_samples(connection_id):
+                logger.info(f"No QA samples for connection_id={connection_id}, skipping retrieval")
+                return []
+            
+            # 有样本，执行检索
+            engine = await cls.get_engine(connection_id)
+            results = await engine.hybrid_retrieve(
+                query=user_query,
+                schema_context=schema_context,
+                connection_id=connection_id,
+                top_k=top_k
+            )
+            
+            # 格式化并过滤结果
+            formatted = []
+            for result in results:
+                if result.final_score >= min_similarity:
+                    qa = result.qa_pair
+                    formatted.append({
+                        "question": qa.question,
+                        "sql": qa.sql,
+                        "query_type": qa.query_type,
+                        "success_rate": qa.success_rate,
+                        "similarity": result.final_score
+                    })
+            
+            logger.info(f"Quick retrieve found {len(formatted)} samples for connection_id={connection_id}")
+            return formatted
+            
+        except Exception as e:
+            logger.warning(f"Quick retrieve failed for connection_id={connection_id}: {e}")
+            return []
+    
+    @classmethod
     def clear_cache(cls):
         """清理所有缓存的引擎实例"""
         logger.info("清理混合检索引擎缓存...")

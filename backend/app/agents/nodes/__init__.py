@@ -5,5 +5,6 @@ LangGraph 节点模块
 """
 
 from app.agents.nodes.clarification_node import clarification_node
+from app.agents.nodes.cache_check_node import cache_check_node
 
-__all__ = ["clarification_node"]
+__all__ = ["clarification_node", "cache_check_node"]

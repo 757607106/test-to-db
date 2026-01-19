@@ -11,10 +11,12 @@ import { MessageContentComplex } from "@langchain/core/messages";
 import { Fragment } from "react/jsx-runtime";
 import { isAgentInboxInterruptSchema } from "@/lib/agent-inbox-interrupt";
 import { ThreadView } from "../agent-inbox";
-import { useQueryState, parseAsBoolean } from "nuqs";
+import { useQueryState, parseAsBoolean, parseAsInteger } from "nuqs";
 import { GenericInterruptView } from "./generic-interrupt";
 import { ClarificationInterruptView, isClarificationInterrupt } from "./clarification-interrupt";
 import { useArtifact } from "../artifact";
+import { extractSQLFromContent, type FeedbackContext } from "@/lib/feedback-service";
+import { useMemo } from "react";
 
 /**
  * Fix duplicated tool_call_id issue from LangGraph backend
@@ -168,6 +170,11 @@ export function AssistantMessage({
     "hideToolCalls",
     parseAsBoolean.withDefault(false),
   );
+  // 获取连接ID（从URL参数）
+  const [connectionId] = useQueryState(
+    "connectionId",
+    parseAsInteger.withDefault(15),
+  );
 
   const thread = useStreamContext();
   const messages = Array.isArray(thread.messages) ? thread.messages : [];
@@ -180,6 +187,37 @@ export function AssistantMessage({
   const threadInterrupt = thread.interrupt;
 
   const parentCheckpoint = meta?.firstSeenState?.parent_checkpoint;
+
+  // 构建反馈上下文（用于点赞/点踩功能）
+  const feedbackContext = useMemo<FeedbackContext | undefined>(() => {
+    // 提取SQL
+    const sql = extractSQLFromContent(contentString);
+    if (!sql) return undefined;
+
+    // 查找对应的用户问题（查找当前AI消息之前最近的human消息）
+    const messageIndex = messages.findIndex((m) => m.id === message?.id);
+    let userQuestion = '';
+    
+    if (messageIndex > 0) {
+      // 向前查找最近的human消息
+      for (let i = messageIndex - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (msg.type === 'human') {
+          userQuestion = getContentString(msg.content);
+          break;
+        }
+      }
+    }
+    
+    if (!userQuestion) return undefined;
+
+    return {
+      question: userQuestion,
+      sql: sql,
+      connectionId: connectionId,
+      threadId: thread.threadId ?? undefined,
+    };
+  }, [contentString, messages, message?.id, connectionId, thread.threadId]);
   const anthropicStreamedToolCalls = Array.isArray(content)
     ? parseAnthropicStreamedToolCalls(content)
     : undefined;
@@ -275,6 +313,7 @@ export function AssistantMessage({
                 isLoading={isLoading}
                 isAiMessage={true}
                 handleRegenerate={() => handleRegenerate(parentCheckpoint)}
+                feedbackContext={feedbackContext}
               />
             </div>
           </>

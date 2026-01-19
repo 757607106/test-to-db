@@ -23,6 +23,7 @@ pip install langgraph-supervisor
 - 2026-01-16: 移除SQL Validator Agent以简化流程
 - 备份位置: backend/backups/agents_backup_20260116_175357
 """
+
 from typing import Dict, Any, List, Optional
 import logging
 
@@ -63,19 +64,23 @@ class SupervisorAgent:
         - 移除时间：2026-01-16
         - 备份位置：backend/backups/agents_backup_20260116_175357
         """
-        from app.agents.agents.schema_agent import schema_agent
-        from app.agents.agents.sample_retrieval_agent import sample_retrieval_agent
-        from app.agents.agents.sql_generator_agent import sql_generator_agent
-        # 已移除：from app.agents.agents.sql_validator_agent import sql_validator_agent
-        from app.agents.agents.sql_executor_agent import sql_executor_agent
-        from app.agents.agents.error_recovery_agent import error_recovery_agent
-        from app.agents.agents.chart_generator_agent import chart_generator_agent
 
-        # 返回agent对象而不是包装类
-        # 简化后只包含5个核心代理
+        # 导入各个专业代理
+        from app.agents.agents.schema_agent import schema_agent  # 数据库模式分析代理
+        from app.agents.agents.sample_retrieval_agent import sample_retrieval_agent  # SQL样本检索代理
+        from app.agents.agents.sql_generator_agent import sql_generator_agent  # SQL生成代理
+        # 已移除：from app.agents.agents.sql_validator_agent import sql_validator_agent
+        from app.agents.agents.sql_executor_agent import sql_executor_agent  # SQL执行代理
+        from app.agents.agents.error_recovery_agent import error_recovery_agent  # 错误恢复代理
+        from app.agents.agents.chart_generator_agent import chart_generator_agent  # 图表生成代理
+
+        # 返回agent对象而不是包装类 简化后只包含5个核心代理
+
         agents = [
             schema_agent.agent,
-            sample_retrieval_agent.agent,  # 修复：取消注释以启用样本检索功能
+            # 临时禁用 sample_retrieval_agent - 由于 ReAct agent 调度延迟问题，该步骤会导致 2+ 分钟的等待
+            # 在问题修复前，SQL 生成器可以在无样本参考的情况下正常工作
+            # sample_retrieval_agent.agent,
             sql_generator_agent.agent,
             # 已移除：sql_validator_agent.agent  # 验证步骤已移除
             # parallel_sql_validator_agent.agent,
@@ -94,7 +99,7 @@ class SupervisorAgent:
         return agents
 
     # def pre_model_hook(self, state):
-    #     print("哈哈哈哈哈：：：：", state)
+    #     print("哈哈哈哈哈哈松林测试：：：：", state)
     def _create_supervisor(self):
         """创建LangGraph supervisor"""
         supervisor = create_supervisor(
@@ -104,30 +109,28 @@ class SupervisorAgent:
             add_handoff_back_messages=True,
             # pre_model_hook=self.pre_model_hook,
             # parallel_tool_calls=True,
-            output_mode="full_history",
+            output_mode="full_history",  # 注意：只支持 full_history 或 last_message
         )
 
         return supervisor.compile()
 
-    # 📚 ** sample_retrieval_agent **: 检索相关的SQL问答对样本，提供高质量参考
-    # sample_retrieval_agent →
+    # 📚 样本检索功能已集成到 sql_generator_agent 中
+    # 
+    # 优化历史 (2026-01-19):
+    # - 原 sample_retrieval_agent 作为独立 ReAct agent 存在调度延迟问题（2+ 分钟）
+    # - 现已将样本检索集成到 sql_generator_agent 内部
+    # - 特点：先快速检查是否有样本，没有则跳过；有则自动检索
 
-    # ** 样本检索优化: **
-    # - 基于用户查询语义检索相似问答对
-    # - 结合数据库结构进行结构化匹配
-    # - 提供高质量SQL生成参考样本
     def _get_supervisor_prompt(self) -> str:
-        """获取监督代理提示
-        
-        简化后的流程不包含SQL验证步骤
+        """
+        获取监督代理提示 简化后的流程不包含SQL验证步骤
         """
 
         system_msg = f"""你是一个智能的SQL Agent系统监督者。
 你管理以下专门代理：
 
 🔍 **schema_agent**: 分析用户查询，获取相关数据库表结构
-📚 **sample_retrieval_agent**: 检索相关的SQL问答对样本，提供高质量参考
-⚙️ **sql_generator_agent**: 根据模式信息和样本生成高质量SQL语句
+⚙️ **sql_generator_agent**: 根据模式信息生成高质量SQL语句（内置样本检索，自动参考历史QA对）
 🚀 **sql_executor_agent**: 安全执行SQL并返回结果
 📊 **chart_generator_agent**: 根据查询结果生成数据可视化图表
 🔧 **error_recovery_agent**: 处理错误并提供修复方案
@@ -140,7 +143,7 @@ class SupervisorAgent:
 5. 不要自己执行任何具体工作
 
 **标准流程:**
-用户查询 → schema_agent → sample_retrieval_agent → sql_generator_agent → sql_executor_agent → [可选] chart_generator_agent → 完成
+用户查询 → schema_agent → sql_generator_agent → sql_executor_agent → [可选] chart_generator_agent → 完成
 
 **图表生成条件:**
 - 用户查询包含可视化意图（如"图表"、"趋势"、"分布"、"比较"等关键词）

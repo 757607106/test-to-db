@@ -30,6 +30,7 @@ import asyncio
 from app.core.state import SQLMessageState
 from app.agents.agents.supervisor_agent import create_intelligent_sql_supervisor
 from app.agents.nodes.clarification_node import clarification_node
+from app.agents.nodes.cache_check_node import cache_check_node
 from app.models.agent_profile import AgentProfile
 
 # 配置日志
@@ -140,12 +141,13 @@ class IntelligentSQLGraph:
             CompiledGraph: 编译后的状态图
             
         图结构:
-            START → load_custom_agent → clarification → [supervisor | END]
+            START → load_custom_agent → clarification → cache_check → [supervisor | END]
             
         说明:
             - load_custom_agent: 检查并加载自定义Agent（如果需要）
             - clarification: 检测查询模糊性，如需澄清则生成AI消息并结束
-            - supervisor: 执行主要的查询处理流程（仅当不需要澄清时）
+            - cache_check: 检查查询缓存，命中则跳过supervisor直接返回
+            - supervisor: 执行主要的查询处理流程（仅当缓存未命中时）
             - 使用SQLMessageState作为状态类型
             - 集成Checkpointer实现多轮对话和状态持久化
         """
@@ -167,6 +169,10 @@ class IntelligentSQLGraph:
         # 使用多轮对话机制，用户在聊天框回复
         graph.add_node("clarification", clarification_node)
         
+        # ✅ 添加缓存检查节点 (2026-01-19 新增)
+        # 职责: 检查精确匹配和语义匹配缓存，命中则跳过 supervisor
+        graph.add_node("cache_check", cache_check_node)
+        
         # 添加supervisor节点
         # 职责: 协调所有Worker Agents完成查询处理
         graph.add_node("supervisor", self._supervisor_node)
@@ -178,9 +184,9 @@ class IntelligentSQLGraph:
         # 加载自定义Agent后，进入澄清检测
         graph.add_edge("load_custom_agent", "clarification")
         
-        # ✅ 条件边: clarification → [supervisor | END]
+        # ✅ 条件边: clarification → [cache_check | END]
         # 如果正在等待用户澄清回复，直接结束图（等待下一轮输入）
-        # 否则继续到supervisor执行查询
+        # 否则继续到缓存检查节点
         def after_clarification(state: SQLMessageState) -> str:
             """判断澄清后的下一步"""
             current_stage = state.get("current_stage", "")
@@ -190,12 +196,35 @@ class IntelligentSQLGraph:
                 logger.info("等待用户澄清回复，结束当前图执行")
                 return "end"
             else:
-                logger.info("澄清完成，继续到supervisor")
-                return "supervisor"
+                logger.info("澄清完成，继续到缓存检查")
+                return "cache_check"
         
         graph.add_conditional_edges(
             "clarification",
             after_clarification,
+            {
+                "cache_check": "cache_check",
+                "end": END
+            }
+        )
+        
+        # ✅ 条件边: cache_check → [supervisor | END]
+        # 如果缓存命中，直接结束（已返回缓存结果）
+        # 否则继续到supervisor执行查询
+        def after_cache_check(state: SQLMessageState) -> str:
+            """判断缓存检查后的下一步"""
+            cache_hit = state.get("cache_hit", False)
+            
+            if cache_hit:
+                logger.info("缓存命中，跳过supervisor直接返回")
+                return "end"
+            else:
+                logger.info("缓存未命中，继续到supervisor")
+                return "supervisor"
+        
+        graph.add_conditional_edges(
+            "cache_check",
+            after_cache_check,
             {
                 "supervisor": "supervisor",
                 "end": END
@@ -244,8 +273,15 @@ class IntelligentSQLGraph:
         import logging
         logger = logging.getLogger(__name__)
         
+        # ✅ 从消息中提取 connection_id 并更新到 state（修复缓存检查时 connection_id 为默认值的问题）
+        messages = state.get("messages", [])
+        extracted_connection_id = extract_connection_id_from_messages(messages)
+        if extracted_connection_id and extracted_connection_id != state.get("connection_id"):
+            logger.info(f"从消息中提取到 connection_id={extracted_connection_id}，更新 state")
+            state["connection_id"] = extracted_connection_id
+        
         # 从消息中提取agent_id
-        agent_id = extract_agent_id_from_messages(state.get("messages", []))
+        agent_id = extract_agent_id_from_messages(messages)
         
         if agent_id:
             logger.info(f"检测到 agent_id={agent_id}，开始加载自定义分析专家")
@@ -304,11 +340,120 @@ class IntelligentSQLGraph:
             - 调用SupervisorAgent的内部图来协调所有Worker Agents
             - Supervisor会根据current_stage决定调用哪个Worker Agent
             - 返回的状态包含所有Agent的执行结果
+            - 执行完成后自动存储结果到缓存
         """
         # 调用supervisor的内部图执行查询处理
         # supervisor.ainvoke会触发整个Agent协调流程
         result = await self.supervisor_agent.supervisor.ainvoke(state)
+        
+        # ✅ 执行完成后自动存储结果到缓存 (2026-01-19 新增)
+        await self._store_result_to_cache(state, result)
+        
         return result
+    
+    async def _store_result_to_cache(self, original_state: SQLMessageState, result: SQLMessageState) -> None:
+        """
+        将执行结果存储到缓存
+        
+        Args:
+            original_state: 原始状态（包含用户查询）
+            result: 执行结果状态
+        """
+        try:
+            from app.services.query_cache_service import get_cache_service
+            from app.agents.nodes.cache_check_node import extract_user_query
+            
+            # 提取用户查询
+            messages = original_state.get("messages", [])
+            user_query = extract_user_query(messages)
+            
+            if not user_query:
+                logger.debug("无法提取用户查询，跳过缓存存储")
+                return
+            
+            # 获取连接ID
+            connection_id = original_state.get("connection_id", 15)
+            
+            # 从结果中提取 SQL 和执行结果
+            # 尝试从 messages 中提取生成的 SQL
+            generated_sql = None
+            execution_result = None
+            
+            result_messages = result.get("messages", [])
+            
+            # 遍历消息查找 SQL 和结果
+            for msg in result_messages:
+                if hasattr(msg, 'content'):
+                    content = msg.content
+                    # 兼容多模态内容
+                    if isinstance(content, list):
+                        content = " ".join(
+                            str(part.get("text")) if isinstance(part, dict) and part.get("text") else str(part)
+                            for part in content
+                        )
+                    elif isinstance(content, dict):
+                        content = str(content.get("text", ""))
+                    # 检查是否包含 SQL 代码块
+                    if '```sql' in content.lower():
+                        import re
+                        sql_match = re.search(r'```sql\s*(.*?)\s*```', content, re.DOTALL | re.IGNORECASE)
+                        if sql_match:
+                            generated_sql = sql_match.group(1).strip()
+                            break
+            
+            # 尝试从状态中获取执行结果
+            exec_result = result.get("execution_result")
+            if exec_result:
+                if hasattr(exec_result, 'success'):
+                    execution_result = {
+                        "success": exec_result.success,
+                        "data": exec_result.data,
+                        "error": exec_result.error
+                    }
+                elif isinstance(exec_result, dict):
+                    execution_result = exec_result
+            
+            # ✅ 如果状态中没有 execution_result，尝试从 ToolMessage 中提取
+            # (因为 supervisor 的 output_mode="full_history" 只返回 messages)
+            if not execution_result:
+                from langchain_core.messages import ToolMessage
+                import json as json_module
+                
+                for msg in reversed(result_messages):  # 从后往前找最新的执行结果
+                    if isinstance(msg, ToolMessage) and getattr(msg, 'name', '') == 'execute_sql_query':
+                        try:
+                            # ToolMessage.content 是 JSON 序列化的执行结果
+                            tool_content = msg.content
+                            if isinstance(tool_content, str):
+                                parsed_result = json_module.loads(tool_content)
+                                if isinstance(parsed_result, dict):
+                                    execution_result = {
+                                        "success": parsed_result.get("success", False),
+                                        "data": parsed_result.get("data"),
+                                        "error": parsed_result.get("error")
+                                    }
+                                    logger.debug(f"从 ToolMessage 中提取到执行结果: success={execution_result['success']}")
+                                    break
+                        except (json_module.JSONDecodeError, Exception) as parse_err:
+                            logger.warning(f"解析 ToolMessage 内容失败: {parse_err}")
+                            continue
+            
+            # 如果有 SQL 就存储到缓存（执行结果可为空）
+            if generated_sql:
+                cache_service = get_cache_service()
+                cache_service.store_result(
+                    query=user_query,
+                    connection_id=connection_id,
+                    sql=generated_sql,
+                    result=execution_result
+                )
+                logger.info(f"缓存存储成功: query='{user_query[:50]}...', connection_id={connection_id}")
+            else:
+                logger.debug(f"跳过缓存存储: sql={bool(generated_sql)}, result={bool(execution_result)}")
+                
+        except Exception as e:
+            # 缓存存储失败不应影响主流程
+            logger.warning(f"缓存存储失败: {e}")
 
     async def process_query(
         self, 
