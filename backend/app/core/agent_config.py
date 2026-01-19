@@ -60,11 +60,11 @@ def get_agent_llm(agent_name: str, db: Optional[Session] = None) -> BaseChatMode
                 
                 # 使用特定配置（简化日志）
                 logger.debug(f"Agent [{agent_name}] using {llm_config.provider}/{llm_config.model_name}")
-                return get_default_model(config_override=llm_config)
+                return get_default_model(config_override=llm_config, caller=f"agent:{agent_name}")
         
         # 3. 回退到全局默认
         logger.debug(f"Agent [{agent_name}] using global default")
-        return get_default_model()
+        return get_default_model(caller=f"agent:{agent_name}")
         
     except Exception as e:
         logger.error(f"Error fetching agent LLM for {agent_name}: {e}")
