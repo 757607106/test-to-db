@@ -76,29 +76,32 @@ def retrieve_similar_qa_pairs(
                 logger.warning(f"检索超时（{timeout}秒）")
                 raise
         
-        # 运行异步检索
+        # 运行异步检索 - 使用线程池避免阻塞事件循环
+        import concurrent.futures
+        
+        def _run_in_new_loop():
+            """在新的事件循环中运行异步代码"""
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                return new_loop.run_until_complete(_retrieve_with_timeout())
+            finally:
+                new_loop.close()
+        
         try:
             # 尝试获取当前事件循环
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # 如果在运行中的事件循环中，创建新的事件循环
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    results = loop.run_until_complete(_retrieve_with_timeout())
-                finally:
-                    loop.close()
-            else:
-                # 如果事件循环未运行，直接使用
-                results = loop.run_until_complete(_retrieve_with_timeout())
-        except RuntimeError:
-            # 没有事件循环，创建新的
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
             try:
-                results = loop.run_until_complete(_retrieve_with_timeout())
-            finally:
-                loop.close()
+                loop = asyncio.get_running_loop()
+                # 有运行中的事件循环，使用线程池执行避免阻塞
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_run_in_new_loop)
+                    results = future.result(timeout=timeout + 5)  # 给线程池额外5秒
+            except RuntimeError:
+                # 没有运行中的事件循环，直接创建并运行
+                results = _run_in_new_loop()
+        except concurrent.futures.TimeoutError:
+            logger.warning(f"检索在线程池中超时（{timeout + 5}秒）")
+            raise asyncio.TimeoutError(f"检索超时（{timeout}秒）")
         
         # 格式化结果并过滤低质量样本
         formatted_results = []

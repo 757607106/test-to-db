@@ -68,6 +68,15 @@ class FeedbackRequest(BaseModel):
     user_satisfaction: float  # 0.0 - 1.0
     feedback_text: Optional[str] = None
 
+
+class FeedbackCreateRequest(BaseModel):
+    """从用户反馈创建问答对的请求模型"""
+    question: str
+    sql: str
+    connection_id: int
+    feedback_type: str  # "thumbs_up" or "thumbs_down"
+    thread_id: Optional[str] = None
+
 class QAPairUpdate(BaseModel):
     """更新问答对的请求模型"""
     question: Optional[str] = None
@@ -258,6 +267,97 @@ async def submit_feedback(
     except Exception as e:
         logger.error(f"提交反馈失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"提交反馈失败: {str(e)}")
+
+
+def classify_query_type_from_sql(sql: str) -> str:
+    """从SQL中分类查询类型"""
+    sql_upper = sql.upper()
+    if 'JOIN' in sql_upper:
+        return 'JOIN'
+    elif 'GROUP BY' in sql_upper:
+        return 'GROUP_BY'
+    elif 'ORDER BY' in sql_upper:
+        return 'ORDER_BY'
+    elif any(agg in sql_upper for agg in ['COUNT', 'SUM', 'AVG', 'MAX', 'MIN']):
+        return 'AGGREGATE'
+    else:
+        return 'SELECT'
+
+
+@router.post("/qa-pairs/from-feedback", response_model=Dict[str, Any])
+async def create_qa_pair_from_feedback(
+    request: FeedbackCreateRequest,
+    db: Session = Depends(deps.get_db)
+):
+    """
+    从用户反馈创建问答对
+    
+    - 点赞(thumbs_up): 创建问答对，标记为已验证，存储到智能训练中心
+    - 点踩(thumbs_down): 记录反馈，不创建问答对（用于后续改进分析）
+    
+    Args:
+        request: 包含问题、SQL、连接ID和反馈类型的请求
+        
+    Returns:
+        创建结果，包含状态和消息
+    """
+    try:
+        logger.info(f"收到用户反馈 - 类型: {request.feedback_type}, 连接ID: {request.connection_id}")
+        
+        if request.feedback_type == "thumbs_up":
+            # 点赞：创建问答对并存储
+            engine = await get_hybrid_engine(request.connection_id)
+            
+            # 自动提取表名和实体
+            used_tables = extract_tables_from_sql(request.sql)
+            mentioned_entities = extract_entities_from_question(request.question)
+            
+            # 分类查询类型
+            query_type = classify_query_type_from_sql(request.sql)
+            
+            # 创建问答对（标记为已验证，来自用户正向反馈）
+            qa_pair = QAPairWithContext(
+                id=generate_qa_id(),
+                question=request.question,
+                sql=clean_sql(request.sql),
+                connection_id=request.connection_id,
+                difficulty_level=3,  # 默认中等难度
+                query_type=query_type,
+                success_rate=1.0,    # 用户点赞，初始成功率100%
+                verified=True,       # 标记为已验证（用户确认有效）
+                created_at=datetime.now(),
+                used_tables=used_tables,
+                used_columns=[],
+                query_pattern=query_type,
+                mentioned_entities=mentioned_entities
+            )
+            
+            # 存储问答对
+            schema_context = {"tables": [{"name": table} for table in used_tables]}
+            await engine.store_qa_pair(qa_pair, schema_context)
+            
+            logger.info(f"问答对创建成功 - ID: {qa_pair.id}, 问题: {request.question[:50]}...")
+            
+            return {
+                "status": "success",
+                "qa_id": qa_pair.id,
+                "message": "感谢您的反馈！问答对已保存到智能训练中心，将帮助系统更好地回答类似问题。"
+            }
+        else:
+            # 点踩：记录反馈用于后续改进分析
+            logger.info(f"收到负面反馈 - 问题: {request.question[:50]}..., SQL: {request.sql[:50]}...")
+            
+            # TODO: 可以将负面反馈存储到单独的表中，用于分析和改进
+            # 目前仅记录日志
+            
+            return {
+                "status": "recorded",
+                "message": "感谢您的反馈！我们会持续改进系统以提供更好的回答。"
+            }
+            
+    except Exception as e:
+        logger.error(f"处理用户反馈失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"处理反馈失败: {str(e)}")
 
 @router.get("/qa-pairs/health", response_model=Dict[str, Any])
 async def health_check():

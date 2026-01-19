@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# 澄清检测提示词（优化版：合并检测和问题生成为一次调用）
+# 澄清检测提示词（合并检测和问题生成为一次调用）
 # ============================================================================
 
 CLARIFICATION_UNIFIED_PROMPT = """你是一个专业的数据查询意图分析专家。请分析以下用户查询，判断是否存在模糊或不明确的地方，如果需要澄清则同时生成澄清问题。
@@ -89,6 +89,7 @@ CLARIFICATION_UNIFIED_PROMPT = """你是一个专业的数据查询意图分析�
 
 
 # 保留旧的提示词以备向后兼容（但不再使用）
+
 CLARIFICATION_CHECK_PROMPT = CLARIFICATION_UNIFIED_PROMPT
 QUESTION_GENERATION_PROMPT = """已废弃：问题生成已合并到 CLARIFICATION_UNIFIED_PROMPT 中"""
 
