@@ -184,29 +184,10 @@ class IntelligentSQLGraph:
         # 加载自定义Agent后，进入澄清检测
         graph.add_edge("load_custom_agent", "clarification")
         
-        # ✅ 条件边: clarification → [cache_check | END]
-        # 如果正在等待用户澄清回复，直接结束图（等待下一轮输入）
-        # 否则继续到缓存检查节点
-        def after_clarification(state: SQLMessageState) -> str:
-            """判断澄清后的下一步"""
-            current_stage = state.get("current_stage", "")
-            pending_clarification = state.get("pending_clarification", False)
-            
-            if current_stage == "awaiting_clarification" or pending_clarification:
-                logger.info("等待用户澄清回复，结束当前图执行")
-                return "end"
-            else:
-                logger.info("澄清完成，继续到缓存检查")
-                return "cache_check"
-        
-        graph.add_conditional_edges(
-            "clarification",
-            after_clarification,
-            {
-                "cache_check": "cache_check",
-                "end": END
-            }
-        )
+        # ✅ 简化边: clarification → cache_check
+        # 使用interrupt()后，节点会自动暂停，不需要手动判断pending状态
+        # LangGraph会处理暂停和恢复，我们只需定义正常流程
+        graph.add_edge("clarification", "cache_check")
         
         # ✅ 条件边: cache_check → [supervisor | END]
         # 如果缓存命中，直接结束（已返回缓存结果）
@@ -236,16 +217,27 @@ class IntelligentSQLGraph:
         graph.add_edge("supervisor", END)
         
         # ✅ 获取Checkpointer并编译图
-        # Checkpointer用于支持多轮对话和状态持久化
+        # Checkpointer是interrupt()必需的 (LangGraph要求)
         checkpointer = get_checkpointer()
         
-        if checkpointer:
-            logger.info("✓ 使用 Checkpointer 编译图（支持多轮对话和状态持久化）")
-            return graph.compile(checkpointer=checkpointer)
-        else:
-            logger.warning("⚠ 未配置 Checkpointer，多轮对话功能可能受限")
-            logger.info("✓ 不使用 Checkpointer 编译图（无状态模式）")
-            return graph.compile()
+        if not checkpointer:
+            # ⚠️ interrupt()需要checkpointer支持
+            logger.error(
+                "Checkpointer未配置！interrupt()澄清机制需要checkpointer支持。"
+            )
+            logger.error(
+                "请确保: "
+                "1) CHECKPOINT_MODE=postgres "
+                "2) CHECKPOINT_POSTGRES_URI已配置 "
+                "3) PostgreSQL服务运行正常"
+            )
+            raise RuntimeError(
+                "Checkpointer未配置，无法支持interrupt()澄清机制。"
+                "请配置CHECKPOINT_MODE=postgres和CHECKPOINT_POSTGRES_URI环境变量。"
+            )
+        
+        logger.info("✓ 使用 Checkpointer 编译图（支持interrupt和多轮对话）")
+        return graph.compile(checkpointer=checkpointer)
     
     async def _load_custom_agent_node(self, state: SQLMessageState) -> SQLMessageState:
         """

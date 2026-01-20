@@ -1,14 +1,18 @@
 from typing import Any, List, Optional
 from uuid import uuid4
+import time
+import json
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-
+from langchain_core.messages import HumanMessage
 
 from app import crud, schemas
 from app.api import deps
 from app.services.text2sql_service import process_text2sql_query
 from app.agents.chat_graph import IntelligentSQLGraph
+from app.core.state import SQLMessageState
 
 router = APIRouter()
 
@@ -181,6 +185,225 @@ async def chat_query(
             error=f"处理查询时出错: {str(e)}",
             stage="error"
         )
+
+
+@router.post("/chat/resume", response_model=schemas.ResumeQueryResponse)
+async def resume_chat_query(
+    *,
+    db: Session = Depends(deps.get_db),
+    resume_request: schemas.ResumeQueryRequest,
+) -> Any:
+    """
+    恢复被interrupt暂停的查询 - LangGraph Command模式
+    
+    基于LangGraph官方示例: https://context7.com/langchain-ai/langgraph/llms.txt
+    
+    使用场景:
+    - 用户回复澄清问题后，恢复执行
+    - 需要用户确认某些操作时
+    
+    Args:
+        resume_request:
+            - thread_id: 会话线程ID
+            - user_response: 用户的回复内容
+            - connection_id: 数据库连接ID
+    
+    Returns:
+        ResumeQueryResponse: 恢复执行后的结果
+    """
+    import logging
+    from langgraph.types import Command
+    
+    logger = logging.getLogger(__name__)
+    
+    connection = crud.db_connection.get(db=db, id=resume_request.connection_id)
+    if not connection:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    
+    try:
+        logger.info(f"恢复查询执行: thread_id={resume_request.thread_id}")
+        
+        # 创建图实例
+        graph = IntelligentSQLGraph()
+        
+        # ✅ LangGraph标准模式: 使用Command(resume=...)恢复执行
+        # 参考: https://context7.com/langchain-ai/langgraph/llms.txt
+        config = {"configurable": {"thread_id": resume_request.thread_id}}
+        
+        # Command(resume=user_response)告诉LangGraph:
+        # 1. 从上次interrupt的地方继续
+        # 2. 将user_response传递给interrupt()的返回值
+        result = await graph.graph.ainvoke(
+            Command(resume=resume_request.user_response),
+            config=config
+        )
+        
+        logger.info(f"查询恢复执行完成: thread_id={resume_request.thread_id}")
+        
+        # 解析结果
+        response = schemas.ResumeQueryResponse(
+            success=True,
+            thread_id=resume_request.thread_id,
+            stage=result.get("current_stage", "completed")
+        )
+        
+        # 提取SQL和执行结果
+        if result.get("generated_sql"):
+            response.sql = result["generated_sql"]
+        
+        if result.get("execution_result"):
+            exec_result = result["execution_result"]
+            if hasattr(exec_result, 'success') and exec_result.success:
+                response.results = exec_result.data
+            elif isinstance(exec_result, dict) and exec_result.get("success"):
+                response.results = exec_result.get("data", [])
+        
+        # 提取图表配置
+        if result.get("chart_config"):
+            response.chart_config = result["chart_config"]
+        
+        return response
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        logger.error(f"恢复查询执行失败: {str(e)}")
+        return schemas.ResumeQueryResponse(
+            success=False,
+            thread_id=resume_request.thread_id,
+            error=f"恢复执行失败: {str(e)}",
+            stage="error"
+        )
+
+
+@router.post("/chat/stream")
+async def chat_query_stream(
+    *,
+    db: Session = Depends(deps.get_db),
+    chat_request: schemas.ChatQueryRequest,
+) -> StreamingResponse:
+    """
+    SSE流式聊天查询 - LangGraph标准astream模式
+    
+    基于LangGraph官方示例: https://github.com/langchain-ai/langgraph/examples
+    
+    特性:
+    - 实时推送节点执行进度
+    - Server-Sent Events (SSE)格式
+    - 支持interrupt暂停和恢复
+    
+    前端使用EventSource接收:
+    ```javascript
+    const eventSource = new EventSource('/api/query/chat/stream');
+    eventSource.addEventListener('node_update', (e) => {
+        const data = JSON.parse(e.data);
+        console.log(`节点: ${data.node}, 阶段: ${data.stage}`);
+    });
+    ```
+    
+    Args:
+        chat_request: 聊天查询请求
+    
+    Returns:
+        StreamingResponse: SSE流式响应
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    connection = crud.db_connection.get(db=db, id=chat_request.connection_id)
+    if not connection:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    
+    async def event_generator():
+        """SSE事件生成器"""
+        try:
+            thread_id = chat_request.conversation_id or str(uuid4())
+            logger.info(f"开始流式执行: thread_id={thread_id}")
+            
+            # 创建图实例
+            graph = IntelligentSQLGraph()
+            
+            # 构建初始状态
+            initial_state = SQLMessageState(
+                messages=[HumanMessage(content=chat_request.natural_language_query)],
+                connection_id=chat_request.connection_id,
+                thread_id=thread_id
+            )
+            
+            config = {"configurable": {"thread_id": thread_id}}
+            
+            # ✅ 使用astream流式执行 (LangGraph官方标准)
+            # stream_mode="updates": 每个节点执行后推送增量更新
+            async for chunk in graph.graph.astream(
+                initial_state,
+                config=config,
+                stream_mode="updates"  # LangGraph官方推荐
+            ):
+                # chunk格式: {node_name: node_output}
+                for node_name, node_output in chunk.items():
+                    # 构建事件数据
+                    event_data = {
+                        "type": "node_update",
+                        "node": node_name,
+                        "stage": node_output.get("current_stage", "processing"),
+                        "timestamp": time.time()
+                    }
+                    
+                    # 添加节点特定数据
+                    if node_name == "cache_check":
+                        event_data["cache_hit"] = node_output.get("cache_hit", False)
+                        if node_output.get("cache_hit_type"):
+                            event_data["cache_hit_type"] = node_output["cache_hit_type"]
+                    
+                    elif node_name == "clarification":
+                        if node_output.get("enriched_query"):
+                            event_data["enriched_query"] = node_output["enriched_query"]
+                    
+                    elif node_name == "supervisor":
+                        if node_output.get("generated_sql"):
+                            event_data["sql"] = node_output["generated_sql"]
+                        if node_output.get("execution_result"):
+                            exec_result = node_output["execution_result"]
+                            event_data["result_preview"] = {
+                                "success": getattr(exec_result, 'success', False),
+                                "row_count": len(getattr(exec_result, 'data', []) or [])
+                            }
+                    
+                    # ✅ SSE格式推送事件
+                    yield f"event: node_update\n"
+                    yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+            
+            # 发送完成事件
+            final_event = {
+                "type": "complete",
+                "thread_id": thread_id,
+                "timestamp": time.time()
+            }
+            yield f"event: complete\n"
+            yield f"data: {json.dumps(final_event, ensure_ascii=False)}\n\n"
+            
+            logger.info(f"流式执行完成: thread_id={thread_id}")
+        
+        except Exception as e:
+            logger.error(f"流式执行异常: {str(e)}")
+            # 发送错误事件
+            error_event = {
+                "type": "error",
+                "error": str(e),
+                "timestamp": time.time()
+            }
+            yield f"event: error\n"
+            yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"  # 禁用nginx缓冲
+        }
+    )
 
 
 @router.get("/conversations", response_model=List[schemas.ConversationSummary])

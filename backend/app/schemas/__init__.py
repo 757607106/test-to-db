@@ -13,7 +13,9 @@ from app.schemas.query import (
     ChatQueryRequest,
     ChatQueryResponse,
     ConversationSummary,
-    ConversationDetail
+    ConversationDetail,
+    ResumeQueryRequest,
+    ResumeQueryResponse
 )
 from app.schemas.dashboard import (
     DashboardBase,
