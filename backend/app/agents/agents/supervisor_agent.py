@@ -106,10 +106,10 @@ class SupervisorAgent:
             model=self.llm,
             agents=self.worker_agents,
             prompt=self._get_supervisor_prompt(),
-            add_handoff_back_messages=True,
+            add_handoff_back_messages=False,  # ✅ 修复消息重复：不添加handoff消息
             # pre_model_hook=self.pre_model_hook,
             # parallel_tool_calls=True,
-            output_mode="full_history",  # 注意：只支持 full_history 或 last_message
+            output_mode="last_message",  # ✅ 修复消息重复：只返回最后的总结消息
         )
 
         return supervisor.compile()
