@@ -12,6 +12,7 @@ from typing import Optional
 from langgraph.checkpoint.postgres import PostgresSaver
 from app.core.config import settings
 import logging
+import psycopg
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +57,16 @@ def create_checkpointer() -> Optional[PostgresSaver]:
         logger.info(f"连接地址: {_mask_password(settings.CHECKPOINT_POSTGRES_URI)}")
         
         # 创建 PostgreSQL Checkpointer
-        # 注意：新版本的 from_conn_string 返回一个上下文管理器
-        # 我们需要使用 .with_conn_string() 方法
-        checkpointer = PostgresSaver.from_conn_string(settings.CHECKPOINT_POSTGRES_URI)
+        # 步骤：
+        # 1. 使用 psycopg 创建数据库连接（autocommit 模式以支持 CREATE INDEX CONCURRENTLY）
+        # 2. 将连接传递给 PostgresSaver 构造函数
+        # 3. 调用 setup() 初始化数据库表结构
+        conn = psycopg.connect(settings.CHECKPOINT_POSTGRES_URI, autocommit=True)
+        checkpointer = PostgresSaver(conn)
+        checkpointer.setup()
         
-        logger.info("PostgreSQL Checkpointer 创建成功")
+        logger.info("PostgreSQL Checkpointer 创建并初始化成功")
+        logger.info(f"数据库表已就绪: checkpoints, checkpoint_writes")
         return checkpointer
         
     except Exception as e:
