@@ -131,7 +131,7 @@ export function Thread() {
   // 使用URL参数存储连接ID，这样点赞功能可以正确获取
   const [selectedConnectionId, setSelectedConnectionId] = useQueryState(
     "connectionId",
-    parseAsInteger.withDefault(null),
+    parseAsInteger.withDefault(0),
   );
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   // 新增: 跟踪数据库和智能体的数量

@@ -15,8 +15,38 @@ import { useQueryState, parseAsBoolean, parseAsInteger } from "nuqs";
 import { GenericInterruptView } from "./generic-interrupt";
 import { ClarificationInterruptView, isClarificationInterrupt } from "./clarification-interrupt";
 import { useArtifact } from "../artifact";
-import { extractSQLFromContent, type FeedbackContext } from "@/lib/feedback-service";
 import { useMemo } from "react";
+
+// 反馈服务类型定义
+export interface FeedbackContext {
+  question: string;      // 用户的原始问题
+  sql: string;          // 生成的SQL语句
+  connectionId: number; // 数据库连接ID
+  threadId?: string;    // 会话线程ID（可选）
+}
+
+/**
+ * 从AI消息内容中提取SQL语句
+ */
+function extractSQLFromContent(content: string): string | null {
+  if (!content || typeof content !== 'string') {
+    return null;
+  }
+
+  // 尝试匹配 ```sql ... ``` 格式
+  const sqlBlockMatch = content.match(/```sql\s*([\s\S]*?)\s*```/i);
+  if (sqlBlockMatch && sqlBlockMatch[1]) {
+    return sqlBlockMatch[1].trim();
+  }
+
+  // 尝试匹配以 SELECT/INSERT/UPDATE/DELETE 开头的SQL
+  const sqlMatch = content.match(/\b(SELECT|INSERT|UPDATE|DELETE|WITH|CREATE|DROP|ALTER)\b[\s\S]+?;/i);
+  if (sqlMatch) {
+    return sqlMatch[0].trim();
+  }
+
+  return null;
+}
 
 /**
  * Fix duplicated tool_call_id issue from LangGraph backend
@@ -173,8 +203,10 @@ export function AssistantMessage({
   // 获取连接ID（从URL参数，与用户选择的数据库连接同步）
   const [connectionId] = useQueryState(
     "connectionId",
-    parseAsInteger.withDefault(null),
+    parseAsInteger.withDefault(0),
   );
+  // 获取线程ID
+  const [threadId] = useQueryState("threadId");
 
   const thread = useStreamContext();
   const messages = Array.isArray(thread.messages) ? thread.messages : [];
@@ -221,16 +253,16 @@ export function AssistantMessage({
       connectionId,
       hasSQL: !!sql,
       hasQuestion: !!userQuestion,
-      threadId: thread.threadId
+      threadId: threadId
     });
 
     return {
       question: userQuestion,
       sql: sql,
       connectionId: connectionId,
-      threadId: thread.threadId ?? undefined,
+      threadId: threadId ?? undefined,
     };
-  }, [contentString, messages, message?.id, connectionId, thread.threadId]);
+  }, [contentString, messages, message?.id, connectionId, threadId]);
   const anthropicStreamedToolCalls = Array.isArray(content)
     ? parseAnthropicStreamedToolCalls(content)
     : undefined;
