@@ -1666,27 +1666,102 @@ class HybridRetrievalEngine:
         return status
 
     async def get_stats(self, connection_id: Optional[int] = None) -> Dict[str, Any]:
-        """获取问答对统计信息"""
+        """
+        获取问答对统计信息
+        
+        Args:
+            connection_id: 数据库连接ID（可选）
+                - 如果提供，只统计该连接的QA对
+                - 如果为None，统计所有连接的QA对
+                
+        Returns:
+            统计信息字典
+        """
         if not self._initialized:
             await self.initialize()
 
         try:
-            # 获取对应连接的Milvus服务
+            # 如果指定了connection_id，只统计该连接的QA对
             if connection_id:
                 milvus_service = await self.get_milvus_service_for_connection(connection_id)
+                return await milvus_service.get_stats(connection_id)
+            
+            # 如果没有指定connection_id，统计所有collections的QA对
             else:
-                milvus_service = self.milvus_service
-            
-            # 从Milvus获取统计信息
-            stats = await milvus_service.get_stats(connection_id)
-            
-            return stats
+                logger.info("统计所有collections的QA对...")
+                total_count = 0
+                verified_count = 0
+                all_query_types = {}
+                all_difficulty_dist = {}
+                all_success_rates = []
+                
+                try:
+                    # 获取所有collections
+                    collections = self.milvus_service.client.list_collections()
+                    logger.info(f"找到 {len(collections)} 个collections进行统计")
+                    
+                    # 遍历每个collection
+                    for collection_name in collections:
+                        # 只统计qa_pairs结尾的collection
+                        if not collection_name.endswith('_qa_pairs'):
+                            continue
+                        
+                        try:
+                            logger.debug(f"统计collection: {collection_name}")
+                            # 查询该collection中的所有QA对
+                            results = self.milvus_service.client.query(
+                                collection_name=collection_name,
+                                filter="id != ''",
+                                output_fields=["id", "query_type", "difficulty_level", "verified", "success_rate"],
+                                limit=10000
+                            )
+                            
+                            if results:
+                                logger.debug(f"从 {collection_name} 统计到 {len(results)} 条QA对")
+                                total_count += len(results)
+                                verified_count += sum(1 for r in results if r.get("verified", False))
+                                
+                                # 查询类型统计
+                                for r in results:
+                                    qt = r.get("query_type", "UNKNOWN")
+                                    all_query_types[qt] = all_query_types.get(qt, 0) + 1
+                                
+                                # 难度分布
+                                for r in results:
+                                    dl = str(r.get("difficulty_level", 3))
+                                    all_difficulty_dist[dl] = all_difficulty_dist.get(dl, 0) + 1
+                                
+                                # 成功率
+                                all_success_rates.extend([r.get("success_rate", 0) for r in results])
+                                
+                        except Exception as coll_error:
+                            logger.warning(f"统计collection {collection_name} 失败: {coll_error}")
+                            continue
+                    
+                    # 计算平均成功率
+                    avg_success_rate = sum(all_success_rates) / len(all_success_rates) if all_success_rates else 0.0
+                    
+                    logger.info(f"总统计: {total_count} 条QA对, {verified_count} 条已验证")
+                    
+                    return {
+                        "total_qa_pairs": total_count,
+                        "verified_qa_pairs": verified_count,
+                        "query_types": all_query_types,
+                        "difficulty_distribution": all_difficulty_dist,
+                        "average_success_rate": round(avg_success_rate * 100, 2),  # 转换为百分比
+                        "collection_name": "all_collections"
+                    }
+                    
+                except Exception as e:
+                    logger.error(f"统计所有collections失败: {str(e)}")
+                    # Fallback到默认collection
+                    return await self.milvus_service.get_stats(None)
             
         except Exception as e:
             logger.error(f"Failed to get stats: {str(e)}")
             return {
-                "total": 0,
-                "verified": 0,
+                "total_qa_pairs": 0,
+                "verified_qa_pairs": 0,
                 "query_types": {},
                 "difficulty_distribution": {},
                 "average_success_rate": 0.0,
@@ -1694,18 +1769,76 @@ class HybridRetrievalEngine:
             }
 
     async def get_all_qa_pairs(self, connection_id: Optional[int] = None, limit: int = 100) -> List[Dict]:
-        """获取所有问答对"""
+        """
+        获取所有问答对
+        
+        Args:
+            connection_id: 数据库连接ID（可选）
+                - 如果提供，只返回该连接的QA对
+                - 如果为None，返回所有连接的QA对
+            limit: 返回数量限制
+            
+        Returns:
+            QA对列表
+        """
         if not self._initialized:
             await self.initialize()
 
         try:
-            # 获取对应连接的Milvus服务
+            # 如果指定了connection_id，只查询该连接的QA对
             if connection_id:
                 milvus_service = await self.get_milvus_service_for_connection(connection_id)
-            else:
-                milvus_service = self.milvus_service
+                return await milvus_service.get_all_qa_pairs(connection_id, limit)
             
-            return await milvus_service.get_all_qa_pairs(connection_id, limit)
+            # 如果没有指定connection_id，查询所有collections的QA对
+            else:
+                logger.info("查询所有collections的QA对...")
+                all_qa_pairs = []
+                
+                try:
+                    # 获取所有collections
+                    collections = self.milvus_service.client.list_collections()
+                    logger.info(f"找到 {len(collections)} 个collections")
+                    
+                    # 遍历每个collection
+                    for collection_name in collections:
+                        # 只查询qa_pairs结尾的collection
+                        if not collection_name.endswith('_qa_pairs'):
+                            continue
+                        
+                        try:
+                            logger.debug(f"查询collection: {collection_name}")
+                            # 查询该collection中的所有QA对
+                            results = self.milvus_service.client.query(
+                                collection_name=collection_name,
+                                filter="id != ''",  # 查询所有记录
+                                output_fields=["id", "question", "sql", "connection_id", 
+                                              "difficulty_level", "query_type", "success_rate", "verified"],
+                                limit=limit
+                            )
+                            
+                            if results:
+                                logger.info(f"从 {collection_name} 获取到 {len(results)} 条QA对")
+                                all_qa_pairs.extend(results)
+                        except Exception as coll_error:
+                            logger.warning(f"查询collection {collection_name} 失败: {coll_error}")
+                            continue
+                    
+                    # 按id去重（避免重复）
+                    seen_ids = set()
+                    unique_qa_pairs = []
+                    for qa in all_qa_pairs:
+                        if qa.get('id') not in seen_ids:
+                            seen_ids.add(qa.get('id'))
+                            unique_qa_pairs.append(qa)
+                    
+                    logger.info(f"总共获取到 {len(unique_qa_pairs)} 条唯一QA对")
+                    return unique_qa_pairs[:limit]  # 限制返回数量
+                    
+                except Exception as e:
+                    logger.error(f"查询所有collections失败: {str(e)}")
+                    # Fallback到默认collection
+                    return await self.milvus_service.get_all_qa_pairs(None, limit)
             
         except Exception as e:
             logger.error(f"Failed to get all QA pairs: {str(e)}")
