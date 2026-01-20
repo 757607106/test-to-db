@@ -12,7 +12,6 @@ import time
 from functools import lru_cache
 from neo4j import GraphDatabase
 from pymilvus import MilvusClient, DataType
-# from sentence_transformers import SentenceTransformer
 from langchain_ollama import OllamaEmbeddings
 from openai import AsyncOpenAI
 
@@ -156,15 +155,16 @@ class VectorService:
         if not self._initialized:
             try:
                 if self.llm_config:
-                    # 使用数据库配置初始化
+                    # 使用数据库配置初始化（推荐方式）
                     await self._initialize_from_config()
                 elif self.service_type == "ollama":
+                    # Fallback: 使用环境变量配置的 Ollama
                     await self._initialize_ollama()
                 elif self.service_type == "aliyun":
+                    # Fallback: 使用环境变量配置的 Aliyun DashScope
                     await self._initialize_aliyun()
                 else:
-                    pass
-                    # await self._initialize_sentence_transformer()
+                    raise ValueError(f"Unsupported service_type: {self.service_type}")
 
                 self._initialized = True
                 logger.info(f"Vector service initialized successfully with provider={self.provider}, model={self.model_name}")
@@ -266,20 +266,6 @@ class VectorService:
         self.dimension = len(test_embedding)
 
         logger.info(f"Ollama model loaded, dimension: {self.dimension}")
-
-    async def _initialize_sentence_transformer(self):
-        """初始化SentenceTransformer模型"""
-        # logger.info(f"Initializing SentenceTransformer model: {self.model_name}")
-        #
-        # # 使用配置的缓存路径或默认路径
-        # cache_folder = getattr(settings, 'SENTENCE_TRANSFORMER_CACHE', None)
-        # if not cache_folder:
-        #     cache_folder = r"C:\Users\86134\.cache\huggingface\hub"
-        #
-        # self.model = SentenceTransformer(self.model_name, cache_folder=cache_folder)
-        # self.dimension = self.model.get_sentence_embedding_dimension()
-        #
-        # logger.info(f"SentenceTransformer model loaded, dimension: {self.dimension}")
 
     async def embed_question(self, question: str) -> List[float]:
         """将问题转换为向量"""
@@ -2183,13 +2169,31 @@ class HybridRetrievalEnginePool:
         Returns:
             List[Dict]: 格式化的样本列表，如果没有样本则返回空列表
         """
+        import time
+        start_time = time.time()
+        
         try:
+            logger.info(f"[QuickRetrieve] 开始检索QA样本 - "
+                       f"连接ID: {connection_id}, "
+                       f"查询: '{user_query[:50]}...', "
+                       f"top_k: {top_k}, "
+                       f"min_similarity: {min_similarity}")
+            
             # 先快速检查是否有样本
-            if not await cls.has_qa_samples(connection_id):
-                logger.info(f"No QA samples for connection_id={connection_id}, skipping retrieval")
+            check_start = time.time()
+            has_samples = await cls.has_qa_samples(connection_id)
+            check_time = time.time() - check_start
+            
+            if not has_samples:
+                logger.info(f"[QuickRetrieve] 未找到样本 - "
+                          f"连接ID: {connection_id}, "
+                          f"检查耗时: {check_time:.3f}s")
                 return []
             
+            logger.debug(f"[QuickRetrieve] 样本存在检查通过，耗时: {check_time:.3f}s")
+            
             # 有样本，执行检索
+            retrieve_start = time.time()
             engine = await cls.get_engine(connection_id)
             results = await engine.hybrid_retrieve(
                 query=user_query,
@@ -2197,10 +2201,15 @@ class HybridRetrievalEnginePool:
                 connection_id=connection_id,
                 top_k=top_k
             )
+            retrieve_time = time.time() - retrieve_start
+            
+            logger.debug(f"[QuickRetrieve] 混合检索完成 - "
+                        f"原始结果: {len(results)}个, "
+                        f"耗时: {retrieve_time:.3f}s")
             
             # 格式化并过滤结果
             formatted = []
-            for result in results:
+            for i, result in enumerate(results):
                 if result.final_score >= min_similarity:
                     qa = result.qa_pair
                     formatted.append({
@@ -2208,14 +2217,34 @@ class HybridRetrievalEnginePool:
                         "sql": qa.sql,
                         "query_type": qa.query_type,
                         "success_rate": qa.success_rate,
-                        "similarity": result.final_score
+                        "similarity": result.final_score,
+                        "verified": qa.verified
                     })
+                    logger.debug(f"[QuickRetrieve] 样本{i+1}: "
+                               f"相似度={result.final_score:.3f}, "
+                               f"成功率={qa.success_rate:.2f}, "
+                               f"已验证={qa.verified}, "
+                               f"问题='{qa.question[:40]}...'")
+                else:
+                    logger.debug(f"[QuickRetrieve] 样本{i+1}被过滤: "
+                               f"相似度={result.final_score:.3f} < {min_similarity}")
             
-            logger.info(f"Quick retrieve found {len(formatted)} samples for connection_id={connection_id}")
+            total_time = time.time() - start_time
+            logger.info(f"[QuickRetrieve] ✓ 检索完成 - "
+                       f"连接ID: {connection_id}, "
+                       f"找到: {len(formatted)}/{len(results)}个高质量样本, "
+                       f"总耗时: {total_time:.3f}s "
+                       f"(检查: {check_time:.3f}s, 检索: {retrieve_time:.3f}s)")
+            
             return formatted
             
         except Exception as e:
-            logger.warning(f"Quick retrieve failed for connection_id={connection_id}: {e}")
+            total_time = time.time() - start_time
+            logger.error(f"[QuickRetrieve] ✗ 检索失败 - "
+                        f"连接ID: {connection_id}, "
+                        f"错误: {str(e)}, "
+                        f"耗时: {total_time:.3f}s", 
+                        exc_info=True)
             return []
     
     @classmethod

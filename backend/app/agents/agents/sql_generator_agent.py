@@ -26,9 +26,20 @@ def _fetch_qa_samples_sync(user_query: str, schema_info: Dict[str, Any], connect
     同步包装器：获取 QA 样本
     
     在同步上下文中安全地调用异步检索方法
+    根据配置决定是否启用样本召回
     """
     try:
         from app.services.hybrid_retrieval_service import HybridRetrievalEnginePool
+        from app.core.config import settings
+        
+        # 检查是否启用QA样本召回
+        if not settings.QA_SAMPLE_ENABLED:
+            logger.info("QA样本召回已禁用 (QA_SAMPLE_ENABLED=false)")
+            return []
+        
+        logger.info(f"开始QA样本召回 - top_k={settings.QA_SAMPLE_TOP_K}, "
+                   f"min_similarity={settings.QA_SAMPLE_MIN_SIMILARITY}, "
+                   f"timeout={settings.QA_SAMPLE_TIMEOUT}s")
         
         # 在新的事件循环中运行异步代码
         def _run_async():
@@ -40,8 +51,8 @@ def _fetch_qa_samples_sync(user_query: str, schema_info: Dict[str, Any], connect
                         user_query=user_query,
                         schema_context=schema_info,
                         connection_id=connection_id,
-                        top_k=3,
-                        min_similarity=0.6
+                        top_k=settings.QA_SAMPLE_TOP_K,
+                        min_similarity=settings.QA_SAMPLE_MIN_SIMILARITY
                     )
                 )
             finally:
@@ -54,14 +65,48 @@ def _fetch_qa_samples_sync(user_query: str, schema_info: Dict[str, Any], connect
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(_run_async)
-                return future.result(timeout=10)  # 10秒超时
+                samples = future.result(timeout=settings.QA_SAMPLE_TIMEOUT)
+                
+                # 根据配置过滤样本
+                filtered_samples = _filter_qa_samples(samples)
+                logger.info(f"QA样本召回成功: 原始{len(samples)}个, 过滤后{len(filtered_samples)}个")
+                return filtered_samples
         except RuntimeError:
             # 没有运行中的事件循环
-            return _run_async()
+            samples = _run_async()
+            filtered_samples = _filter_qa_samples(samples)
+            logger.info(f"QA样本召回成功: 原始{len(samples)}个, 过滤后{len(filtered_samples)}个")
+            return filtered_samples
             
     except Exception as e:
-        logger.warning(f"Failed to fetch QA samples: {e}")
+        logger.warning(f"QA样本召回失败: {e}, 将使用基础模式生成SQL")
+        if settings.QA_SAMPLE_FAST_FALLBACK:
+            return []
+        raise
+
+
+def _filter_qa_samples(samples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    根据配置过滤QA样本
+    """
+    from app.core.config import settings
+    
+    if not samples:
         return []
+    
+    filtered = samples
+    
+    # 过滤：只保留验证过的样本
+    if settings.QA_SAMPLE_VERIFIED_ONLY:
+        filtered = [s for s in filtered if s.get('verified', False)]
+        logger.debug(f"验证过滤: {len(samples)} -> {len(filtered)}")
+    
+    # 过滤：最低成功率
+    if settings.QA_SAMPLE_MIN_SUCCESS_RATE > 0:
+        filtered = [s for s in filtered if s.get('success_rate', 0) >= settings.QA_SAMPLE_MIN_SUCCESS_RATE]
+        logger.debug(f"成功率过滤 (>={settings.QA_SAMPLE_MIN_SUCCESS_RATE}): {len(samples)} -> {len(filtered)}")
+    
+    return filtered
 
 
 @tool

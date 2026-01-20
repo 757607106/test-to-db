@@ -24,7 +24,7 @@ import {
   XIcon,
   Plus,
 } from "lucide-react";
-import { useQueryState, parseAsBoolean } from "nuqs";
+import { useQueryState, parseAsBoolean, parseAsInteger } from "nuqs";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import ThreadHistory from "./history";
 import { toast } from "sonner";
@@ -128,7 +128,11 @@ export function Thread() {
     parseAsBoolean.withDefault(false),
   );
   const [input, setInput] = useState("");
-  const [selectedConnectionId, setSelectedConnectionId] = useState<number | null>(null); // 修改: 默认为null，等待自动选择或用户选择
+  // 使用URL参数存储连接ID，这样点赞功能可以正确获取
+  const [selectedConnectionId, setSelectedConnectionId] = useQueryState(
+    "connectionId",
+    parseAsInteger.withDefault(null),
+  );
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   // 新增: 跟踪数据库和智能体的数量
   const [connectionCount, setConnectionCount] = useState<number>(0);

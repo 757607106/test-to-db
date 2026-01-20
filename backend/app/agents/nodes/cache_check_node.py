@@ -261,53 +261,84 @@ async def cache_check_node(state: SQLMessageState) -> Dict[str, Any]:
                             "messages": list(messages) + [ai_message]
                         }
                     else:
-                        # SQL 执行失败，继续走 supervisor 流程（可能需要错误恢复）
+                        # SQL 执行失败，重新开始完整流程（数据库schema可能已变更）
                         logger.warning(f"缓存 SQL 执行失败: {exec_result.get('error')}")
+                        logger.info("缓存SQL可能已过时，将重新分析数据库schema并生成新的SQL")
+                        
+                        # ✅ 清理并验证消息历史，移除不完整的tool_calls
+                        from app.core.message_utils import validate_and_fix_message_history
+                        clean_messages = validate_and_fix_message_history(list(messages))
+                        
                         return {
                             "cache_hit": False,
-                            "cache_hit_type": "sql_only_failed",
-                            "generated_sql": cache_hit.sql,
-                            "current_stage": "error_recovery"
+                            "cache_hit_type": None,  # 标记为完全未命中
+                            "current_stage": "schema_analysis",  # 从schema分析重新开始
+                            "messages": clean_messages  # 返回清理后的消息历史
                         }
                         
                 except Exception as e:
                     logger.error(f"缓存 SQL 执行异常: {e}")
+                    logger.info("缓存SQL执行异常，将重新分析数据库schema并生成新的SQL")
+                    
+                    # ✅ 清理并验证消息历史，移除不完整的tool_calls
+                    from app.core.message_utils import validate_and_fix_message_history
+                    clean_messages = validate_and_fix_message_history(list(messages))
+                    
                     return {
                         "cache_hit": False,
-                        "cache_hit_type": "sql_only_error",
-                        "current_stage": "schema_analysis"
+                        "cache_hit_type": None,  # 标记为完全未命中
+                        "current_stage": "schema_analysis",  # 从schema分析重新开始
+                        "messages": clean_messages  # 返回清理后的消息历史
                     }
 
             # 有执行结果，直接返回缓存结果并结束
+            # ✅ 清理并验证消息历史，移除不完整的tool_calls
+            from app.core.message_utils import validate_and_fix_message_history
+            clean_messages = validate_and_fix_message_history(list(messages))
+            
+            response_content = format_cached_response(cache_hit, connection_id)
+            ai_message = AIMessage(content=response_content)
+            
             updates = {
                 "cache_hit": True,
                 "cache_hit_type": cache_hit.hit_type,
                 "generated_sql": cache_hit.sql,
-                "current_stage": "cache_hit",
+                "current_stage": "completed",  # ✅ 修复：使用正确的stage值
                 "execution_result": SQLExecutionResult(
                     success=cache_hit.result.get("success", True) if isinstance(cache_hit.result, dict) else True,
                     data=cache_hit.result.get("data") if isinstance(cache_hit.result, dict) else cache_hit.result,
                     error=cache_hit.result.get("error") if isinstance(cache_hit.result, dict) else None
-                )
+                ),
+                "messages": clean_messages + [ai_message]  # ✅ 使用清理后的消息历史
             }
-
-            response_content = format_cached_response(cache_hit, connection_id)
-            ai_message = AIMessage(content=response_content)
-            updates["messages"] = list(messages) + [ai_message]
+            
             return updates
         
         else:
             logger.info("缓存未命中，继续正常流程")
+            
+            # ✅ 即使缓存未命中，也清理消息历史中的不完整tool_calls
+            from app.core.message_utils import validate_and_fix_message_history
+            clean_messages = validate_and_fix_message_history(list(messages))
+            
             return {
                 "cache_hit": False,
-                "cache_hit_type": None
+                "cache_hit_type": None,
+                "messages": clean_messages
             }
             
     except Exception as e:
         logger.error(f"缓存检查失败: {e}")
+        
+        # ✅ 异常情况下也清理消息历史
+        from app.core.message_utils import validate_and_fix_message_history
+        messages = state.get("messages", [])
+        clean_messages = validate_and_fix_message_history(list(messages))
+        
         return {
             "cache_hit": False,
-            "cache_hit_type": None
+            "cache_hit_type": None,
+            "messages": clean_messages
         }
 
 

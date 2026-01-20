@@ -60,6 +60,8 @@ class SQLMessageState(AgentState):
     # 当前处理阶段
     current_stage: Literal[
         "clarification",        # 新增：澄清阶段
+        "cache_check",          # 新增：缓存检查阶段
+        "cache_hit",            # 新增：缓存命中阶段
         "schema_analysis",
         "sample_retrieval",
         "sql_generation",
@@ -111,6 +113,10 @@ class SQLMessageState(AgentState):
     
     # 用户ID
     user_id: Optional[str] = None
+    
+    # 缓存相关字段
+    cache_hit: bool = False
+    cache_hit_type: Optional[Literal["exact", "semantic", "exact_text"]] = None
 
 
 def extract_connection_id(state: SQLMessageState) -> int:

@@ -170,10 +170,10 @@ export function AssistantMessage({
     "hideToolCalls",
     parseAsBoolean.withDefault(false),
   );
-  // 获取连接ID（从URL参数）
+  // 获取连接ID（从URL参数，与用户选择的数据库连接同步）
   const [connectionId] = useQueryState(
     "connectionId",
-    parseAsInteger.withDefault(15),
+    parseAsInteger.withDefault(null),
   );
 
   const thread = useStreamContext();
@@ -194,6 +194,12 @@ export function AssistantMessage({
     const sql = extractSQLFromContent(contentString);
     if (!sql) return undefined;
 
+    // 必须有有效的连接ID
+    if (!connectionId || connectionId <= 0) {
+      console.log('[FeedbackContext] 无有效的连接ID，跳过反馈功能');
+      return undefined;
+    }
+
     // 查找对应的用户问题（查找当前AI消息之前最近的human消息）
     const messageIndex = messages.findIndex((m) => m.id === message?.id);
     let userQuestion = '';
@@ -210,6 +216,13 @@ export function AssistantMessage({
     }
     
     if (!userQuestion) return undefined;
+
+    console.log('[FeedbackContext] 构建反馈上下文:', {
+      connectionId,
+      hasSQL: !!sql,
+      hasQuestion: !!userQuestion,
+      threadId: thread.threadId
+    });
 
     return {
       question: userQuestion,
