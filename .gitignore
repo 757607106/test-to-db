@@ -132,3 +132,22 @@ backend/backups/
 *.tmp
 *.temp
 ~*
+
+# 调试和临时实现文件（不提交）
+IMPLEMENTATION_SUMMARY*.md
+MESSAGE_FORMAT*.md
+backend/STRUCTURED_AGENT*.md
+backend/app/agents/agents/*_structured.py
+backend/app/core/stream_transformer.py
+backend/app/schemas/agent_output.py
+backend/test_message*.py
+backend/app/agents/templates/
+backend/app/data/
+backend/init-mysql.sql/
+backend/tests/api/
+backend/tests/property/
+docs/development/
+docs/features/
+docs/frontend/
+frontend/chat/src/components/thread/messages/renderers/
+frontend/chat/src/components/thread/messages/timeline/
