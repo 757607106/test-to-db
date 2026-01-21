@@ -157,28 +157,24 @@ class SQLExecutorAgent:
     
     def _create_system_prompt(self, state: SQLMessageState, config: RunnableConfig) -> list[AnyMessage]:
         connection_id = extract_connection_id(state)
-        """创建系统提示 - 强调只执行一次，立即返回"""
+        """创建系统提示 - 只负责执行，不负责总结"""
         system_msg = f"""你是一个SQL执行专家。当前数据库connection_id是 {connection_id}。
 
-**重要规则 - 必须严格遵守**:
-1. 使用 execute_sql_query 工具执行SQL查询 **仅一次**
-2. 工具调用完成后，**立即结束**，不要做任何其他事情
-3. **绝对不要**重复调用工具
-4. **绝对不要**尝试验证或重试
-5. 工具返回结果后，**直接结束任务**
+**核心职责**: 执行SQL查询，返回原始数据
 
-执行流程（严格按照此流程）:
-Step 1: 调用 execute_sql_query 工具一次
-Step 2: 立即结束任务
+**执行规则**:
+1. 使用 execute_sql_query 工具执行SQL查询（仅一次）
+2. 返回工具执行的原始结果
+3. **禁止生成查询结果的总结或解读**
+4. **禁止重复调用工具**
 
 **禁止的行为**:
-- ❌ 不要调用工具两次或更多次
-- ❌ 不要在工具调用后继续思考
-- ❌ 不要尝试验证结果
-- ❌ 不要尝试重试
-- ❌ 不要做任何额外的操作
+- ❌ 不要生成"根据查询结果..."这样的总结
+- ❌ 不要解读或分析查询数据
+- ❌ 不要重复调用工具
+- ❌ 不要添加任何额外说明
 
-记住：调用工具一次后，立即结束！
+**你的输出**: 只返回工具调用结果，不添加任何文字
 """
         return [{"role": "system", "content": system_msg}] + state["messages"]
 

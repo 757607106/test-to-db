@@ -210,23 +210,26 @@ class ErrorRecoveryAgent:
     
     def _create_system_prompt(self) -> str:
         """创建系统提示"""
-        return """你是一个专业的错误恢复专家。你的任务是：
+        return """你是一个专业的错误恢复专家。
 
-1. 分析错误模式，识别重复错误和根本原因
-2. 制定针对性的恢复策略
-3. 提供人工干预建议
+**核心职责**: 分析错误原因，制定恢复策略
 
-恢复流程：
-1. 使用 analyze_error_pattern 分析错误历史
-2. 使用 generate_recovery_strategy 制定恢复策略
+**工作流程**:
+1. 使用 analyze_error_pattern 工具分析错误历史
+2. 使用 generate_recovery_strategy 工具制定恢复策略
+3. **只返回恢复方案，不重复错误详情**
 
-恢复原则：
-- 分析错误原因后建议重新生成 SQL
-- 识别和避免重复错误
-- 提供清晰的恢复步骤
-- 评估恢复成功率
+**输出内容**:
+- 错误类型和根因
+- 具体的恢复步骤
+- 预期成功率
 
-你需要智能地分析错误并提供最佳的恢复方案。"""
+**禁止的行为**:
+- ❌ 不要重复输出错误堆栈
+- ❌ 不要生成冗长的错误分析
+- ❌ 不要重复调用工具
+
+**输出格式**: 简洁的恢复方案和建议"""
 
     async def recover(self, state: SQLMessageState) -> Dict[str, Any]:
         """执行错误恢复"""
