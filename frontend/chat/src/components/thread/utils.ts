@@ -1,4 +1,3 @@
-
 import type { Message } from "@langchain/langgraph-sdk";
 
 /**
@@ -6,16 +5,11 @@ import type { Message } from "@langchain/langgraph-sdk";
  * - If text is present, returns the joined text.
  * - If not, returns a label for the first non-text modality (e.g., 'Image', 'Other').
  * - If unknown, returns 'Multimodal message'.
- * 
- * ✅ 简化版本：移除了复杂的 JSON 过滤逻辑
- * 后端已确保 AI 消息不会混入工具返回的 JSON
  */
 export function getContentString(content: Message["content"]): string {
-  if (typeof content === "string") {
-    return content;  // ✅ 直接返回，无需过滤
-  }
+  if (typeof content === "string") return content;
   const texts = content
     .filter((c): c is { type: "text"; text: string } => c.type === "text")
     .map((c) => c.text);
-  return texts.join(" ").trim();
+  return texts.join(" ");
 }

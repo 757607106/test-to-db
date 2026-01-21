@@ -389,19 +389,26 @@ class IntelligentSQLGraph:
             
         说明:
             - 这是主要的处理节点
-            - 调用SupervisorAgent的内部图来协调所有Worker Agents
-            - Supervisor会根据current_stage决定调用哪个Worker Agent
+            - 调用SupervisorAgent的supervise()方法来协调所有Worker Agents
+            - 传递recursion_limit配置防止工具重复调用
             - 返回的状态包含所有Agent的执行结果
             - 执行完成后自动存储结果到缓存
         """
-        # 调用supervisor的内部图执行查询处理
-        # supervisor.ainvoke会触发整个Agent协调流程
-        result = await self.supervisor_agent.supervisor.ainvoke(state)
+        # ✅ 使用supervise()方法，传递recursion_limit配置防止工具重复调用
+        result = await self.supervisor_agent.supervise(state)
+        
+        # 检查执行结果
+        if result.get("success"):
+            final_result = result.get("result", state)
+        else:
+            # 如果失败，记录错误但仍返回当前状态
+            logger.error(f"Supervisor执行失败: {result.get('error')}")
+            final_result = state
         
         # ✅ 执行完成后自动存储结果到缓存 (2026-01-19 新增)
-        await self._store_result_to_cache(state, result)
+        await self._store_result_to_cache(state, final_result)
         
-        return result
+        return final_result
     
     async def _store_result_to_cache(self, original_state: SQLMessageState, result: SQLMessageState) -> None:
         """

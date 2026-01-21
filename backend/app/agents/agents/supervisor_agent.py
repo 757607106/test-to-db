@@ -239,12 +239,15 @@ class SupervisorAgent:
                 logger.info(f"  跳过图表生成: {skip_chart_generation}")
             
             # ✅ 执行supervisor，传递config以启用状态持久化
+            # ✅ 设置 recursion_limit 防止工具重复调用
+            invoke_config = {"recursion_limit": 10}
             if config:
+                invoke_config.update(config)
                 logger.info(f"使用 config 执行 supervisor: {config.get('configurable', {})}")
-                result = await self.supervisor.ainvoke(state, config=config)
             else:
                 logger.info("不使用 config 执行 supervisor（无状态模式）")
-                result = await self.supervisor.ainvoke(state)
+            
+            result = await self.supervisor.ainvoke(state, config=invoke_config)
             
             # 执行后再次验证并修复消息历史
             if "messages" in result:
