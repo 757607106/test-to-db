@@ -497,9 +497,10 @@ def parse_user_clarification_response(
 
 def should_skip_clarification(query: str) -> bool:
     """
-    快速判断是否可以跳过澄清检测（用于优化性能）
+    快速判断是否可以跳过澄清检测
     
-    对于某些明显明确的查询，可以直接跳过LLM检测，大幅减少延迟
+    简化版本：只保留核心规则，减少复杂度
+    原则：既不过度澄清，也不遗漏的真正模糊查询
     
     Args:
         query: 用户查询
@@ -511,126 +512,44 @@ def should_skip_clarification(query: str) -> bool:
     
     query_lower = query.lower().strip()
     
-    # ========================================
-    # 1. 包含具体日期的查询 - 不需要澄清
-    # ========================================
+    # 短查询且不包含模糊词 - 直接跳过
+    if len(query) < 15:
+        return True
+    
+    # 包含具体日期 - 跳过澄清
     date_patterns = [
-        r'\d{4}[-/年]\d{1,2}[-/月]\d{1,2}',  # 2024-01-01, 2024年1月1日
-        r'\d{4}[-/年]\d{1,2}[-/月]',           # 2024-01, 2024年1月
-        r'今[天日]|昨[天日]|前[天日]',          # 今天、昨天、前天
-        r'本[周月季年]|上[周月季年]|下[周月季年]',  # 本周、上月、下季度
-        r'\d{1,2}月\d{1,2}[日号]',             # 1月15日
-        r'从.{2,10}到.{2,10}',                # 从1月到3月
+        r'\d{4}[-/年]\d{1,2}[-/月]\d{1,2}',  # 2024-01-01
+        r'今[天日]|昨[天日]|前[天日]',       # 今天、昨天
+        r'本[周月季年]|上[周月季年]',        # 本周、上月
     ]
+    if any(re.search(p, query) for p in date_patterns):
+        return True
     
-    for pattern in date_patterns:
-        if re.search(pattern, query):
-            logger.debug(f"查询包含具体日期，跳过澄清: {query[:30]}")
-            return True
-    
-    # ========================================
-    # 2. 包含具体数量的查询 - 不需要澄清
-    # ========================================
+    # 包含具体数量 - 跳过澄清
     quantity_patterns = [
-        r'前\d+[个名条项]',           # 前10个、前5名
-        r'最[近新]的?\d+[个条项]',    # 最近10条
-        r'top\s*\d+',                # top 10
-        r'\d+[个条项]',              # 5个
-        r'limit\s*\d+',              # limit 10
+        r'前\d+[个名条项]',    # 前10个
+        r'top\s*\d+',           # top 10
+        r'limit\s*\d+',         # limit 10
     ]
+    if any(re.search(p, query_lower) for p in quantity_patterns):
+        return True
     
-    for pattern in quantity_patterns:
-        if re.search(pattern, query_lower):
-            logger.debug(f"查询包含具体数量，跳过澄清: {query[:30]}")
-            return True
+    # 简单聚合查询 - 跳过澄清
+    if re.search(r'^(统计|计算|求|查询).*(总数|总量|总额|平均|最大|最小)', query):
+        return True
     
-    # ========================================
-    # 3. 简单直接的查询模式 - 不需要澄清
-    # ========================================
-    simple_patterns = [
-        r'^查[询看]所有',
-        r'^显示全部',
-        r'^列出.*(表|数据|记录)',
-        r'^获取.*列表',
-        r'^统计.*数[量目]',
-        r'^计算.*总[数量和额]',
-        r'^求.*平均',
-        r'^查询.*总[数量和额]',
-        r'ID[=为是:：]\s*\d+',        # ID=123
-        r'编号[=为是:：]\s*\d+',       # 编号=123
-        r'名[称字][=为是:：]',         # 名称=xxx
-    ]
+    # 查询所有/全部 - 跳过澄清
+    if re.search(r'^(查[询看]|显示|列出)(所有|全部)', query):
+        return True
     
-    for pattern in simple_patterns:
-        if re.search(pattern, query):
-            logger.debug(f"查询模式简单，跳过澄清: {query[:30]}")
-            return True
-    
-    # ========================================
-    # 4. 聚合查询 - 通常足够明确
-    # ========================================
-    aggregation_patterns = [
-        r'^(统计|计算|求|查询).*(总数|总量|总额|平均|最大|最小|数量|金额)',
-        r'(count|sum|avg|max|min)\s*\(',  # SQL函数
-        r'(数量|金额|总计|合计)是多少',
-        r'有多少[个条项]',
-    ]
-    
-    for pattern in aggregation_patterns:
-        if re.search(pattern, query_lower):
-            logger.debug(f"聚合查询，跳过澄清: {query[:30]}")
-            return True
-    
-    # ========================================
-    # 5. 短查询且无模糊词 - 可能足够明确
-    # ========================================
-    ambiguous_words = [
-        '最近', '近期', '一些', '部分', '大概', '大约', '差不多',
-        '前几', '后几', '若干', '某些', '很多', '不少',
-        '大客户', '小客户', '热销', '畅销', '滞销',
-        '高', '低', '多', '少', '好', '差',
-    ]
-    
-    if len(query) < 20:  # 短查询
-        has_ambiguous = any(word in query for word in ambiguous_words)
-        if not has_ambiguous:
-            logger.debug(f"短查询无模糊词，跳过澄清: {query[:30]}")
-            return True
-    
-    # ========================================
-    # 6. 明确指定字段的查询 - 不需要澄清
-    # ========================================
-    field_patterns = [
-        r'(姓名|名称|名字|地址|电话|邮箱|日期|时间|金额|数量|价格|状态)',
-        r'(用户名|订单号|产品名|客户名)',
-    ]
-    
-    # 如果查询同时指定了字段和条件，通常足够明确
-    if any(re.search(p, query) for p in field_patterns):
-        if re.search(r'[=为是:：]|等于|大于|小于|包含', query):
-            logger.debug(f"查询指定字段和条件，跳过澄清: {query[:30]}")
-            return True
+    # 包含ID/编号条件 - 跳过澄清
+    if re.search(r'(ID|编号)\s*[=为是:：]\s*\d+', query, re.IGNORECASE):
+        return True
     
     return False
 
 
-def _contains_ambiguous_words(query: str) -> bool:
-    """
-    检查查询是否包含模糊词汇
-    
-    Args:
-        query: 用户查询
-        
-    Returns:
-        bool - 是否包含模糊词
-    """
-    ambiguous_words = [
-        '最近', '近期', '一些', '部分', '大概', '大约', '差不多',
-        '前几', '后几', '若干', '某些', '很多', '不少',
-        '大客户', '小客户', '热销', '畅销', '滞销',
-        '高', '低', '好', '差',
-    ]
-    return any(word in query for word in ambiguous_words)
+# 已移除 _contains_ambiguous_words 函数，逻辑已集成到 should_skip_clarification 中
 
 
 # ============================================================================

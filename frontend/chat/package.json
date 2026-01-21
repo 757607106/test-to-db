@@ -10,7 +10,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -19,6 +19,9 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
+    "@assistant-ui/react": "^0.11.58",
+    "@assistant-ui/react-langgraph": "^0.7.15",
+    "@assistant-ui/react-markdown": "^0.11.10",
     "@langchain/core": "^0.3.44",
     "@langchain/langgraph": "^0.2.63",
     "@langchain/langgraph-sdk": "^0.1.0",

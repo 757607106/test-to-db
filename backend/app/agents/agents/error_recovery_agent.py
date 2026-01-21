@@ -184,87 +184,11 @@ def generate_recovery_strategy(error_analysis: Dict[str, Any], current_state: Di
         )
 
 
-@tool
-def auto_fix_sql_error(sql_query: str, error_message: str, schema_info: Dict[str, Any] = None) -> ToolResponse:
-    """
-    自动修复SQL错误
-    
-    Args:
-        sql_query: 有问题的SQL查询
-        error_message: 错误消息
-        schema_info: 模式信息
-        
-    Returns:
-        修复后的SQL和修复说明
-    """
-    try:
-        fixed_sql = sql_query
-        fixes_applied = []
-        
-        error_lower = error_message.lower()
-        
-        # 常见语法错误修复
-        if "syntax error" in error_lower or "语法错误" in error_lower:
-            # 修复常见的语法问题
-            
-            # 1. 修复缺失的分号
-            if not fixed_sql.strip().endswith(';'):
-                fixed_sql += ';'
-                fixes_applied.append("添加缺失的分号")
-            
-            # 2. 修复关键字大小写
-            keywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'ON', 'GROUP BY', 'ORDER BY', 'HAVING']
-            for keyword in keywords:
-                fixed_sql = fixed_sql.replace(keyword.lower(), keyword)
-            
-            # 3. 修复引号问题
-            if fixed_sql.count("'") % 2 != 0:
-                fixed_sql += "'"
-                fixes_applied.append("修复未闭合的单引号")
-        
-        # 表名或字段名错误修复
-        if "unknown column" in error_lower or "unknown table" in error_lower:
-            if schema_info:
-                # 尝试修正表名和字段名
-                available_tables = list(schema_info.keys()) if isinstance(schema_info, dict) else []
-                for table in available_tables:
-                    # 简单的模糊匹配修复
-                    if table.lower() in fixed_sql.lower():
-                        fixed_sql = fixed_sql.replace(table.lower(), table)
-                        fixes_applied.append(f"修正表名为 {table}")
-        
-        # 性能相关修复
-        if "timeout" in error_lower or "too many rows" in error_lower:
-            if "LIMIT" not in fixed_sql.upper():
-                fixed_sql += " LIMIT 100"
-                fixes_applied.append("添加LIMIT子句限制结果数量")
-        
-        # 权限相关修复
-        if "access denied" in error_lower or "permission" in error_lower:
-            # 尝试简化查询
-            if "SELECT *" in fixed_sql.upper():
-                # 替换为基本字段
-                fixed_sql = fixed_sql.replace("SELECT *", "SELECT id, name")
-                fixes_applied.append("简化SELECT字段以避免权限问题")
-        
-        success = len(fixes_applied) > 0
-        
-        return ToolResponse(
-            status="success",
-            data={
-                "auto_fix_successful": success,
-                "original_sql": sql_query,
-                "fixed_sql": fixed_sql,
-                "fixes_applied": fixes_applied,
-                "requires_manual_review": not success
-            }
-        )
-        
-    except Exception as e:
-        return ToolResponse(
-            status="error",
-            error=str(e)
-        )
+# ============================================================================
+# 已移除 auto_fix_sql_error 工具（2026-01-21）
+# 原因：自动修复逻辑过于简单（添加分号、修正大小写等），修复成功率很低
+# 建议方案：分析错误后重新生成 SQL，而不是尝试自动修复
+# ============================================================================
 
 
 class ErrorRecoveryAgent:
@@ -273,7 +197,8 @@ class ErrorRecoveryAgent:
     def __init__(self):
         self.name = "error_recovery_agent"  # 添加name属性
         self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
-        self.tools = [analyze_error_pattern, generate_recovery_strategy, auto_fix_sql_error]
+        self.tools = [analyze_error_pattern, generate_recovery_strategy]
+        # 已移除 auto_fix_sql_error - 修复成功率过低，建议重新生成 SQL
         
         # 创建ReAct代理
         self.agent = create_react_agent(
@@ -289,19 +214,17 @@ class ErrorRecoveryAgent:
 
 1. 分析错误模式，识别重复错误和根本原因
 2. 制定针对性的恢复策略
-3. 自动修复可修复的错误
-4. 提供人工干预建议
+3. 提供人工干预建议
 
 恢复流程：
 1. 使用 analyze_error_pattern 分析错误历史
 2. 使用 generate_recovery_strategy 制定恢复策略
-3. 使用 auto_fix_sql_error 尝试自动修复
 
 恢复原则：
-- 优先尝试自动修复
+- 分析错误原因后建议重新生成 SQL
 - 识别和避免重复错误
 - 提供清晰的恢复步骤
-- 评估修复成功率
+- 评估恢复成功率
 
 你需要智能地分析错误并提供最佳的恢复方案。"""
 
