@@ -12,6 +12,7 @@ from langgraph.prebuilt import create_react_agent
 from app.core.state import SQLMessageState, SQLExecutionResult, extract_connection_id
 from app.core.llms import get_default_model
 from app.db.db_manager import db_manager, ensure_db_connection
+from app.schemas.agent_message import ToolResponse
 
 # 全局缓存 - 防止重复执行
 import time
@@ -21,7 +22,7 @@ _cache_lock = {}  # 防止并发重复执行
 
 
 @tool
-def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> Dict[str, Any]:
+def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> ToolResponse:
     """
     执行SQL查询 - 带缓存防止重复执行
 
@@ -31,7 +32,7 @@ def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> Dict[
         timeout: 超时时间（秒）
 
     Returns:
-        查询执行结果
+        ToolResponse: 统一格式的查询执行结果
     """
     # 生成缓存键
     cache_key = f"{connection_id}:{hash(sql_query)}"
@@ -45,9 +46,12 @@ def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> Dict[
     if not is_modification and cache_key in _execution_cache:
         cache_age = time.time() - _cache_timestamps.get(cache_key, 0)
         if cache_age < 300:  # 5分钟内的缓存有效
-            cached_result = _execution_cache[cache_key].copy()
-            cached_result["from_cache"] = True
-            cached_result["cache_age_seconds"] = int(cache_age)
+            cached_result = _execution_cache[cache_key]
+            # 更新缓存元数据
+            if cached_result.metadata is None:
+                cached_result.metadata = {}
+            cached_result.metadata["from_cache"] = True
+            cached_result.metadata["cache_age_seconds"] = int(cache_age)
             return cached_result
     
     # 检查是否正在执行（防止并发重复）
@@ -55,11 +59,11 @@ def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> Dict[
         # 等待一小段时间后返回提示
         time.sleep(0.5)
         if cache_key in _execution_cache:
-            return _execution_cache[cache_key].copy()
-        return {
-            "success": False,
-            "error": "查询正在执行中，请稍后重试"
-        }
+            return _execution_cache[cache_key]
+        return ToolResponse(
+            status="error",
+            error="查询正在执行中，请稍后重试"
+        )
     
     # 标记正在执行
     _cache_lock[cache_key] = True
@@ -72,33 +76,33 @@ def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> Dict[
         # 获取数据库连接
         connection = get_db_connection_by_id(connection_id)
         if not connection:
-            result = {
-                "success": False,
-                "error": f"找不到连接ID为 {connection_id} 的数据库连接",
-                "from_cache": False
-            }
-            return result
+            return ToolResponse(
+                status="error",
+                error=f"找不到连接ID为 {connection_id} 的数据库连接",
+                metadata={"connection_id": connection_id}
+            )
 
         # 执行查询
         result_data = execute_query_with_connection(connection, sql_query)
 
-        result = {
-            "success": True,
-            "data": {
+        result = ToolResponse(
+            status="success",
+            data={
                 "columns": list(result_data[0].keys()) if result_data else [],
                 "data": [list(row.values()) for row in result_data],
                 "row_count": len(result_data),
                 "column_count": len(result_data[0].keys()) if result_data else 0
             },
-            "error": None,
-            "execution_time": 0,  # TODO: 添加执行时间计算
-            "rows_affected": len(result_data),
-            "from_cache": False
-        }
+            metadata={
+                "execution_time": 0,  # TODO: 添加执行时间计算
+                "rows_affected": len(result_data),
+                "from_cache": False
+            }
+        )
         
         # 缓存结果（只缓存查询操作）
         if not is_modification:
-            _execution_cache[cache_key] = result.copy()
+            _execution_cache[cache_key] = result
             _cache_timestamps[cache_key] = time.time()
             
             # 清理旧缓存（保持缓存大小）
@@ -113,19 +117,21 @@ def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> Dict[
         return result
 
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "execution_time": 0,
-            "from_cache": False
-        }
+        return ToolResponse(
+            status="error",
+            error=str(e),
+            metadata={
+                "execution_time": 0,
+                "from_cache": False
+            }
+        )
     finally:
         # 移除执行锁
         _cache_lock.pop(cache_key, None)
 
 
 @tool
-def analyze_query_performance(sql_query: str, execution_result: Dict[str, Any]) -> Dict[str, Any]:
+def analyze_query_performance(sql_query: str, execution_result: Dict[str, Any]) -> ToolResponse:
     """
     分析查询性能
     
@@ -134,7 +140,7 @@ def analyze_query_performance(sql_query: str, execution_result: Dict[str, Any]) 
         execution_result: 执行结果
         
     Returns:
-        性能分析结果
+        ToolResponse: 性能分析结果
     """
     try:
         execution_time = execution_result.get("execution_time", 0)
@@ -156,23 +162,25 @@ def analyze_query_performance(sql_query: str, execution_result: Dict[str, Any]) 
         if row_count > 10000:
             suggestions.append("返回行数较多，考虑添加分页或更严格的过滤条件")
         
-        return {
-            "success": True,
-            "performance_rating": performance_rating,
-            "execution_time": execution_time,
-            "row_count": row_count,
-            "suggestions": suggestions
-        }
+        return ToolResponse(
+            status="success",
+            data={
+                "performance_rating": performance_rating,
+                "execution_time": execution_time,
+                "row_count": row_count,
+                "suggestions": suggestions
+            }
+        )
         
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return ToolResponse(
+            status="error",
+            error=str(e)
+        )
 
 
 @tool
-def format_query_results(execution_result: Dict[str, Any], format_type: str = "table") -> Dict[str, Any]:
+def format_query_results(execution_result: Dict[str, Any], format_type: str = "table") -> ToolResponse:
     """
     格式化查询结果
     
@@ -181,11 +189,15 @@ def format_query_results(execution_result: Dict[str, Any], format_type: str = "t
         format_type: 格式类型 (table, json, csv)
         
     Returns:
-        格式化后的结果
+        ToolResponse: 格式化后的结果
     """
     try:
-        if not execution_result.get("success"):
-            return execution_result
+        # 检查输入结果的状态
+        if not execution_result.get("success") and "status" not in execution_result:
+            return ToolResponse(
+                status="error",
+                error="输入的执行结果无效"
+            )
         
         data = execution_result.get("data", {})
         columns = data.get("columns", [])
@@ -233,18 +245,20 @@ def format_query_results(execution_result: Dict[str, Any], format_type: str = "t
         else:
             formatted_result = str(data)
         
-        return {
-            "success": True,
-            "formatted_result": formatted_result,
-            "format_type": format_type,
-            "original_data": data
-        }
+        return ToolResponse(
+            status="success",
+            data={
+                "formatted_result": formatted_result,
+                "format_type": format_type,
+                "original_data": data
+            }
+        )
         
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return ToolResponse(
+            status="error",
+            error=str(e)
+        )
 
 
 class SQLExecutorAgent:
@@ -358,10 +372,10 @@ Step 2: 立即结束任务
             
             # 创建对应的 tool message
             tool_message = ToolMessage(
-                content=json.dumps(result, ensure_ascii=False),
+                content=result.model_dump_json(),  # ✅ 使用 Pydantic 标准序列化
                 tool_call_id=tool_call_id,
                 name="execute_sql_query",
-                status="success" if result.get("success") else "error"  # 修复：明确设置status字段
+                status=result.status  # ✅ 直接使用 ToolResponse.status
             )
             
             # 保存到 agent_messages

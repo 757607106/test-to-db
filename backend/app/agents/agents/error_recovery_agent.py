@@ -10,10 +10,11 @@ from langgraph.prebuilt import create_react_agent
 from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
+from app.schemas.agent_message import ToolResponse
 
 
 @tool
-def analyze_error_pattern(error_history: List[Dict[str, Any]]) -> Dict[str, Any]:
+def analyze_error_pattern(error_history: List[Dict[str, Any]]) -> ToolResponse:
     """
     分析错误模式，识别重复错误和根本原因
     
@@ -25,11 +26,13 @@ def analyze_error_pattern(error_history: List[Dict[str, Any]]) -> Dict[str, Any]
     """
     try:
         if not error_history:
-            return {
-                "success": True,
-                "pattern_found": False,
-                "message": "没有错误历史记录"
-            }
+            return ToolResponse(
+                status="success",
+                data={
+                    "pattern_found": False,
+                    "message": "没有错误历史记录"
+                }
+            )
         
         # 统计错误类型
         error_types = {}
@@ -60,25 +63,27 @@ def analyze_error_pattern(error_history: List[Dict[str, Any]]) -> Dict[str, Any]
         
         pattern_found = most_common_type[1] > 1 or most_common_stage[1] > 1
         
-        return {
-            "success": True,
-            "pattern_found": pattern_found,
-            "error_types": error_types,
-            "error_stages": error_stages,
-            "most_common_type": most_common_type[0],
-            "most_common_stage": most_common_stage[0],
-            "total_errors": len(error_history)
-        }
+        return ToolResponse(
+            status="success",
+            data={
+                "pattern_found": pattern_found,
+                "error_types": error_types,
+                "error_stages": error_stages,
+                "most_common_type": most_common_type[0],
+                "most_common_stage": most_common_stage[0],
+                "total_errors": len(error_history)
+            }
+        )
         
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return ToolResponse(
+            status="error",
+            error=str(e)
+        )
 
 
 @tool
-def generate_recovery_strategy(error_analysis: Dict[str, Any], current_state: Dict[str, Any]) -> Dict[str, Any]:
+def generate_recovery_strategy(error_analysis: Dict[str, Any], current_state: Dict[str, Any]) -> ToolResponse:
     """
     基于错误分析生成恢复策略
     
@@ -163,22 +168,24 @@ def generate_recovery_strategy(error_analysis: Dict[str, Any], current_state: Di
                 "添加基本的过滤条件"
             ]
         
-        return {
-            "success": True,
-            "strategy": strategy,
-            "recovery_steps": recovery_steps,
-            "estimated_success_rate": strategy["confidence"]
-        }
+        return ToolResponse(
+            status="success",
+            data={
+                "strategy": strategy,
+                "recovery_steps": recovery_steps,
+                "estimated_success_rate": strategy["confidence"]
+            }
+        )
         
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return ToolResponse(
+            status="error",
+            error=str(e)
+        )
 
 
 @tool
-def auto_fix_sql_error(sql_query: str, error_message: str, schema_info: Dict[str, Any] = None) -> Dict[str, Any]:
+def auto_fix_sql_error(sql_query: str, error_message: str, schema_info: Dict[str, Any] = None) -> ToolResponse:
     """
     自动修复SQL错误
     
@@ -242,20 +249,22 @@ def auto_fix_sql_error(sql_query: str, error_message: str, schema_info: Dict[str
         
         success = len(fixes_applied) > 0
         
-        return {
-            "success": True,
-            "auto_fix_successful": success,
-            "original_sql": sql_query,
-            "fixed_sql": fixed_sql,
-            "fixes_applied": fixes_applied,
-            "requires_manual_review": not success
-        }
+        return ToolResponse(
+            status="success",
+            data={
+                "auto_fix_successful": success,
+                "original_sql": sql_query,
+                "fixed_sql": fixed_sql,
+                "fixes_applied": fixes_applied,
+                "requires_manual_review": not success
+            }
+        )
         
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return ToolResponse(
+            status="error",
+            error=str(e)
+        )
 
 
 class ErrorRecoveryAgent:

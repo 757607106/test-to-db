@@ -49,47 +49,11 @@ function extractSQLFromContent(content: string): string | null {
 }
 
 /**
- * Fix duplicated tool_call_id issue from LangGraph backend
- * Some tool_call_ids are incorrectly duplicated (e.g., "call_xxxcall_xxx" instead of "call_xxx")
- * This function detects and fixes such duplications
- */
-function fixDuplicatedToolCallId(toolCallId: string): string {
-  if (!toolCallId) return toolCallId;
-  
-  // Check if the ID is duplicated (e.g., "call_xxxcall_xxx")
-  // Pattern: if the string is exactly twice the length of its first half and both halves are identical
-  const len = toolCallId.length;
-  if (len % 2 === 0) {
-    const half = len / 2;
-    const firstHalf = toolCallId.substring(0, half);
-    const secondHalf = toolCallId.substring(half);
-    if (firstHalf === secondHalf) {
-      return firstHalf;
-    }
-  }
-  
-  return toolCallId;
-}
-
-/**
  * Check if a tool call ID matches a tool result's tool_call_id
- * Handles the case where tool_call_id might be duplicated
+ * ✅ 简化版本：后端已通过 generate_tool_call_id() 确保 ID 不重复
  */
 function toolCallIdMatches(toolCallId: string, toolResultId: string): boolean {
-  if (!toolCallId || !toolResultId) return false;
-  
-  // Direct match
-  if (toolCallId === toolResultId) return true;
-  
-  // Try fixing duplicated ID
-  const fixedResultId = fixDuplicatedToolCallId(toolResultId);
-  if (toolCallId === fixedResultId) return true;
-  
-  // Also check if the tool call ID itself might be duplicated (less common)
-  const fixedCallId = fixDuplicatedToolCallId(toolCallId);
-  if (fixedCallId === toolResultId || fixedCallId === fixedResultId) return true;
-  
-  return false;
+  return toolCallId === toolResultId;
 }
 
 function CustomComponent({
@@ -142,8 +106,8 @@ function parseAnthropicStreamedToolCalls(
         args: json,
         type: "tool_call" as const,
       };
-    })
-    .filter((tc) => tc.name && tc.name.trim() !== ""); // Filter out empty names
+    });
+    // ✅ 移除空 name 过滤：后端已通过 create_ai_message_with_tools() 确保 name 非空
 }
 
 interface InterruptProps {

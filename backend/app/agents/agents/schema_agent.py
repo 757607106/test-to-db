@@ -14,10 +14,11 @@ from app.core.llms import get_default_model
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 from app.db.session import SessionLocal
 from app.services.text2sql_utils import retrieve_relevant_schema, get_value_mappings, analyze_query_with_llm
+from app.schemas.agent_message import ToolResponse
 
 
 @tool
-def analyze_user_query(query: str) -> Dict[str, Any]:
+def analyze_user_query(query: str) -> ToolResponse:
     """
     分析用户的自然语言查询，提取关键实体和意图
     
@@ -29,19 +30,19 @@ def analyze_user_query(query: str) -> Dict[str, Any]:
     """
     try:
         analysis = analyze_query_with_llm(query)
-        return {
-            "success": True,
-            "analysis": analysis
-        }
+        return ToolResponse(
+            status="success",
+            data={"analysis": analysis}
+        )
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return ToolResponse(
+            status="error",
+            error=str(e)
+        )
 
 
 @tool
-def retrieve_database_schema(query: str, connection_id: int) -> Dict[str, Any]:
+def retrieve_database_schema(query: str, connection_id: int) -> ToolResponse:
     """
     根据查询分析结果获取相关的数据库表结构信息
 
@@ -67,22 +68,24 @@ def retrieve_database_schema(query: str, connection_id: int) -> Dict[str, Any]:
             # 获取值映射
             value_mappings = get_value_mappings(db, schema_context)
             
-            return {
-                "success": True,
-                "schema_context": schema_context,
-                "value_mappings": value_mappings
-            }
+            return ToolResponse(
+                status="success",
+                data={
+                    "schema_context": schema_context,
+                    "value_mappings": value_mappings
+                }
+            )
         finally:
             db.close()
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return ToolResponse(
+            status="error",
+            error=str(e)
+        )
 
 
 @tool
-def validate_schema_completeness(schema_info: Dict[str, Any], query_analysis: Dict[str, Any]) -> Dict[str, Any]:
+def validate_schema_completeness(schema_info: Dict[str, Any], query_analysis: Dict[str, Any]) -> ToolResponse:
     """
     验证获取的模式信息是否足够完整来回答用户查询
     
@@ -110,17 +113,19 @@ def validate_schema_completeness(schema_info: Dict[str, Any], query_analysis: Di
         if missing_entities:
             suggestions.append(f"可能缺少与以下实体相关的表信息: {', '.join(missing_entities)}")
         
-        return {
-            "success": True,
-            "is_complete": is_complete,
-            "missing_entities": missing_entities,
-            "suggestions": suggestions
-        }
+        return ToolResponse(
+            status="success",
+            data={
+                "is_complete": is_complete,
+                "missing_entities": missing_entities,
+                "suggestions": suggestions
+            }
+        )
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return ToolResponse(
+            status="error",
+            error=str(e)
+        )
 
 
 class SchemaAnalysisAgent:

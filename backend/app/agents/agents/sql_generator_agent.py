@@ -19,6 +19,7 @@ from langgraph.prebuilt import create_react_agent
 from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
+from app.schemas.agent_message import ToolResponse, SQLGenerationResult
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,7 @@ def generate_sql_query(
     db_type: str = "mysql",
     connection_id: int = None,
     sample_qa_pairs: List[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+) -> ToolResponse:
     """
     根据用户查询和模式信息生成SQL语句
     
@@ -135,7 +136,7 @@ def generate_sql_query(
         sample_qa_pairs: 相关的SQL问答对样本（如果为空且有connection_id，会自动检索）
 
     Returns:
-        生成的SQL语句和相关信息
+        ToolResponse: 生成的SQL语句和相关信息
     """
     try:
         # 自动检索样本：如果提供了 connection_id 且没有手动提供样本
@@ -213,17 +214,19 @@ SQL: {sample.get('sql', '')}
             sql_query = sql_query[:-3]
         sql_query = sql_query.strip()
         
-        return {
-            "success": True,
-            "sql_query": sql_query,
-            "context_used": context
-        }
+        return ToolResponse(
+            status="success",
+            data={
+                "sql_query": sql_query,
+                "context_used": context
+            }
+        )
         
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return ToolResponse(
+            status="error",
+            error=str(e)
+        )
 
 
 @tool
@@ -232,7 +235,7 @@ def generate_sql_with_samples(
     schema_info: Dict[str, Any],
     sample_qa_pairs: List[Dict[str, Any]],
     value_mappings: Dict[str, Any] = None
-) -> Dict[str, Any]:
+) -> ToolResponse:
     """
     基于样本生成高质量SQL查询
 
@@ -243,7 +246,7 @@ def generate_sql_with_samples(
         value_mappings: 值映射信息
 
     Returns:
-        生成的SQL语句和样本分析
+        ToolResponse: 生成的SQL语句和样本分析
     """
     try:
         if not sample_qa_pairs:
@@ -322,23 +325,25 @@ def generate_sql_with_samples(
             sql_query = sql_query[:-3]
         sql_query = sql_query.strip()
 
-        return {
-            "success": True,
-            "sql_query": sql_query,
-            "samples_used": len(best_samples),
-            "best_sample_score": best_samples[0].get('final_score', 0) if best_samples else 0,
-            "sample_analysis": sample_analysis
-        }
+        return ToolResponse(
+            status="success",
+            data={
+                "sql_query": sql_query,
+                "samples_used": len(best_samples),
+                "best_sample_score": best_samples[0].get('final_score', 0) if best_samples else 0,
+                "sample_analysis": sample_analysis
+            }
+        )
 
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return ToolResponse(
+            status="error",
+            error=str(e)
+        )
 
 
 @tool
-def analyze_sql_optimization_need(sql_query: str, schema_info: Dict[str, Any] = None) -> Dict[str, Any]:
+def analyze_sql_optimization_need(sql_query: str, schema_info: Dict[str, Any] = None) -> ToolResponse:
     """
     分析SQL查询是否需要优化
 
@@ -347,7 +352,7 @@ def analyze_sql_optimization_need(sql_query: str, schema_info: Dict[str, Any] = 
         schema_info: 模式信息
 
     Returns:
-        优化需求分析结果
+        ToolResponse: 优化需求分析结果
     """
     try:
         # 基本的SQL复杂度分析
@@ -400,19 +405,21 @@ def analyze_sql_optimization_need(sql_query: str, schema_info: Dict[str, Any] = 
         optimization_score = sum(optimization_indicators.values())
         needs_optimization = optimization_score >= 3  # 如果有3个或以上指标，建议优化
 
-        return {
-            "success": True,
-            "needs_optimization": needs_optimization,
-            "optimization_score": optimization_score,
-            "indicators": optimization_indicators,
-            "reason": _get_optimization_reason(optimization_indicators, needs_optimization)
-        }
+        return ToolResponse(
+            status="success",
+            data={
+                "needs_optimization": needs_optimization,
+                "optimization_score": optimization_score,
+                "indicators": optimization_indicators,
+                "reason": _get_optimization_reason(optimization_indicators, needs_optimization)
+            }
+        )
 
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return ToolResponse(
+            status="error",
+            error=str(e)
+        )
 
 
 def _get_optimization_reason(indicators: Dict[str, bool], needs_optimization: bool) -> str:
@@ -438,7 +445,7 @@ def _get_optimization_reason(indicators: Dict[str, bool], needs_optimization: bo
 
 
 @tool
-def optimize_sql_query(sql_query: str, schema_info: Dict[str, Any]) -> Dict[str, Any]:
+def optimize_sql_query(sql_query: str, schema_info: Dict[str, Any]) -> ToolResponse:
     """
     优化SQL查询性能
 
@@ -447,7 +454,7 @@ def optimize_sql_query(sql_query: str, schema_info: Dict[str, Any]) -> Dict[str,
         schema_info: 模式信息
 
     Returns:
-        优化后的SQL查句和优化建议
+        ToolResponse: 优化后的SQL查句和优化建议
     """
     try:
         # 构建优化提示
@@ -477,17 +484,19 @@ def optimize_sql_query(sql_query: str, schema_info: Dict[str, Any]) -> Dict[str,
         llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
         response = llm.invoke([HumanMessage(content=prompt)])
 
-        return {
-            "success": True,
-            "optimized_sql": response.content,
-            "original_sql": sql_query
-        }
+        return ToolResponse(
+            status="success",
+            data={
+                "optimized_sql": response.content,
+                "original_sql": sql_query
+            }
+        )
 
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return ToolResponse(
+            status="error",
+            error=str(e)
+        )
 
 
 # ============================================================================
@@ -541,6 +550,21 @@ class SQLGeneratorAgent:
     def __init__(self):
         self.name = "sql_generator_agent"  # 添加name属性
         self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
+        
+        # ✅ 使用 with_structured_output 确保跨模型一致性
+        # 利用 Function Calling API 强制模型输出结构化格式
+        # 支持 GPT-4, DeepSeek, Llama 3 等所有支持 function_calling 的模型
+        try:
+            self.structured_llm = self.llm.with_structured_output(
+                SQLGenerationResult,
+                method="function_calling"  # 使用原生 Function Calling API
+            )
+            logger.info("✅ SQL生成器已启用结构化输出（with_structured_output）")
+        except Exception as e:
+            # 如果模型不支持 with_structured_output，回退到普通模式
+            logger.warning(f"⚠️  with_structured_output 不可用，回退到普通模式: {e}")
+            self.structured_llm = None
+        
         self.tools = [generate_sql_query, generate_sql_with_samples]
         # 性能优化：移除 explain_sql_query 以提升响应速度（2026-01-18）
         # , analyze_sql_optimization_need, optimize_sql_query

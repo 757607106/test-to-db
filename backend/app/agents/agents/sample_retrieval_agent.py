@@ -13,6 +13,7 @@ from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
 from app.services.hybrid_retrieval_service import HybridRetrievalEngine, VectorServiceFactory, HybridRetrievalEnginePool
 from app.services.text2sql_utils import analyze_query_with_llm
+from app.schemas.agent_message import ToolResponse
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ def retrieve_similar_qa_pairs(
     connection_id: Optional[int] = None,
     top_k: int = 5,
     timeout: int = 15  # 超时设置（秒）
-) -> Dict[str, Any]:
+) -> ToolResponse:
     """
     从混合检索服务中检索与用户查询相似的SQL问答对
     
@@ -37,7 +38,7 @@ def retrieve_similar_qa_pairs(
         timeout: 超时时间（秒），默认15秒
         
     Returns:
-        检索到的相似问答对列表和相关信息
+        ToolResponse: 检索到的相似问答对列表和相关信息
     """
     logger.info(f"开始检索SQL样本 - 查询: '{user_query[:50]}...', connection_id: {connection_id}, top_k: {top_k}, timeout: {timeout}s")
     
@@ -128,63 +129,73 @@ def retrieve_similar_qa_pairs(
 
         logger.info(f"检索成功 - 找到 {len(formatted_results)} 个高质量样本（过滤前: {len(results)}个）")
         
-        return {
-            "success": True,
-            "qa_pairs": formatted_results,
-            "total_found": len(formatted_results),
-            "total_retrieved": len(results),
-            "filtered_count": len(results) - len(formatted_results),
-            "min_threshold": min_similarity_threshold,
-            "query_analyzed": user_query,
-            "execution_time": f"< {timeout}秒"
-        }
+        return ToolResponse(
+            status="success",
+            data={
+                "qa_pairs": formatted_results,
+                "total_found": len(formatted_results),
+                "total_retrieved": len(results),
+                "filtered_count": len(results) - len(formatted_results),
+                "min_threshold": min_similarity_threshold,
+                "query_analyzed": user_query
+            },
+            metadata={
+                "execution_time": f"< {timeout}秒"
+            }
+        )
         
     except asyncio.TimeoutError:
         error_msg = f"检索超时（{timeout}秒）- 可能是数据库连接问题或服务响应慢"
         logger.error(error_msg)
-        return {
-            "success": False,
-            "error": error_msg,
-            "error_type": "TimeoutError",
-            "qa_pairs": [],
-            "suggestion": "请检查以下服务是否正常运行: 1) Milvus向量数据库 2) Neo4j图数据库 3) 网络连接",
-            "troubleshooting": {
-                "check_milvus": "docker ps | grep milvus",
-                "check_neo4j": "docker ps | grep neo4j",
-                "timeout_seconds": timeout
+        return ToolResponse(
+            status="error",
+            error=error_msg,
+            data={"qa_pairs": []},
+            metadata={
+                "error_type": "TimeoutError",
+                "suggestion": "请检查以下服务是否正常运行: 1) Milvus向量数据库 2) Neo4j图数据库 3) 网络连接",
+                "troubleshooting": {
+                    "check_milvus": "docker ps | grep milvus",
+                    "check_neo4j": "docker ps | grep neo4j",
+                    "timeout_seconds": timeout
+                }
             }
-        }
+        )
     
     except RuntimeError as e:
         # 初始化失败
         error_msg = str(e)
         logger.error(f"检索服务初始化失败: {error_msg}")
-        return {
-            "success": False,
-            "error": error_msg,
-            "error_type": "InitializationError",
-            "qa_pairs": [],
-            "suggestion": "检索服务初始化失败，请确认Milvus和Neo4j服务已启动",
-            "troubleshooting": {
-                "milvus_status": "检查Milvus是否运行: docker ps | grep milvus",
-                "neo4j_status": "检查Neo4j是否运行: docker ps | grep neo4j",
-                "logs": "查看服务日志以获取更多信息"
+        return ToolResponse(
+            status="error",
+            error=error_msg,
+            data={"qa_pairs": []},
+            metadata={
+                "error_type": "InitializationError",
+                "suggestion": "检索服务初始化失败，请确认Milvus和Neo4j服务已启动",
+                "troubleshooting": {
+                    "milvus_status": "检查Milvus是否运行: docker ps | grep milvus",
+                    "neo4j_status": "检查Neo4j是否运行: docker ps | grep neo4j",
+                    "logs": "查看服务日志以获取更多信息"
+                }
             }
-        }
+        )
     
     except Exception as e:
         # 其他错误
         error_msg = str(e)
         error_type = type(e).__name__
         logger.error(f"检索失败 - {error_type}: {error_msg}", exc_info=True)
-        return {
-            "success": False,
-            "error": error_msg,
-            "error_type": error_type,
-            "qa_pairs": [],
-            "suggestion": f"检索过程中出现 {error_type} 错误，系统将使用基础模式生成SQL（无样本参考）",
-            "details": "查看后端日志获取详细错误信息"
-        }
+        return ToolResponse(
+            status="error",
+            error=error_msg,
+            data={"qa_pairs": []},
+            metadata={
+                "error_type": error_type,
+                "suggestion": f"检索过程中出现 {error_type} 错误，系统将使用基础模式生成SQL（无样本参考）",
+                "details": "查看后端日志获取详细错误信息"
+            }
+        )
 
 
 @tool

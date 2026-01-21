@@ -157,21 +157,43 @@ export function Thread() {
   // 按 message.id 去重，保留最后一个版本（可能包含更完整的信息）
   const messages = useMemo(() => {
     const seenMessageIds = new Set<string>();
+    const seenContentHashes = new Set<string>();
     const deduped: typeof rawMessages = [];
+    
+    // 生成消息内容的哈希值用于去重
+    const getContentHash = (msg: Message) => {
+      if (msg.type === "ai" && typeof msg.content === "string") {
+        return `ai:${msg.content.substring(0, 100)}`;
+      }
+      if (msg.type === "human" && typeof msg.content === "string") {
+        return `human:${msg.content.substring(0, 100)}`;
+      }
+      return null;
+    };
     
     // 从后向前遍历，保留最新版本的消息
     for (let i = rawMessages.length - 1; i >= 0; i--) {
       const msg = rawMessages[i];
       
-      if (msg.id) {
-        if (!seenMessageIds.has(msg.id)) {
-          seenMessageIds.add(msg.id);
-          deduped.unshift(msg);
-        }
-      } else {
-        // 没有 id 的消息直接保留
-        deduped.unshift(msg);
+      // 基于 ID 去重
+      if (msg.id && seenMessageIds.has(msg.id)) {
+        continue;
       }
+      
+      // 基于内容去重（针对没有 ID 或 ID 不可靠的情况）
+      const contentHash = getContentHash(msg);
+      if (contentHash && seenContentHashes.has(contentHash)) {
+        continue;
+      }
+      
+      // 添加到去重列表
+      if (msg.id) {
+        seenMessageIds.add(msg.id);
+      }
+      if (contentHash) {
+        seenContentHashes.add(contentHash);
+      }
+      deduped.unshift(msg);
     }
     
     return deduped;

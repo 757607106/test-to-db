@@ -12,49 +12,14 @@ import {
   X,
 } from "lucide-react";
 import { AIMessage, ToolMessage } from "@langchain/langgraph-sdk";
-
-/**
- * Fix duplicated tool_call_id issue from LangGraph backend
- * Some tool_call_ids are incorrectly duplicated (e.g., "call_xxxcall_xxx" instead of "call_xxx")
- * This function detects and fixes such duplications
- */
-function fixDuplicatedToolCallId(toolCallId: string): string {
-  if (!toolCallId) return toolCallId;
-  
-  // Check if the ID is duplicated (e.g., "call_xxxcall_xxx")
-  // Pattern: if the string is exactly twice the length of its first half and both halves are identical
-  const len = toolCallId.length;
-  if (len % 2 === 0) {
-    const half = len / 2;
-    const firstHalf = toolCallId.substring(0, half);
-    const secondHalf = toolCallId.substring(half);
-    if (firstHalf === secondHalf) {
-      return firstHalf;
-    }
-  }
-  
-  return toolCallId;
-}
+import { parseToolResult, type ToolResponse } from "@/types/agent-message";
 
 /**
  * Check if a tool call ID matches a tool result's tool_call_id
- * Handles the case where tool_call_id might be duplicated
+ * ✅ 简化版本：后端已通过 generate_tool_call_id() 确保 ID 不重复
  */
 function toolCallIdMatches(toolCallId: string, toolResultId: string): boolean {
-  if (!toolCallId || !toolResultId) return false;
-  
-  // Direct match
-  if (toolCallId === toolResultId) return true;
-  
-  // Try fixing duplicated ID
-  const fixedResultId = fixDuplicatedToolCallId(toolResultId);
-  if (toolCallId === fixedResultId) return true;
-  
-  // Also check if the tool call ID itself might be duplicated (less common)
-  const fixedCallId = fixDuplicatedToolCallId(toolCallId);
-  if (fixedCallId === toolResultId || fixedCallId === fixedResultId) return true;
-  
-  return false;
+  return toolCallId === toolResultId;
 }
 
 // Helper function to detect and extract images from text (both base64 and URLs)
@@ -296,20 +261,23 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(({ toolCall, toolResult 
       hasArgs: Object.keys(toolArgs).length > 0
     });
 
-    let toolResult_content = null;
+    // ✅ 使用统一的解析函数，简化逻辑
+    let parsedResult: ToolResponse | null = null;
     let resultAsText = "";
 
     if (toolResult) {
       try {
-        if (typeof toolResult.content === "string") {
-          toolResult_content = JSON.parse(toolResult.content);
-          resultAsText = toolResult.content;
-        } else {
-          toolResult_content = toolResult.content;
-          resultAsText = JSON.stringify(toolResult.content, null, 2);
-        }
-      } catch {
-        toolResult_content = toolResult.content;
+        parsedResult = parseToolResult(toolResult.content);
+        resultAsText = typeof toolResult.content === "string" 
+          ? toolResult.content 
+          : JSON.stringify(toolResult.content, null, 2);
+      } catch (error) {
+        console.error("Failed to parse tool result:", error);
+        parsedResult = {
+          status: "error",
+          error: "Failed to parse tool result",
+          data: toolResult.content
+        };
         resultAsText = String(toolResult.content);
       }
     }
@@ -317,23 +285,13 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(({ toolCall, toolResult 
     // Extract images from the result text
     const extractedImages = resultAsText ? extractImagesFromText(resultAsText) : [];
 
-    // Determine tool status:
-    // 1. Handoff tools (transfer_to_xxx) are always completed immediately
-    // 2. Tools with error results are marked as error
-    // 3. Tools with results are completed
-    // 4. Otherwise pending
+    // ✅ 简化状态判断：直接使用 ToolResponse.status
     const isHandoffTool = toolName.startsWith("transfer_to_");
     
-    // Check if the result indicates an error
-    const isError = toolResult_content && (
-      (typeof toolResult_content === 'object' && ('error' in toolResult_content || 'status' in toolResult_content && toolResult_content.status === 'error')) ||
-      (typeof toolResult_content === 'string' && toolResult_content.toLowerCase().includes('error'))
-    );
-    
     let toolStatus: "pending" | "completed" | "error";
-    if (isError) {
+    if (parsedResult?.status === "error") {
       toolStatus = "error";
-    } else if (toolResult) {
+    } else if (parsedResult?.status === "success") {
       toolStatus = "completed";
     } else if (isHandoffTool) {
       toolStatus = "completed";
@@ -344,7 +302,7 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(({ toolCall, toolResult 
     return {
       name: toolName,
       args: toolArgs,
-      result: toolResult_content,
+      result: parsedResult,  // ✅ 现在是 ToolResponse 类型
       status: toolStatus,
       _resultText: resultAsText,
       images: extractedImages,
@@ -380,9 +338,9 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(({ toolCall, toolResult 
     if (status === "error" && result && typeof result === 'object') {
       return {
         error: result.error || "Unknown error",
-        errorType: result.error_type || "Error",
-        suggestion: result.suggestion || "",
-        troubleshooting: result.troubleshooting || null
+        errorType: result.metadata?.error_type || "Error",
+        suggestion: result.metadata?.suggestion || "",
+        troubleshooting: result.metadata?.troubleshooting || null
       };
     }
     return null;
@@ -518,14 +476,12 @@ export function ToolCalls({
   })));
 
   // Filter out invalid tool calls
-  const validToolCalls = toolCalls.filter(tc => tc && tc.name && tc.name.trim() !== "");
-  
-  console.log('[ToolCalls] Valid tool calls count:', validToolCalls.length);
-  console.log('[ToolCalls] Filtered out count:', toolCalls.length - validToolCalls.length);
+  // ✅ 移除空 name 过滤：后端已通过 create_ai_message_with_tools() 确保 name 非空
+  console.log('[ToolCalls] Tool calls count:', toolCalls.length);
 
   return (
     <div className="w-full">
-      {validToolCalls.map((tc, idx) => {
+      {toolCalls.map((tc, idx) => {
         // Find corresponding tool result by tool_call_id (with fix for duplicated IDs)
         const correspondingResult = toolResults?.find(
           (result) => toolCallIdMatches(tc.id || "", result.tool_call_id || "")

@@ -12,6 +12,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
 from app.core.message_utils import MCPToolWrapper
+from app.schemas.agent_message import ToolResponse
 
 
 # 初始化MCP图表服务器客户端
@@ -47,7 +48,7 @@ CHART_CLIENT, CHART_TOOLS = _initialize_chart_client()
 
 
 @tool
-def analyze_data_for_chart(data: Dict[str, Any], query_context: str) -> Dict[str, Any]:
+def analyze_data_for_chart(data: Dict[str, Any], query_context: str) -> ToolResponse:
     """
     分析数据特征，确定最适合的图表类型
     
@@ -56,24 +57,24 @@ def analyze_data_for_chart(data: Dict[str, Any], query_context: str) -> Dict[str
         query_context: 查询上下文信息
         
     Returns:
-        图表类型建议和配置信息
+        ToolResponse: 图表类型建议和配置信息
     """
     try:
         if not data or not isinstance(data, dict):
-            return {
-                "success": False,
-                "error": "无效的数据格式"
-            }
+            return ToolResponse(
+                status="error",
+                error="无效的数据格式"
+            )
         
         # 分析数据结构
         columns = data.get("columns", [])
         rows = data.get("rows", [])
         
         if not columns or not rows:
-            return {
-                "success": False,
-                "error": "数据为空或格式不正确"
-            }
+            return ToolResponse(
+                status="error",
+                error="数据为空或格式不正确"
+            )
         
         # 数据特征分析
         num_columns = len(columns)
@@ -103,23 +104,25 @@ def analyze_data_for_chart(data: Dict[str, Any], query_context: str) -> Dict[str
             num_columns, num_rows, numeric_columns, text_columns, date_columns, query_context
         )
         
-        return {
-            "success": True,
-            "data_analysis": {
-                "total_columns": num_columns,
-                "total_rows": num_rows,
-                "numeric_columns": numeric_columns,
-                "text_columns": text_columns,
-                "date_columns": date_columns
-            },
-            "chart_recommendation": chart_recommendation
-        }
+        return ToolResponse(
+            status="success",
+            data={
+                "data_analysis": {
+                    "total_columns": num_columns,
+                    "total_rows": num_rows,
+                    "numeric_columns": numeric_columns,
+                    "text_columns": text_columns,
+                    "date_columns": date_columns
+                },
+                "chart_recommendation": chart_recommendation
+            }
+        )
         
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return ToolResponse(
+            status="error",
+            error=str(e)
+        )
 
 
 def _recommend_chart_type(num_columns: int, num_rows: int, numeric_cols: List[str], 

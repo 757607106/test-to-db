@@ -64,4 +64,5 @@ from app.schemas.dashboard_insight import (
     MiningSuggestion,
     ApplyMiningRequest
 )
+from app.schemas.agent_message import ToolResponse, SQLGenerationResult
 
