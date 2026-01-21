@@ -154,17 +154,63 @@ export function Thread() {
   const rawMessages = Array.isArray(stream.messages) ? stream.messages : [];
   
   // ✅ 消息去重：streamSubgraphs: true 会导致子图消息重复
-  // 按 message.id 去重，保留最后一个版本（可能包含更完整的信息）
+  // 去重策略：
+  // 1. 按 message.id 去重，保留最新版本
+  // 2. 按 tool_call_id 去重，避免同一个工具调用被多次显示
+  // 3. 过滤掉子图的中间状态消息（没有实质内容的AI消息）
   const messages = useMemo(() => {
     const seenIds = new Set<string>();
+    const seenToolCallIds = new Set<string>();  // 跟踪已处理的工具调用ID
     const deduped: typeof rawMessages = [];
     
     // 从后向前遍历，保留最新版本的消息
     for (let i = rawMessages.length - 1; i >= 0; i--) {
       const msg = rawMessages[i];
+      
+      // 1. 按 message.id 去重
       if (msg.id && seenIds.has(msg.id)) {
         continue;
       }
+      
+      // 2. 对于 AI 消息，检查工具调用是否重复
+      if (msg.type === "ai" && (msg as any).tool_calls?.length > 0) {
+        const toolCalls = (msg as any).tool_calls;
+        const hasNewToolCall = toolCalls.some((tc: any) => {
+          if (tc.id && !seenToolCallIds.has(tc.id)) {
+            return true;
+          }
+          return false;
+        });
+        
+        // 如果所有工具调用都已被处理过，跳过此消息
+        if (!hasNewToolCall) {
+          continue;
+        }
+        
+        // 记录新的工具调用ID
+        toolCalls.forEach((tc: any) => {
+          if (tc.id) {
+            seenToolCallIds.add(tc.id);
+          }
+        });
+      }
+      
+      // 3. 过滤空的 AI 消息（没有内容且没有工具调用）
+      if (msg.type === "ai") {
+        const content = (msg as any).content;
+        const toolCalls = (msg as any).tool_calls;
+        const hasContent = content && (
+          (typeof content === "string" && content.trim().length > 0) ||
+          (Array.isArray(content) && content.length > 0)
+        );
+        const hasToolCalls = toolCalls && toolCalls.length > 0;
+        
+        // 如果 AI 消息既没有内容也没有工具调用，跳过
+        if (!hasContent && !hasToolCalls) {
+          continue;
+        }
+      }
+      
       if (msg.id) {
         seenIds.add(msg.id);
       }

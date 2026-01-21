@@ -138,11 +138,25 @@ export function AssistantMessage({
   const messages = Array.isArray(thread.messages) ? thread.messages : [];
   
   // 计算已完成的工具调用 ID
+  // 注意：后端可能返回重复的 tool_call_id（如 "call_xxx" → "call_xxxcall_xxx"）
+  // 我们需要存储原始 ID 以便进行模糊匹配
   const completedToolIds = useMemo(() => {
     const ids = new Set<string>();
     messages.forEach((m) => {
       if (m.type === "tool" && (m as any).tool_call_id) {
-        ids.add((m as any).tool_call_id);
+        const toolCallId = (m as any).tool_call_id as string;
+        ids.add(toolCallId);
+        
+        // 处理重复 ID 的情况：如果 ID 看起来像是重复的（长度是正常ID的两倍且前后相同）
+        // 提取正确的 ID 并也添加到集合中
+        if (toolCallId.length > 30 && toolCallId.length % 2 === 0) {
+          const halfLen = toolCallId.length / 2;
+          const firstHalf = toolCallId.slice(0, halfLen);
+          const secondHalf = toolCallId.slice(halfLen);
+          if (firstHalf === secondHalf) {
+            ids.add(firstHalf);
+          }
+        }
       }
     });
     return ids;

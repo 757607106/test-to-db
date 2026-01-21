@@ -16,9 +16,14 @@ function isComplexValue(value: any): boolean {
 
 /**
  * 工具名称映射 - 将英文工具名转换为友好显示
+ * 
+ * 完整映射包括：
+ * 1. Supervisor handoff 工具 (transfer_to_*)
+ * 2. 各Agent的实际执行工具
+ * 3. MCP 图表工具
  */
 const toolNameMap: Record<string, string> = {
-  // Supervisor handoff 工具
+  // ===== Supervisor handoff 工具 =====
   transfer_to_schema_agent: "模式分析",
   transfer_to_sql_generator_agent: "SQL生成",
   transfer_to_sql_executor_agent: "SQL执行",
@@ -26,20 +31,39 @@ const toolNameMap: Record<string, string> = {
   transfer_to_clarification_agent: "澄清问题",
   transfer_to_error_recovery_agent: "错误恢复",
   transfer_to_sample_retrieval_agent: "样本检索",
-  // 实际执行的工具
+  
+  // ===== Schema Agent 工具 =====
   analyze_user_query: "查询分析",
   retrieve_database_schema: "获取表结构",
   validate_schema_completeness: "验证完整性",
+  
+  // ===== SQL Generator Agent 工具 =====
   generate_sql_query: "SQL生成",
   generate_sql: "SQL生成",
+  generate_sql_with_samples: "SQL生成(样本)",
+  
+  // ===== SQL Executor Agent 工具 =====
   execute_sql_query: "SQL执行",
   execute_sql: "SQL执行",
+  
+  // ===== Sample Retrieval Agent 工具 =====
   retrieve_similar_qa_pairs: "样本检索",
   analyze_sample_relevance: "样本分析",
+  extract_sql_patterns: "SQL模式提取",
+  
+  // ===== Error Recovery Agent 工具 =====
   analyze_error_pattern: "错误分析",
   generate_recovery_strategy: "恢复策略",
+  
+  // ===== Chart Generator Agent 工具 (MCP) =====
   generate_chart: "图表生成",
   create_chart: "图表创建",
+  "mcp-chart": "图表生成",
+  chart: "图表创建",
+  
+  // ===== Clarification Agent 工具 =====
+  quick_clarification_check: "澄清检测",
+  generate_clarification_questions: "生成澄清问题",
 };
 
 /**
@@ -163,11 +187,41 @@ export function ToolCalls({
   messageId?: string;
   completedToolIds?: Set<string>;
 }) {
-  if (!toolCalls || toolCalls.length === 0) return null;
+  // ✅ 修复：去重和过滤 toolCalls 数组
+  // 问题：流式传输时，同一个工具调用会被多次添加到数组中，且后续项可能缺少 name
+  // 解决：按 ID 去重，保留有 name 的完整版本，过滤掉空的工具调用
+  const dedupedToolCalls = (() => {
+    if (!toolCalls || toolCalls.length === 0) return [];
+    
+    const seenIds = new Map<string, typeof toolCalls[number]>();
+    const noIdCalls: typeof toolCalls[number][] = [];
+    
+    for (const tc of toolCalls) {
+      // 过滤掉完全空的工具调用（没有 ID 且没有 name）
+      if (!tc.id && !tc.name) {
+        continue;
+      }
+      
+      if (tc.id) {
+        // 按 ID 去重，保留有 name 的版本
+        const existing = seenIds.get(tc.id);
+        if (!existing || (tc.name && !existing.name)) {
+          seenIds.set(tc.id, tc);
+        }
+      } else if (tc.name) {
+        // 没有 ID 但有 name 的情况（罕见）
+        noIdCalls.push(tc);
+      }
+    }
+    
+    return [...seenIds.values(), ...noIdCalls];
+  })();
+
+  if (dedupedToolCalls.length === 0) return null;
 
   return (
     <div className="space-y-1.5 my-2">
-      {toolCalls.map((tc, idx) => {
+      {dedupedToolCalls.map((tc, idx) => {
         const uniqueKey = `${messageId || 'msg'}-${idx}-${tc.id || 'unknown'}`;
         const isComplete = tc.id ? completedToolIds?.has(tc.id) : false;
         return (
