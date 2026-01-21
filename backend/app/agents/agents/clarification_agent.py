@@ -18,7 +18,7 @@
 - 结果包含 needs_clarification 和 questions 字段
 - questions 为澄清问题列表，包含选择题或文本题
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 import logging
 import json
 import uuid
@@ -98,7 +98,7 @@ QUESTION_GENERATION_PROMPT = """已废弃：问题生成已合并到 CLARIFICATI
 # 内部函数（不使用 @tool 装饰器，避免 LangGraph 的工具流式处理）
 # ============================================================================
 
-def _quick_clarification_check_impl(query: str, connection_id: int = 15) -> Dict[str, Any]:
+def _quick_clarification_check_impl(query: str, connection_id: Optional[int] = None) -> Dict[str, Any]:
     """
     快速检测用户查询是否需要澄清（内部实现，不使用 @tool 装饰器）
     
@@ -364,26 +364,62 @@ def format_clarification_text(
 
 
 def parse_user_clarification_response(
-    user_response: str, 
+    user_response: Union[str, Dict[str, Any]], 
     questions: List[Dict[str, Any]]
 ) -> List[Dict[str, str]]:
     """
     解析用户对澄清问题的回复
     
-    支持的回复格式：
-    - 单个数字：如 "1"，表示选择第一个选项
-    - 多个数字：如 "1, 2"，表示第一题选1，第二题选2
-    - 直接文本：如 "最近7天的销售额"
-    - "跳过"：跳过澄清
+    支持两种格式：
+    1. 字符串格式：用户直接输入的文本
+       - 单个数字：如 "1"，表示选择第一个选项
+       - 多个数字：如 "1, 2"，表示第一题选1，第二题选2
+       - 直接文本：如 "最近7天的销售额"
+       - "跳过"：跳过澄清
+    2. 字典格式：前端提交的结构化数据
+       {
+         "session_id": "...",
+         "answers": [
+           {"question_id": "q1", "answer": "总销售额"},
+           {"question_id": "q2", "answer": "最近30天"}
+         ]
+       }
     
     Args:
-        user_response: 用户的回复文本
+        user_response: 用户的回复（字符串或字典）
         questions: 澄清问题列表
         
     Returns:
         解析后的回答列表，每项包含 question_id 和 answer
     """
     if not user_response or not questions:
+        return []
+    
+    # ====================================================================
+    # 处理字典格式（前端提交的结构化数据）
+    # ====================================================================
+    if isinstance(user_response, dict):
+        # 检查是否包含answers字段
+        if "answers" in user_response:
+            answers = user_response["answers"]
+            if isinstance(answers, list) and answers:
+                logger.info(f"解析结构化回复: {len(answers)}个答案")
+                return answers
+        
+        # 如果是其他字典格式，尝试将整个字典作为第一个问题的答案
+        if questions:
+            logger.warning(f"未知字典格式，将整个字典作为答案: {user_response}")
+            return [{
+                "question_id": questions[0]["id"],
+                "answer": str(user_response)
+            }]
+        return []
+    
+    # ====================================================================
+    # 处理字符串格式
+    # ====================================================================
+    if not isinstance(user_response, str):
+        logger.warning(f"不支持的回复类型: {type(user_response)}")
         return []
     
     response_text = user_response.strip()
@@ -602,7 +638,7 @@ def _contains_ambiguous_words(query: str) -> bool:
 # ============================================================================
 
 @tool
-def quick_clarification_check(query: str, connection_id: int = 15) -> Dict[str, Any]:
+def quick_clarification_check(query: str, connection_id: Optional[int] = None) -> Dict[str, Any]:
     """快速检测用户查询是否需要澄清（工具版本）"""
     return _quick_clarification_check_impl(query, connection_id)
 

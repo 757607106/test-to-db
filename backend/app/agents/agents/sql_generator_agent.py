@@ -6,6 +6,8 @@ SQL生成代理
 - 2026-01-19: 集成样本检索功能，自动从 QA 库中检索相似样本
   - 避免了独立 sample_retrieval_agent 的 ReAct 调度延迟（原 2+ 分钟）
   - 先快速检查是否有样本，没有则跳过检索步骤
+- 2026-01-21: 支持快速模式 (Fast Mode) - 借鉴官方简洁性思想
+  - 当 skip_sample_retrieval=True 时，跳过样本检索，直接生成 SQL
 """
 from typing import Dict, Any, List
 import logging
@@ -137,13 +139,18 @@ def generate_sql_query(
     """
     try:
         # 自动检索样本：如果提供了 connection_id 且没有手动提供样本
-        if connection_id and not sample_qa_pairs:
+        # ✅ 快速模式支持：通过参数控制是否跳过样本检索
+        skip_sample = value_mappings.get("_skip_sample_retrieval", False) if value_mappings else False
+        
+        if connection_id and not sample_qa_pairs and not skip_sample:
             logger.info(f"Auto-fetching QA samples for connection_id={connection_id}")
             sample_qa_pairs = _fetch_qa_samples_sync(user_query, schema_info, connection_id)
             if sample_qa_pairs:
                 logger.info(f"Found {len(sample_qa_pairs)} relevant QA samples")
             else:
                 logger.info("No relevant QA samples found, proceeding without samples")
+        elif skip_sample:
+            logger.info("快速模式: 跳过样本检索")
         
         # 构建详细的上下文信息
         context = f"""

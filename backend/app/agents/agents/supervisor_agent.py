@@ -6,6 +6,7 @@
 2. 根据任务阶段智能路由到合适的Agent
 3. 管理Agent间的消息传递和状态更新
 4. 处理错误和异常情况
+5. 支持快速模式 (Fast Mode) - 借鉴官方简洁性思想
 
 架构模式:
 - 使用LangGraph的create_supervisor创建协调器
@@ -21,6 +22,7 @@ pip install langgraph-supervisor
 
 历史变更:
 - 2026-01-16: 移除SQL Validator Agent以简化流程
+- 2026-01-21: 添加快速模式 (Fast Mode) 支持
 - 备份位置: backend/backups/agents_backup_20260116_175357
 """
 
@@ -123,7 +125,9 @@ class SupervisorAgent:
 
     def _get_supervisor_prompt(self) -> str:
         """
-        获取监督代理提示 简化后的流程不包含SQL验证步骤
+        获取监督代理提示
+        
+        支持快速模式 (Fast Mode) - 借鉴官方 LangGraph SQL Agent 的简洁性思想
         """
 
         system_msg = f"""你是一个智能的SQL Agent系统监督者。
@@ -145,7 +149,14 @@ class SupervisorAgent:
 **标准流程:**
 用户查询 → schema_agent → sql_generator_agent → sql_executor_agent → [可选] chart_generator_agent → 完成
 
-**图表生成条件:**
+**快速模式 (Fast Mode) - 借鉴官方简洁性思想:**
+当状态中 skip_chart_generation=True 时：
+- 跳过 chart_generator_agent，直接完成
+- SQL执行成功后直接返回结果
+当状态中 skip_sample_retrieval=True 时：
+- sql_generator_agent 会跳过样本检索，直接生成
+
+**图表生成条件 (仅当 skip_chart_generation=False 时):**
 - 用户查询包含可视化意图（如"图表"、"趋势"、"分布"、"比较"等关键词）
 - 查询结果包含数值数据且适合可视化
 - 数据量适中（2-1000行）
@@ -154,8 +165,8 @@ class SupervisorAgent:
 任何阶段出错 → error_recovery_agent → 尝试修复一次 → 如果仍失败则返回错误信息
 
 请根据当前状态和任务需求做出最佳的代理选择决策。特别注意：
-- 当用户查询包含可视化意图时，在SQL执行完成后应考虑调用chart_generator_agent
-- 当查询结果适合可视化时，主动建议生成图表
+- 检查 skip_chart_generation 和 skip_sample_retrieval 状态，根据快速模式调整流程
+- 当用户查询包含可视化意图且未跳过图表时，在SQL执行完成后应考虑调用chart_generator_agent
 - SQL生成后直接执行，不需要验证步骤"""
 
         return system_msg
@@ -217,6 +228,16 @@ class SupervisorAgent:
                 )
         
         try:
+            # ✅ 检查快速模式状态
+            fast_mode = state.get("fast_mode", False)
+            skip_sample_retrieval = state.get("skip_sample_retrieval", False)
+            skip_chart_generation = state.get("skip_chart_generation", False)
+            
+            if fast_mode:
+                logger.info(f"=== 快速模式已启用 ===")
+                logger.info(f"  跳过样本检索: {skip_sample_retrieval}")
+                logger.info(f"  跳过图表生成: {skip_chart_generation}")
+            
             # ✅ 执行supervisor，传递config以启用状态持久化
             if config:
                 logger.info(f"使用 config 执行 supervisor: {config.get('configurable', {})}")

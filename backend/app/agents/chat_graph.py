@@ -8,26 +8,27 @@
 3. 支持动态加载自定义分析专家Agent
 4. 提供便捷的查询处理方法
 5. 支持澄清模式（interrupt机制）
+6. 支持快速模式 (Fast Mode) - 借鉴官方简洁性思想
 
 架构说明:
 - 使用LangGraph的StateGraph管理整体流程
-- 包含三个核心节点: load_custom_agent、clarification 和 supervisor
+- 包含多个核心节点: load_custom_agent、fast_mode_detect、clarification、cache_check、supervisor
 - clarification节点使用interrupt()实现人机交互
 - supervisor节点委托给SupervisorAgent处理具体的Agent协调
 
-图结构:
-    START → load_custom_agent → clarification → supervisor → END
+图结构 (2026-01-21 优化):
+    START → load_custom_agent → fast_mode_detect → clarification → cache_check → [supervisor | END]
     
-    其中clarification节点会:
-    - 检测用户查询是否模糊
-    - 如果模糊，使用interrupt()暂停等待用户回复
-    - 用户回复后，整合信息继续执行
+    快速模式优化:
+    - 简单查询: 跳过样本检索、跳过图表生成
+    - 复杂查询: 完整流程，包含所有功能
+    - SQL Query Checker: 执行前检查，减少错误
 """
 from typing import Dict, Any, List, Optional
 import logging
 import asyncio
 
-from app.core.state import SQLMessageState
+from app.core.state import SQLMessageState, detect_fast_mode, apply_fast_mode_to_state
 from app.agents.agents.supervisor_agent import create_intelligent_sql_supervisor
 from app.agents.nodes.clarification_node import clarification_node
 from app.agents.nodes.cache_check_node import cache_check_node
@@ -52,7 +53,7 @@ def extract_connection_id_from_messages(messages) -> int:
         - 如果未找到，返回默认值15
         - 用于确定查询应该在哪个数据库连接上执行
     """
-    connection_id = 15  # 默认值
+    connection_id = None  # 不硬编码默认值，由用户选择的数据库动态传入
 
     # 反向遍历消息列表，查找最新的人类消息
     for message in reversed(messages if messages else []):
@@ -103,13 +104,14 @@ class IntelligentSQLGraph:
     5. 支持澄清模式（对模糊查询进行澄清）
     
     架构:
-    用户查询 → load_custom_agent节点 → clarification节点 → supervisor节点 → 结束
+    用户查询 → load_custom_agent节点 → fast_mode_detect节点 → clarification节点 → cache_check节点 → supervisor节点 → 结束
     
     特性:
     - 支持自定义分析专家的动态加载
     - 使用LangGraph管理状态流转
     - 支持澄清模式（使用interrupt机制）
     - 提供同步和异步接口
+    - 支持快速模式 (Fast Mode) - 借鉴官方简洁性思想
     """
 
     def __init__(self, active_agent_profiles: List[AgentProfile] = None, custom_analyst = None):
@@ -140,11 +142,12 @@ class IntelligentSQLGraph:
         Returns:
             CompiledGraph: 编译后的状态图
             
-        图结构:
-            START → load_custom_agent → clarification → cache_check → [supervisor | END]
+        图结构 (2026-01-21 优化):
+            START → load_custom_agent → fast_mode_detect → clarification → cache_check → [supervisor | END]
             
         说明:
             - load_custom_agent: 检查并加载自定义Agent（如果需要）
+            - fast_mode_detect: 检测是否启用快速模式（借鉴官方简洁性思想）
             - clarification: 检测查询模糊性，如需澄清则生成AI消息并结束
             - cache_check: 检查查询缓存，命中则跳过supervisor直接返回
             - supervisor: 执行主要的查询处理流程（仅当缓存未命中时）
@@ -164,6 +167,10 @@ class IntelligentSQLGraph:
         # 职责: 从消息中提取agent_id，如果存在则加载自定义Agent
         graph.add_node("load_custom_agent", self._load_custom_agent_node)
         
+        # ✅ 添加快速模式检测节点 (2026-01-21 新增)
+        # 职责: 检测查询复杂度，决定是否启用快速模式
+        graph.add_node("fast_mode_detect", self._fast_mode_detect_node)
+        
         # ✅ 添加澄清节点
         # 职责: 检测查询模糊性，如需澄清则生成AI消息
         # 使用多轮对话机制，用户在聊天框回复
@@ -180,9 +187,11 @@ class IntelligentSQLGraph:
         # 设置入口点 - 所有查询首先进入load_custom_agent节点
         graph.set_entry_point("load_custom_agent")
         
-        # 定义边: load_custom_agent → clarification
-        # 加载自定义Agent后，进入澄清检测
-        graph.add_edge("load_custom_agent", "clarification")
+        # 定义边: load_custom_agent → fast_mode_detect
+        graph.add_edge("load_custom_agent", "fast_mode_detect")
+        
+        # 定义边: fast_mode_detect → clarification
+        graph.add_edge("fast_mode_detect", "clarification")
         
         # ✅ 简化边: clarification → cache_check
         # 使用interrupt()后，节点会自动暂停，不需要手动判断pending状态
@@ -315,6 +324,57 @@ class IntelligentSQLGraph:
                 logger.info("回退到默认分析专家")
         
         # 返回状态（通常不修改）
+        return state
+    
+    async def _fast_mode_detect_node(self, state: SQLMessageState) -> SQLMessageState:
+        """
+        快速模式检测节点 - LangGraph节点函数
+        
+        借鉴官方 LangGraph SQL Agent 的简洁性思想：
+        - 简单查询使用快速模式，跳过样本检索和图表生成
+        - 复杂查询使用完整模式，包含所有功能
+        
+        Args:
+            state: 当前的SQL消息状态
+            
+        Returns:
+            SQLMessageState: 更新后的状态，包含快速模式相关字段
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # 提取用户查询
+        messages = state.get("messages", [])
+        user_query = None
+        
+        for msg in messages:
+            if hasattr(msg, 'type') and msg.type == 'human':
+                user_query = msg.content
+                if isinstance(user_query, list):
+                    user_query = user_query[0].get("text", "") if user_query else ""
+                break
+        
+        if not user_query:
+            logger.info("无法提取用户查询，使用默认完整模式")
+            return state
+        
+        # 检测快速模式
+        detection = detect_fast_mode(user_query)
+        
+        # 应用到状态
+        state["fast_mode"] = detection["fast_mode"]
+        state["skip_sample_retrieval"] = detection["skip_sample_retrieval"]
+        state["skip_chart_generation"] = detection["skip_chart_generation"]
+        state["enable_query_checker"] = detection["enable_query_checker"]
+        
+        # 记录日志
+        mode_str = "快速模式" if detection["fast_mode"] else "完整模式"
+        logger.info(f"=== 模式检测: {mode_str} ===")
+        logger.info(f"  原因: {detection['reason']}")
+        logger.info(f"  跳过样本检索: {detection['skip_sample_retrieval']}")
+        logger.info(f"  跳过图表生成: {detection['skip_chart_generation']}")
+        logger.info(f"  启用Query Checker: {detection['enable_query_checker']}")
+        
         return state
     
     async def _supervisor_node(self, state: SQLMessageState) -> SQLMessageState:
@@ -450,7 +510,7 @@ class IntelligentSQLGraph:
     async def process_query(
         self, 
         query: str, 
-        connection_id: int = 15,
+        connection_id: Optional[int] = None,
         thread_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
@@ -583,7 +643,7 @@ def create_intelligent_sql_graph(active_agent_profiles: List[AgentProfile] = Non
 
 async def process_sql_query(
     query: str, 
-    connection_id: int = 15, 
+    connection_id: Optional[int] = None, 
     active_agent_profiles: List[AgentProfile] = None
 ) -> Dict[str, Any]:
     """

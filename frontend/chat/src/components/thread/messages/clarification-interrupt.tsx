@@ -19,13 +19,15 @@ export interface ClarificationQuestion {
 }
 
 export interface ClarificationInterruptData {
-  type: "clarification";
+  type: "clarification" | "clarification_request";  // 支持两种类型格式
   questions: ClarificationQuestion[];
   reason?: string;
   message?: string;
   round?: number;
   max_rounds?: number;
   session_id?: string;  // 用于验证 resume 数据是否匹配当前查询
+  original_query?: string;  // 原始查询
+  related_ambiguity?: string;  // 相关模糊性
 }
 
 interface ClarificationInterruptViewProps {
@@ -200,5 +202,9 @@ export function isClarificationInterrupt(
 ): interrupt is ClarificationInterruptData {
   if (!interrupt || typeof interrupt !== "object") return false;
   const obj = interrupt as Record<string, unknown>;
-  return obj.type === "clarification" && Array.isArray(obj.questions);
+  // 支持两种类型格式：clarification 和 clarification_request
+  return (
+    (obj.type === "clarification" || obj.type === "clarification_request") && 
+    Array.isArray(obj.questions)
+  );
 }

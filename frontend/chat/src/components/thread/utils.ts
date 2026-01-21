@@ -37,6 +37,20 @@ function filterToolResultJson(text: string): string {
       
       // 检查是否是工具返回的特征字段（对象格式）
       if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        // 检查是否包含analysis字段（这是analyze_user_query工具的返回格式）
+        if (parsed.analysis && typeof parsed.analysis === "object") {
+          const analysis = parsed.analysis;
+          // 如果analysis对象包含entities、relationships、query_intent等字段，则过滤掉
+          if (
+            (analysis.entities !== undefined && Array.isArray(analysis.entities)) ||
+            (analysis.relationships !== undefined && Array.isArray(analysis.relationships)) ||
+            (analysis.query_intent !== undefined && typeof analysis.query_intent === "string")
+          ) {
+            return "";
+          }
+        }
+        
+        // 其他工具返回的特征字段
         if (
           parsed.needs_clarification !== undefined ||
           parsed.success !== undefined ||
@@ -82,6 +96,8 @@ function filterToolResultJson(text: string): string {
     /\{\s*["']success["']\s*:\s*(?:true|false)[^}]*["']questions["']\s*:\s*\[[^\]]*\][^}]*\}/gi,
     // 匹配以 { "needs_clarification": 开头的完整JSON
     /\{\s*"needs_clarification"\s*:[\s\S]*?"questions"\s*:\s*\[[\s\S]*?\]\s*[,}]/g,
+    // 匹配analyze_user_query工具的返回格式（包含analysis字段）- 使用宽松匹配，包括不完整的JSON
+    /\{[^}]*["']analysis["'][^}]*["']entities["'][\s\S]*/gi,
   ];
   
   let result = text;

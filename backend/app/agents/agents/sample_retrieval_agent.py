@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 def retrieve_similar_qa_pairs(
     user_query: str,
     schema_context: Dict[str, Any],
-    connection_id: int = 15,
+    connection_id: Optional[int] = None,
     top_k: int = 5,
     timeout: int = 15  # 超时设置（秒）
 ) -> Dict[str, Any]:

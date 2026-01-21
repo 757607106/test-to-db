@@ -278,9 +278,23 @@ interface ToolCallBoxProps {
 export const ToolCallBox = React.memo<ToolCallBoxProps>(({ toolCall, toolResult }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
+  // 添加调试日志
+  console.log('[ToolCallBox] Rendering with:', {
+    toolCall,
+    toolCallName: toolCall?.name,
+    toolCallArgs: toolCall?.args,
+    hasToolResult: !!toolResult
+  });
+
   const { name, args, result, status, _resultText, images } = useMemo(() => {
     const toolName = toolCall?.name?.trim() || "Unknown Tool";
     const toolArgs = toolCall?.args || {};
+    
+    console.log('[ToolCallBox] Computed values:', {
+      toolName,
+      toolArgs,
+      hasArgs: Object.keys(toolArgs).length > 0
+    });
 
     let toolResult_content = null;
     let resultAsText = "";
@@ -492,8 +506,22 @@ export function ToolCalls({
 }) {
   if (!toolCalls || toolCalls.length === 0) return null;
 
+  // 添加调试日志
+  console.log('[ToolCalls] Raw tool calls:', JSON.stringify(toolCalls, null, 2));
+  console.log('[ToolCalls] Tool calls details:', toolCalls.map(tc => ({
+    id: tc?.id,
+    name: tc?.name,
+    nameType: typeof tc?.name,
+    hasName: !!tc?.name,
+    hasTrimmedName: !!(tc?.name && tc.name.trim()),
+    fullObject: tc
+  })));
+
   // Filter out invalid tool calls
   const validToolCalls = toolCalls.filter(tc => tc && tc.name && tc.name.trim() !== "");
+  
+  console.log('[ToolCalls] Valid tool calls count:', validToolCalls.length);
+  console.log('[ToolCalls] Filtered out count:', toolCalls.length - validToolCalls.length);
 
   return (
     <div className="w-full">

@@ -147,6 +147,35 @@ class Settings(BaseSettings):
     MAX_WORKFLOW_RETRIES: int = int(os.getenv("MAX_WORKFLOW_RETRIES", "3"))
     ENABLE_PARALLEL_EXECUTION: bool = os.getenv("ENABLE_PARALLEL_EXECUTION", "false").lower() == "true"
 
+    # ==========================================
+    # 快速模式配置 (Fast Mode)
+    # ==========================================
+    # 借鉴官方 LangGraph SQL Agent 的简洁性思想
+    # 对于简单查询，跳过样本检索、图表生成等步骤，提升响应速度
+    # ==========================================
+    
+    # 是否启用快速模式自动检测
+    FAST_MODE_AUTO_DETECT: bool = os.getenv("FAST_MODE_AUTO_DETECT", "true").lower() == "true"
+    
+    # 快速模式查询长度阈值（字符数，短于此值可能启用快速模式）
+    FAST_MODE_QUERY_LENGTH_THRESHOLD: int = int(os.getenv("FAST_MODE_QUERY_LENGTH_THRESHOLD", "50"))
+    
+    # 快速模式关键词（包含这些词会强制使用完整模式）
+    # 如：图表、趋势、分布、比较、可视化、分析 等
+    FAST_MODE_DISABLE_KEYWORDS: str = os.getenv(
+        "FAST_MODE_DISABLE_KEYWORDS", 
+        "图表,趋势,分布,比较,可视化,分析,chart,trend,distribution,compare,visualize,analyze"
+    )
+    
+    # 是否在快速模式中启用 SQL Query Checker
+    FAST_MODE_ENABLE_QUERY_CHECKER: bool = os.getenv("FAST_MODE_ENABLE_QUERY_CHECKER", "true").lower() == "true"
+    
+    # 是否在快速模式中跳过样本检索
+    FAST_MODE_SKIP_SAMPLE_RETRIEVAL: bool = os.getenv("FAST_MODE_SKIP_SAMPLE_RETRIEVAL", "true").lower() == "true"
+    
+    # 是否在快速模式中跳过图表生成
+    FAST_MODE_SKIP_CHART_GENERATION: bool = os.getenv("FAST_MODE_SKIP_CHART_GENERATION", "true").lower() == "true"
+
     class Config:
         case_sensitive = True
         env_file = ".env"
