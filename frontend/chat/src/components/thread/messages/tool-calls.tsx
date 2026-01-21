@@ -1,497 +1,172 @@
-"use client";
-
-import React, { useState, useMemo, useCallback } from "react";
-import {
-  ChevronDown,
-  ChevronRight,
-  Terminal,
-  CheckCircle,
-  AlertCircle,
-  Loader,
-  Eye,
-  X,
-} from "lucide-react";
+/**
+ * 工具调用组件
+ * 
+ * 基于官方 agent-chat-ui 实现，纯文字风格，紧凑排版
+ * @see https://github.com/langchain-ai/agent-chat-ui
+ */
 import { AIMessage, ToolMessage } from "@langchain/langgraph-sdk";
-import { parseToolResult, type ToolResponse } from "@/types/agent-message";
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { ChevronDown, Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 /**
- * Check if a tool call ID matches a tool result's tool_call_id
- * ✅ 简化版本：后端已通过 generate_tool_call_id() 确保 ID 不重复
+ * 检查是否为复杂值（数组或对象）
  */
-function toolCallIdMatches(toolCallId: string, toolResultId: string): boolean {
-  return toolCallId === toolResultId;
+function isComplexValue(value: any): boolean {
+  return Array.isArray(value) || (typeof value === "object" && value !== null);
 }
 
-// Helper function to detect and extract images from text (both base64 and URLs)
-function extractImagesFromText(text: string): Array<{ data: string; type: string; original: string; isUrl: boolean }> {
-  const images: Array<{ data: string; type: string; original: string; isUrl: boolean }> = [];
+/**
+ * 工具名称映射 - 将英文工具名转换为友好显示
+ */
+const toolNameMap: Record<string, string> = {
+  transfer_to_schema_agent: "模式分析",
+  transfer_to_sql_generator_agent: "SQL生成",
+  transfer_to_sql_executor_agent: "SQL执行",
+  transfer_to_chart_generator_agent: "图表生成",
+  transfer_to_clarification_agent: "澄清问题",
+  transfer_to_error_recovery_agent: "错误恢复",
+  analyze_user_query: "查询分析",
+  generate_sql: "SQL生成",
+  execute_sql: "SQL执行",
+  generate_chart: "图表生成",
+};
 
-  // Pattern 1: Standard data URL format
-  const dataUrlPattern = /data:image\/(png|jpeg|jpg|gif|webp|bmp);base64,([A-Za-z0-9+/=]+)/gi;
-  let match;
-  while ((match = dataUrlPattern.exec(text)) !== null) {
-    images.push({
-      data: match[0],
-      type: match[1],
-      original: match[0],
-      isUrl: false
-    });
-  }
-
-  // Pattern 2: HTTP/HTTPS image URLs
-  const imageUrlPattern = /https?:\/\/[^\s<>"']+\.(?:png|jpe?g|gif|webp|bmp|svg)(?:\?[^\s<>"']*)?(?:#[^\s<>"']*)?/gi;
-  while ((match = imageUrlPattern.exec(text)) !== null) {
-    const url = match[0];
-    const extension = url.match(/\.([^.?#]+)(?:\?|#|$)/)?.[1]?.toLowerCase() || 'unknown';
-    images.push({
-      data: url,
-      type: extension,
-      original: url,
-      isUrl: true
-    });
-  }
-
-  // Pattern 3: URLs that might be images (common image hosting patterns)
-  const possibleImageUrlPatterns = [
-    // Alipay CDN pattern (like the example provided)
-    /https?:\/\/[^\s<>"']*\.alipayobjects\.com\/[^\s<>"']+/gi,
-    // Common image hosting patterns
-    /https?:\/\/[^\s<>"']*(?:imgur|cloudinary|amazonaws|googleusercontent|github|githubusercontent)\.com\/[^\s<>"']+/gi,
-    // Generic patterns that often contain images
-    /https?:\/\/[^\s<>"']*\/[^\s<>"']*(?:image|img|photo|picture|screenshot|pic)[^\s<>"']*/gi,
-  ];
-
-  possibleImageUrlPatterns.forEach(pattern => {
-    let urlMatch;
-    while ((urlMatch = pattern.exec(text)) !== null) {
-      const url = urlMatch[0];
-      // Avoid duplicates
-      if (!images.some(img => img.data === url)) {
-        images.push({
-          data: url,
-          type: 'unknown',
-          original: url,
-          isUrl: true
-        });
-      }
-    }
-  });
-
-  // Pattern 4: JSON field with base64 data (common patterns)
-  const jsonPatterns = [
-    /"base64Data":\s*"([A-Za-z0-9+/=]{100,})"/gi,
-    /"base64":\s*"([A-Za-z0-9+/=]{100,})"/gi,
-    /"image":\s*"([A-Za-z0-9+/=]{100,})"/gi,
-    /"screenshot":\s*"([A-Za-z0-9+/=]{100,})"/gi,
-    /"imageData":\s*"([A-Za-z0-9+/=]{100,})"/gi
-  ];
-
-  jsonPatterns.forEach(pattern => {
-    let jsonMatch;
-    while ((jsonMatch = pattern.exec(text)) !== null) {
-      const base64Data = jsonMatch[1];
-      // Validate base64 format and reasonable length
-      if (base64Data.length > 100 && base64Data.length % 4 === 0) {
-        images.push({
-          data: `data:image/png;base64,${base64Data}`,
-          type: 'png',
-          original: jsonMatch[0],
-          isUrl: false
-        });
-      }
-    }
-  });
-
-  // Pattern 5: Look for very long base64 strings that might be images
-  const longBase64Pattern = /([A-Za-z0-9+/=]{1000,})/g;
-  while ((match = longBase64Pattern.exec(text)) !== null) {
-    const base64Data = match[1];
-    // Additional validation: check if it starts with common image signatures
-    if (base64Data.length % 4 === 0 &&
-        (base64Data.startsWith('iVBORw0KGgo') || // PNG
-         base64Data.startsWith('/9j/') || // JPEG
-         base64Data.startsWith('R0lGOD') || // GIF
-         base64Data.startsWith('UklGR'))) { // WebP
-      images.push({
-        data: `data:image/png;base64,${base64Data}`,
-        type: 'png',
-        original: match[0],
-        isUrl: false
-      });
-    }
-  }
-
-  // Remove duplicates based on data content
-  const uniqueImages = images.filter((img, index, self) =>
-    index === self.findIndex(i => i.data === img.data)
-  );
-
-  return uniqueImages;
-}
-
-// Image Preview Modal Component
-function ImagePreviewModal({
-  src,
-  isOpen,
-  onClose
-}: {
-  src: string;
-  isOpen: boolean;
-  onClose: () => void;
+/**
+ * 单个工具调用卡片组件 - 紧凑纯文字风格
+ */
+function ToolCallCard({ 
+  toolCall, 
+  status = "running",
+  index 
+}: { 
+  toolCall: NonNullable<AIMessage["tool_calls"]>[number];
+  status?: "running" | "complete" | "error";
+  index: number;
 }) {
-  if (!isOpen) return null;
-
-  return (
-    <div
-      className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50"
-      onClick={onClose}
-    >
-      <div className="relative max-w-[90vw] max-h-[90vh]">
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 text-white hover:text-gray-300 z-10"
-        >
-          <X size={24} />
-        </button>
-        <img
-          src={src}
-          alt="Preview"
-          className="max-w-full max-h-full object-contain"
-          onClick={(e) => e.stopPropagation()}
-        />
-      </div>
-    </div>
-  );
-}
-
-// Image Display Component
-function ImagePreview({ images }: { images: Array<{ data: string; type: string; original: string; isUrl: boolean }> }) {
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [loadedImages, setLoadedImages] = useState<Set<number>>(new Set());
-  const [failedImages, setFailedImages] = useState<Set<number>>(new Set());
-
-  if (images.length === 0) return null;
-
-  const handleImageLoad = (index: number) => {
-    setLoadedImages(prev => new Set(prev).add(index));
-  };
-
-  const handleImageError = (index: number) => {
-    setFailedImages(prev => new Set(prev).add(index));
-  };
-
-  const validImages = images.filter((_, index) => !failedImages.has(index));
-
-  if (validImages.length === 0) return null;
-
-  return (
-    <>
-      <div className="mt-3 space-y-3">
-        {images.map((image, index) => {
-          if (failedImages.has(index)) return null;
-
-          return (
-            <div
-              key={index}
-              className="relative group cursor-pointer border border-gray-200 rounded-lg overflow-hidden hover:border-gray-300 hover:shadow-md transition-all bg-white"
-              onClick={() => setSelectedImage(image.data)}
-            >
-              {!loadedImages.has(index) && (
-                <div className="absolute inset-0 flex items-center justify-center bg-gray-50">
-                  <div className="w-6 h-6 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin"></div>
-                </div>
-              )}
-              <img
-                src={image.data}
-                alt={image.isUrl ? `Image from URL ${index + 1}` : `Generated image ${index + 1}`}
-                className="w-full h-auto max-w-full object-contain"
-                onLoad={() => handleImageLoad(index)}
-                onError={() => handleImageError(index)}
-                style={{ display: loadedImages.has(index) ? 'block' : 'none' }}
-                crossOrigin={image.isUrl ? "anonymous" : undefined}
-              />
-              {loadedImages.has(index) && (
-                <div className="absolute top-2 right-2 bg-black bg-opacity-50 rounded-full p-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Eye className="text-white" size={16} />
-                </div>
-              )}
-              {/* Show URL indicator for URL-based images */}
-              {image.isUrl && loadedImages.has(index) && (
-                <div className="absolute bottom-2 left-2 bg-blue-500 bg-opacity-75 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity">
-                  URL Image
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      <ImagePreviewModal
-        src={selectedImage || ""}
-        isOpen={!!selectedImage}
-        onClose={() => setSelectedImage(null)}
-      />
-    </>
-  );
-}
-
-interface ToolCallBoxProps {
-  toolCall: NonNullable<AIMessage["tool_calls"]>[0];
-  toolResult?: ToolMessage;
-}
-
-export const ToolCallBox = React.memo<ToolCallBoxProps>(({ toolCall, toolResult }) => {
   const [isExpanded, setIsExpanded] = useState(false);
-
-  // 添加调试日志
-  console.log('[ToolCallBox] Rendering with:', {
-    toolCall,
-    toolCallName: toolCall?.name,
-    toolCallArgs: toolCall?.args,
-    hasToolResult: !!toolResult
-  });
-
-  const { name, args, result, status, _resultText, images } = useMemo(() => {
-    const toolName = toolCall?.name?.trim() || "Unknown Tool";
-    const toolArgs = toolCall?.args || {};
-    
-    console.log('[ToolCallBox] Computed values:', {
-      toolName,
-      toolArgs,
-      hasArgs: Object.keys(toolArgs).length > 0
-    });
-
-    // ✅ 使用统一的解析函数，简化逻辑
-    let parsedResult: ToolResponse | null = null;
-    let resultAsText = "";
-
-    if (toolResult) {
-      try {
-        parsedResult = parseToolResult(toolResult.content);
-        resultAsText = typeof toolResult.content === "string" 
-          ? toolResult.content 
-          : JSON.stringify(toolResult.content, null, 2);
-      } catch (error) {
-        console.error("Failed to parse tool result:", error);
-        parsedResult = {
-          status: "error",
-          error: "Failed to parse tool result",
-          data: toolResult.content
-        };
-        resultAsText = String(toolResult.content);
-      }
-    }
-
-    // Extract images from the result text
-    const extractedImages = resultAsText ? extractImagesFromText(resultAsText) : [];
-
-    // ✅ 简化状态判断：直接使用 ToolResponse.status
-    const isHandoffTool = toolName.startsWith("transfer_to_");
-    
-    let toolStatus: "pending" | "completed" | "error";
-    if (parsedResult?.status === "error") {
-      toolStatus = "error";
-    } else if (parsedResult?.status === "success") {
-      toolStatus = "completed";
-    } else if (isHandoffTool) {
-      toolStatus = "completed";
-    } else {
-      toolStatus = "pending";
-    }
-
-    return {
-      name: toolName,
-      args: toolArgs,
-      result: parsedResult,  // ✅ 现在是 ToolResponse 类型
-      status: toolStatus,
-      _resultText: resultAsText,
-      images: extractedImages,
-    };
-  }, [toolCall, toolResult]);
-
-  const statusIcon = useMemo(() => {
-    const iconProps = { className: "w-3.5 h-3.5" };
-    
-    switch (status) {
-      case "completed":
-        return <CheckCircle {...iconProps} className="w-3.5 h-3.5 text-green-500" />;
-      case "error":
-        return <AlertCircle {...iconProps} className="w-3.5 h-3.5 text-red-500" />;
-      case "pending":
-        return <Loader {...iconProps} className="w-3.5 h-3.5 text-blue-500 animate-spin" />;
-      default:
-        return <Terminal {...iconProps} className="w-3.5 h-3.5 text-gray-400" />;
-    }
-  }, [status]);
-
-  const toggleExpanded = useCallback(() => {
-    setIsExpanded((prev) => !prev);
-  }, []);
-
-  const hasContent = result || Object.keys(args).length > 0 || images.length > 0;
+  const args = (toolCall.args || {}) as Record<string, any>;
+  const hasArgs = Object.keys(args).length > 0;
   
-  // 检测是否为SQL样本检索工具
-  const isRetrievalTool = name === "retrieve_similar_qa_pairs";
-  
-  // 提取错误信息（如果有）
-  const errorInfo = useMemo(() => {
-    if (status === "error" && result && typeof result === 'object') {
-      return {
-        error: result.error || "Unknown error",
-        errorType: result.metadata?.error_type || "Error",
-        suggestion: result.metadata?.suggestion || "",
-        troubleshooting: result.metadata?.troubleshooting || null
-      };
+  // 获取工具显示名称
+  const toolLabel = toolNameMap[toolCall.name || ""] || toolCall.name || "工具调用";
+
+  // 状态文字和样式
+  const statusConfig = {
+    running: { text: "执行中...", color: "text-blue-600", bg: "bg-blue-50 border-blue-100" },
+    complete: { text: "已完成", color: "text-green-600", bg: "bg-green-50 border-green-100" },
+    error: { text: "执行失败", color: "text-red-600", bg: "bg-red-50 border-red-100" },
+  }[status];
+
+  // 获取简略预览文字
+  const getPreview = () => {
+    if (!hasArgs) return "";
+    const firstValue = Object.values(args)[0];
+    if (typeof firstValue === "string") {
+      return firstValue.length > 40 ? firstValue.slice(0, 40) + "..." : firstValue;
     }
-    return null;
-  }, [status, result]);
+    return "";
+  };
 
   return (
-    <div className="w-full mb-2">
-      {/* Tool Call Box */}
-      <div className="border border-gray-200 rounded-md overflow-hidden bg-white">
-        <button
-          onClick={toggleExpanded}
-          className="w-full p-3 flex items-center gap-2 text-left transition-colors hover:bg-gray-50 cursor-pointer disabled:cursor-default"
-          disabled={!hasContent}
-        >
-          {hasContent && isExpanded ? (
-            <ChevronDown size={14} className="flex-shrink-0 text-gray-600" />
-          ) : (
-            <ChevronRight size={14} className="flex-shrink-0 text-gray-600" />
-          )}
-          {statusIcon}
-          <div className="flex-1">
-            <span className="text-sm font-medium text-gray-900">{name}</span>
-            
-            {/* 显示检索工具的pending状态提示 */}
-            {isRetrievalTool && status === "pending" && (
-              <div className="mt-1 text-xs text-yellow-600">
-                正在检索SQL样本，可能需要10-15秒...
-                <div className="text-xs text-gray-500 mt-0.5">
-                  首次调用需要初始化Milvus和Neo4j服务
-                </div>
-              </div>
-            )}
-            
-            {/* 显示错误概要（在折叠状态下） */}
-            {status === "error" && errorInfo && !isExpanded && (
-              <div className="mt-1 text-xs text-red-600">
-                {errorInfo.errorType}: {errorInfo.error.substring(0, 80)}
-                {errorInfo.error.length > 80 && "..."}
-              </div>
-            )}
-          </div>
-        </button>
-
-        {isExpanded && hasContent && (
-          <div className="px-4 pb-4 bg-gray-50">
-            {/* 显示友好的错误信息（对于检索工具） */}
-            {status === "error" && errorInfo && isRetrievalTool && (
-              <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-md">
-                <h4 className="text-sm font-semibold text-red-800 mb-2">
-                  检索服务遇到问题
-                </h4>
-                <div className="text-sm text-red-700 mb-3">
-                  <strong>{errorInfo.errorType}:</strong> {errorInfo.error}
-                </div>
-                
-                {errorInfo.suggestion && (
-                  <div className="text-sm text-red-600 mb-3">
-                    <strong>建议:</strong> {errorInfo.suggestion}
-                  </div>
-                )}
-                
-                {errorInfo.troubleshooting && (
-                  <div className="text-xs text-gray-700">
-                    <strong>故障排查:</strong>
-                    <ul className="list-disc list-inside mt-2 space-y-1">
-                      {Object.entries(errorInfo.troubleshooting).map(([key, value]) => (
-                        <li key={key}>
-                          <span className="font-mono text-xs">{String(value)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                
-                <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
-                  💡 系统将继续使用基础模式生成SQL（无样本参考）
-                </div>
-              </div>
-            )}
-            
-            {Object.keys(args).length > 0 && (
-              <div className="mt-4">
-                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                  ARGUMENTS
-                </h4>
-                <pre className="p-3 bg-white border border-gray-200 rounded text-xs font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap break-all m-0">
-                  {JSON.stringify(args, null, 2)}
-                </pre>
-              </div>
-            )}
-            {result && (
-              <div className="mt-4">
-                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                  RESULT
-                </h4>
-                <pre className="p-3 bg-white border border-gray-200 rounded text-xs font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap break-all m-0 max-h-96 overflow-y-auto">
-                  {typeof result === "string"
-                    ? result
-                    : JSON.stringify(result, null, 2)}
-                </pre>
-              </div>
-            )}
-          </div>
+    <motion.div
+      initial={{ opacity: 0, y: 5 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.15, delay: index * 0.03 }}
+      className={cn("rounded-md border text-sm", statusConfig.bg)}
+    >
+      {/* 头部 - 可点击展开/收起 */}
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+      >
+        {/* 状态图标 */}
+        {status === "running" ? (
+          <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin text-blue-500" />
+        ) : status === "complete" ? (
+          <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-green-500" />
+        ) : (
+          <XCircle className="h-3.5 w-3.5 flex-shrink-0 text-red-500" />
         )}
-      </div>
-
-      {/* Images displayed outside and below the tool box */}
-      <ImagePreview images={images} />
-    </div>
+        
+        {/* 工具名称和状态 */}
+        <span className={cn("font-medium", statusConfig.color)}>{toolLabel}</span>
+        <span className="text-gray-400">-</span>
+        <span className="text-gray-500">{statusConfig.text}</span>
+        
+        {/* 简略预览 */}
+        {!isExpanded && getPreview() && (
+          <span className="ml-1 flex-1 truncate text-gray-400">{getPreview()}</span>
+        )}
+        
+        {/* 展开指示 */}
+        {hasArgs && (
+          <motion.div
+            animate={{ rotate: isExpanded ? 180 : 0 }}
+            transition={{ duration: 0.15 }}
+            className="ml-auto flex-shrink-0"
+          >
+            <ChevronDown className="h-4 w-4 text-gray-400" />
+          </motion.div>
+        )}
+      </button>
+      
+      {/* 展开的详细内容 */}
+      <AnimatePresence>
+        {isExpanded && hasArgs && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="overflow-hidden"
+          >
+            <div className="border-t border-gray-200/50 bg-white/60 px-3 py-2 space-y-1.5">
+              {Object.entries(args).map(([key, value], argIdx) => (
+                <div key={argIdx} className="text-xs">
+                  <span className="text-gray-500 uppercase">{key}:</span>
+                  <div className="mt-0.5 text-gray-700">
+                    {isComplexValue(value) ? (
+                      <pre className="rounded bg-gray-50 p-1.5 text-xs overflow-auto max-h-32">
+                        {JSON.stringify(value, null, 2)}
+                      </pre>
+                    ) : (
+                      <span className="break-words">{String(value)}</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
-});
+}
 
-ToolCallBox.displayName = "ToolCallBox";
-
+/**
+ * 工具调用组件 - 显示 AI 消息中的工具调用
+ */
 export function ToolCalls({
   toolCalls,
-  toolResults,
+  status = "running",
 }: {
   toolCalls: AIMessage["tool_calls"];
-  toolResults?: ToolMessage[];
+  status?: "running" | "complete" | "error";
 }) {
   if (!toolCalls || toolCalls.length === 0) return null;
 
-  // 添加调试日志
-  console.log('[ToolCalls] Raw tool calls:', JSON.stringify(toolCalls, null, 2));
-  console.log('[ToolCalls] Tool calls details:', toolCalls.map(tc => ({
-    id: tc?.id,
-    name: tc?.name,
-    nameType: typeof tc?.name,
-    hasName: !!tc?.name,
-    hasTrimmedName: !!(tc?.name && tc.name.trim()),
-    fullObject: tc
-  })));
-
-  // Filter out invalid tool calls
-  // ✅ 移除空 name 过滤：后端已通过 create_ai_message_with_tools() 确保 name 非空
-  console.log('[ToolCalls] Tool calls count:', toolCalls.length);
-
   return (
-    <div className="w-full">
+    <div className="space-y-1.5 my-2">
       {toolCalls.map((tc, idx) => {
-        // Find corresponding tool result by tool_call_id (with fix for duplicated IDs)
-        const correspondingResult = toolResults?.find(
-          (result) => toolCallIdMatches(tc.id || "", result.tool_call_id || "")
-        );
-
+        const uniqueKey = tc.id ? `${tc.id}-${idx}` : `tool-${idx}`;
         return (
-          <ToolCallBox
-            key={tc.id || idx}
-            toolCall={tc}
-            toolResult={correspondingResult}
+          <ToolCallCard 
+            key={uniqueKey} 
+            toolCall={tc} 
+            status={status}
+            index={idx}
           />
         );
       })}
@@ -499,7 +174,107 @@ export function ToolCalls({
   );
 }
 
-// Keep the old ToolResult component for backward compatibility
+/**
+ * 工具结果组件 - 显示工具执行结果
+ */
 export function ToolResult({ message }: { message: ToolMessage }) {
-  return null; // Hide individual tool results since they're now combined
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  let parsedContent: any;
+  let isJsonContent = false;
+  let isError = false;
+
+  try {
+    if (typeof message.content === "string") {
+      parsedContent = JSON.parse(message.content);
+      isJsonContent = isComplexValue(parsedContent);
+      if (parsedContent.error || parsedContent.status === "error") {
+        isError = true;
+      }
+    }
+  } catch {
+    parsedContent = message.content;
+  }
+
+  // 获取工具显示名称
+  const toolLabel = toolNameMap[message.name || ""] || message.name || "工具结果";
+
+  const contentStr = isJsonContent
+    ? JSON.stringify(parsedContent, null, 2)
+    : String(message.content);
+  const shouldTruncate = contentStr.length > 100;
+
+  // 获取简略预览
+  const getPreview = () => {
+    if (isJsonContent && parsedContent.message) {
+      return parsedContent.message.slice(0, 50) + (parsedContent.message.length > 50 ? "..." : "");
+    }
+    return contentStr.slice(0, 50) + (contentStr.length > 50 ? "..." : "");
+  };
+
+  const statusConfig = isError 
+    ? { text: "执行失败", color: "text-red-600", bg: "bg-red-50 border-red-100" }
+    : { text: "执行完成", color: "text-green-600", bg: "bg-green-50 border-green-100" };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 5 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.15 }}
+      className={cn("rounded-md border text-sm my-2", statusConfig.bg)}
+    >
+      {/* 头部 */}
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+      >
+        {/* 状态图标 */}
+        {isError ? (
+          <XCircle className="h-3.5 w-3.5 flex-shrink-0 text-red-500" />
+        ) : (
+          <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-green-500" />
+        )}
+        
+        {/* 工具名称和状态 */}
+        <span className={cn("font-medium", statusConfig.color)}>{toolLabel}</span>
+        <span className="text-gray-400">-</span>
+        <span className="text-gray-500">{statusConfig.text}</span>
+        
+        {/* 简略预览 */}
+        {!isExpanded && (
+          <span className="ml-1 flex-1 truncate text-gray-400">{getPreview()}</span>
+        )}
+        
+        {/* 展开指示 */}
+        {shouldTruncate && (
+          <motion.div
+            animate={{ rotate: isExpanded ? 180 : 0 }}
+            transition={{ duration: 0.15 }}
+            className="ml-auto flex-shrink-0"
+          >
+            <ChevronDown className="h-4 w-4 text-gray-400" />
+          </motion.div>
+        )}
+      </button>
+      
+      {/* 展开内容 */}
+      <AnimatePresence>
+        {isExpanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="overflow-hidden"
+          >
+            <div className="border-t border-gray-200/50 bg-white/60 px-3 py-2">
+              <pre className="text-xs text-gray-700 whitespace-pre-wrap break-words max-h-48 overflow-auto">
+                {contentStr}
+              </pre>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
 }

@@ -1,12 +1,18 @@
+/**
+ * AI 消息组件
+ * 
+ * 基于官方 agent-chat-ui 实现，原生支持 Tool 工具调用显示
+ * @see https://github.com/langchain-ai/agent-chat-ui
+ */
 import { parsePartialJson } from "@langchain/core/output_parsers";
 import { useStreamContext } from "@/providers/Stream";
-import { AIMessage, Checkpoint, Message, ToolMessage } from "@langchain/langgraph-sdk";
+import { AIMessage, Checkpoint, Message } from "@langchain/langgraph-sdk";
 import { getContentString } from "../utils";
 import { BranchSwitcher, CommandBar } from "./shared";
 import { MarkdownText } from "../markdown-text";
 import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 import { cn } from "@/lib/utils";
-import { ToolCalls } from "./tool-calls";
+import { ToolCalls, ToolResult } from "./tool-calls";
 import { MessageContentComplex } from "@langchain/core/messages";
 import { Fragment } from "react/jsx-runtime";
 import { isAgentInboxInterruptSchema } from "@/lib/agent-inbox-interrupt";
@@ -17,7 +23,7 @@ import { ClarificationInterruptView, isClarificationInterrupt } from "./clarific
 import { useArtifact } from "../artifact";
 import { useMemo } from "react";
 
-// 反馈服务类型定义
+// 反馈服务类型定义（保留自定义功能）
 export interface FeedbackContext {
   question: string;      // 用户的原始问题
   sql: string;          // 生成的SQL语句
@@ -48,14 +54,6 @@ function extractSQLFromContent(content: string): string | null {
   return null;
 }
 
-/**
- * Check if a tool call ID matches a tool result's tool_call_id
- * ✅ 简化版本：后端已通过 generate_tool_call_id() 确保 ID 不重复
- */
-function toolCallIdMatches(toolCallId: string, toolResultId: string): boolean {
-  return toolCallId === toolResultId;
-}
-
 function CustomComponent({
   message,
   thread,
@@ -84,66 +82,68 @@ function CustomComponent({
   );
 }
 
+/**
+ * 解析 Anthropic 流式工具调用（官方实现）
+ */
 function parseAnthropicStreamedToolCalls(
   content: MessageContentComplex[],
 ): AIMessage["tool_calls"] {
-  const toolCallContents = content.filter((c) => c.type === "tool_use" && c.id);
+  const toolCallContents = content.filter((c) => c.type === "tool_use" && (c as any).id);
 
-  return toolCallContents
-    .map((tc) => {
-      const toolCall = tc as Record<string, any>;
-      let json: Record<string, any> = {};
-      if (toolCall?.input) {
-        try {
-          json = parsePartialJson(toolCall.input) ?? {};
-        } catch {
-          // Pass
-        }
+  return toolCallContents.map((tc) => {
+    const toolCall = tc as Record<string, any>;
+    let json: Record<string, any> = {};
+    if (toolCall?.input) {
+      try {
+        json = parsePartialJson(toolCall.input) ?? {};
+      } catch {
+        // Pass
       }
-      return {
-        name: toolCall.name ?? "",
-        id: toolCall.id ?? "",
-        args: json,
-        type: "tool_call" as const,
-      };
-    });
-    // ✅ 移除空 name 过滤：后端已通过 create_ai_message_with_tools() 确保 name 非空
+    }
+    return {
+      name: toolCall.name ?? "",
+      id: toolCall.id ?? "",
+      args: json,
+      type: "tool_call" as const,
+    };
+  });
 }
 
 interface InterruptProps {
-  interruptValue?: unknown;
+  interrupt?: unknown;
   isLastMessage: boolean;
   hasNoAIOrToolMessages: boolean;
 }
 
 function Interrupt({
-  interruptValue,
+  interrupt,
   isLastMessage,
   hasNoAIOrToolMessages,
 }: InterruptProps) {
-  // 只在最后一条消息或没有AI/Tool消息时显示interrupt
+  const fallbackValue = Array.isArray(interrupt)
+    ? (interrupt as Record<string, any>[])
+    : (((interrupt as { value?: unknown } | undefined)?.value ??
+        interrupt) as Record<string, any>);
+
   const shouldShow = isLastMessage || hasNoAIOrToolMessages;
-  
-  if (!shouldShow || !interruptValue) {
-    return null;
-  }
-  
+  if (!shouldShow || !interrupt) return null;
+
   return (
     <>
       {/* Agent Inbox 类型的 interrupt */}
-      {isAgentInboxInterruptSchema(interruptValue) && (
-        <ThreadView interrupt={interruptValue} />
+      {isAgentInboxInterruptSchema(interrupt) && (
+        <ThreadView interrupt={interrupt} />
       )}
       
       {/* 澄清类型的 interrupt - 使用专门的澄清组件 */}
-      {isClarificationInterrupt(interruptValue) && (
-        <ClarificationInterruptView interrupt={interruptValue} />
+      {isClarificationInterrupt(interrupt) && (
+        <ClarificationInterruptView interrupt={interrupt} />
       )}
       
       {/* 其他类型的 interrupt - 使用通用组件 */}
-      {!isAgentInboxInterruptSchema(interruptValue) &&
-       !isClarificationInterrupt(interruptValue) && (
-        <GenericInterruptView interrupt={interruptValue} />
+      {!isAgentInboxInterruptSchema(interrupt) &&
+       !isClarificationInterrupt(interrupt) && (
+        <GenericInterruptView interrupt={fallbackValue} />
       )}
     </>
   );
@@ -160,6 +160,7 @@ export function AssistantMessage({
 }) {
   const content = message?.content ?? [];
   const contentString = getContentString(content);
+  
   const [hideToolCalls] = useQueryState(
     "hideToolCalls",
     parseAsBoolean.withDefault(false),
@@ -175,7 +176,7 @@ export function AssistantMessage({
   const thread = useStreamContext();
   const messages = Array.isArray(thread.messages) ? thread.messages : [];
   const isLastMessage =
-    messages.length > 0 && messages[messages.length - 1].id === message?.id;
+    messages.length > 0 && messages[messages.length - 1]?.id === message?.id;
   const hasNoAIOrToolMessages = !messages.find(
     (m) => m.type === "ai" || m.type === "tool",
   );
@@ -183,6 +184,51 @@ export function AssistantMessage({
   const threadInterrupt = thread.interrupt;
 
   const parentCheckpoint = meta?.firstSeenState?.parent_checkpoint;
+  
+  // 解析 Anthropic 流式工具调用
+  const anthropicStreamedToolCalls = Array.isArray(content)
+    ? parseAnthropicStreamedToolCalls(content as MessageContentComplex[])
+    : undefined;
+
+  // 工具调用相关判断（官方逻辑）
+  const hasToolCalls =
+    message &&
+    "tool_calls" in message &&
+    message.tool_calls &&
+    message.tool_calls.length > 0;
+  const toolCallsHaveContents =
+    hasToolCalls &&
+    (message as AIMessage).tool_calls?.some(
+      (tc) => tc.args && Object.keys(tc.args).length > 0,
+    );
+  const hasAnthropicToolCalls = !!anthropicStreamedToolCalls?.length;
+  const isToolResult = message?.type === "tool";
+
+  // 计算工具调用状态：检查是否有对应的 tool result
+  const toolCallStatus = useMemo(() => {
+    if (!hasToolCalls && !hasAnthropicToolCalls) return "complete";
+    
+    const currentToolCalls = hasToolCalls 
+      ? (message as AIMessage).tool_calls 
+      : anthropicStreamedToolCalls;
+    
+    if (!currentToolCalls || currentToolCalls.length === 0) return "complete";
+    
+    // 检查是否所有工具调用都有对应的结果
+    const toolCallIds = currentToolCalls.map(tc => tc.id).filter(Boolean);
+    const messageIndex = messages.findIndex((m) => m.id === message?.id);
+    
+    // 查找当前消息之后的 tool 类型消息
+    const subsequentToolResults = messages
+      .slice(messageIndex + 1)
+      .filter(m => m.type === "tool")
+      .map(m => (m as any).tool_call_id);
+    
+    // 如果所有工具调用都有对应结果，则为完成状态
+    const allComplete = toolCallIds.every(id => subsequentToolResults.includes(id));
+    
+    return allComplete ? "complete" : "running";
+  }, [hasToolCalls, hasAnthropicToolCalls, message, messages, anthropicStreamedToolCalls]) as "running" | "complete" | "error";
 
   // 构建反馈上下文（用于点赞/点踩功能）
   const feedbackContext = useMemo<FeedbackContext | undefined>(() => {
@@ -192,7 +238,6 @@ export function AssistantMessage({
 
     // 必须有有效的连接ID
     if (!connectionId || connectionId <= 0) {
-      console.log('[FeedbackContext] 无有效的连接ID，跳过反馈功能');
       return undefined;
     }
 
@@ -213,13 +258,6 @@ export function AssistantMessage({
     
     if (!userQuestion) return undefined;
 
-    console.log('[FeedbackContext] 构建反馈上下文:', {
-      connectionId,
-      hasSQL: !!sql,
-      hasQuestion: !!userQuestion,
-      threadId: threadId
-    });
-
     return {
       question: userQuestion,
       sql: sql,
@@ -227,84 +265,66 @@ export function AssistantMessage({
       threadId: threadId ?? undefined,
     };
   }, [contentString, messages, message?.id, connectionId, threadId]);
-  const anthropicStreamedToolCalls = Array.isArray(content)
-    ? parseAnthropicStreamedToolCalls(content)
-    : undefined;
 
-  const hasToolCalls =
-    message &&
-    "tool_calls" in message &&
-    message.tool_calls &&
-    message.tool_calls.length > 0;
-  const toolCallsHaveContents =
-    hasToolCalls &&
-    message.tool_calls?.some(
-      (tc) => tc.args && Object.keys(tc.args).length > 0,
-    );
-  const hasAnthropicToolCalls = !!anthropicStreamedToolCalls?.length;
-  const isToolResult = message?.type === "tool";
-
-  if (isToolResult) {
-    return null; // Hide individual tool results since they're now combined with tool calls
+  // 隐藏工具调用时，不渲染 tool 类型的消息
+  if (isToolResult && hideToolCalls) {
+    return null;
   }
 
   return (
-    <div className="group mr-auto w-full">
-      <div className="flex flex-col gap-2">
-        {!isToolResult && (
+    <div className="group mr-auto flex w-full items-start gap-2">
+      <div className="flex w-full flex-col gap-2">
+        {isToolResult ? (
+          // 工具结果消息 - 使用官方 ToolResult 组件
           <>
+            <ToolResult message={message} />
+            <Interrupt
+              interrupt={threadInterrupt}
+              isLastMessage={isLastMessage}
+              hasNoAIOrToolMessages={hasNoAIOrToolMessages}
+            />
+          </>
+        ) : (
+          // AI 消息
+          <>
+            {/* 消息内容 */}
             {contentString.length > 0 && (
               <div className="py-1">
                 <MarkdownText>{contentString}</MarkdownText>
               </div>
             )}
 
+            {/* 工具调用 - 使用官方 ToolCalls 组件 */}
             {!hideToolCalls && (
               <>
                 {(hasToolCalls && toolCallsHaveContents && (
-                  <ToolCalls
-                    toolCalls={message.tool_calls}
-                    toolResults={messages.filter(
-                      (m): m is ToolMessage =>
-                        m.type === "tool" &&
-                        !!message.tool_calls?.some(tc => toolCallIdMatches(tc.id || "", (m as any).tool_call_id || ""))
-                    )}
-                  />
+                  <ToolCalls toolCalls={(message as AIMessage).tool_calls} status={toolCallStatus} />
                 )) ||
                   (hasAnthropicToolCalls && (
-                    <ToolCalls
-                      toolCalls={anthropicStreamedToolCalls}
-                      toolResults={messages.filter(
-                        (m): m is ToolMessage =>
-                          m.type === "tool" &&
-                          anthropicStreamedToolCalls?.some(tc => toolCallIdMatches(tc.id || "", (m as any).tool_call_id || ""))
-                      )}
-                    />
+                    <ToolCalls toolCalls={anthropicStreamedToolCalls} status={toolCallStatus} />
                   )) ||
                   (hasToolCalls && (
-                    <ToolCalls
-                      toolCalls={message.tool_calls}
-                      toolResults={messages.filter(
-                        (m): m is ToolMessage =>
-                          m.type === "tool" &&
-                          !!message.tool_calls?.some(tc => toolCallIdMatches(tc.id || "", (m as any).tool_call_id || ""))
-                      )}
-                    />
+                    <ToolCalls toolCalls={(message as AIMessage).tool_calls} status={toolCallStatus} />
                   ))}
               </>
             )}
 
+            {/* 自定义组件 */}
             {message && (
               <CustomComponent
                 message={message}
                 thread={thread}
               />
             )}
+            
+            {/* Interrupt 处理 */}
             <Interrupt
-              interruptValue={threadInterrupt?.value}
+              interrupt={threadInterrupt}
               isLastMessage={isLastMessage}
               hasNoAIOrToolMessages={hasNoAIOrToolMessages}
             />
+            
+            {/* 操作栏 */}
             <div
               className={cn(
                 "mr-auto flex items-center gap-2 transition-opacity",

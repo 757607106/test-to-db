@@ -153,45 +153,20 @@ export function Thread() {
   const stream = useStreamContext();
   const rawMessages = Array.isArray(stream.messages) ? stream.messages : [];
   
-  // 去重消息：streamSubgraphs: true 会导致子图消息重复
+  // ✅ 消息去重：streamSubgraphs: true 会导致子图消息重复
   // 按 message.id 去重，保留最后一个版本（可能包含更完整的信息）
   const messages = useMemo(() => {
-    const seenMessageIds = new Set<string>();
-    const seenContentHashes = new Set<string>();
+    const seenIds = new Set<string>();
     const deduped: typeof rawMessages = [];
-    
-    // 生成消息内容的哈希值用于去重
-    const getContentHash = (msg: Message) => {
-      if (msg.type === "ai" && typeof msg.content === "string") {
-        return `ai:${msg.content.substring(0, 100)}`;
-      }
-      if (msg.type === "human" && typeof msg.content === "string") {
-        return `human:${msg.content.substring(0, 100)}`;
-      }
-      return null;
-    };
     
     // 从后向前遍历，保留最新版本的消息
     for (let i = rawMessages.length - 1; i >= 0; i--) {
       const msg = rawMessages[i];
-      
-      // 基于 ID 去重
-      if (msg.id && seenMessageIds.has(msg.id)) {
+      if (msg.id && seenIds.has(msg.id)) {
         continue;
       }
-      
-      // 基于内容去重（针对没有 ID 或 ID 不可靠的情况）
-      const contentHash = getContentHash(msg);
-      if (contentHash && seenContentHashes.has(contentHash)) {
-        continue;
-      }
-      
-      // 添加到去重列表
       if (msg.id) {
-        seenMessageIds.add(msg.id);
-      }
-      if (contentHash) {
-        seenContentHashes.add(contentHash);
+        seenIds.add(msg.id);
       }
       deduped.unshift(msg);
     }
@@ -310,7 +285,7 @@ export function Thread() {
         context: Object.keys(context).length > 0 ? context : undefined,
       } as any,
       {
-        streamMode: ["values", "messages", "updates"],  // 启用多种模式以实时显示工具调用
+        streamMode: ["values"],  // ✅ 官方方式：只使用 values 模式
         streamSubgraphs: true,
         streamResumable: true,
         optimisticValues: (prev: StateType) => ({
@@ -322,7 +297,7 @@ export function Thread() {
             newHumanMessage,
           ],
         }),
-      } as any,  // 类型断言：CustomSubmitOptions 不包含 streamMode 等属性，但运行时需要这些选项
+      } as any,
     );
 
     setInput("");
@@ -337,10 +312,10 @@ export function Thread() {
     setFirstTokenReceived(false);
     stream.submit(undefined, {
       checkpoint: parentCheckpoint,
-      streamMode: ["values", "messages", "updates"],  // 启用多种模式
+      streamMode: ["values"],  // ✅ 官方方式
       streamSubgraphs: true,
       streamResumable: true,
-    } as any);  // 类型断言：CustomSubmitOptions 不包含 streamMode 等属性，但运行时需要这些选项
+    } as any);
   };
 
   const chatStarted = !!threadId || !!messages.length;
