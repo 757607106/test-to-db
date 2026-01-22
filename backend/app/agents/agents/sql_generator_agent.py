@@ -10,11 +10,12 @@ SQL 生成代理 (优化版本)
 - 2026-01-19: 集成样本检索功能
 - 2026-01-21: 支持快速模式 (Fast Mode)
 - 2026-01-22: 使用 InjectedState 优化工具设计
+- 2026-01-22: 修复异步调用问题，避免嵌套事件循环
 """
 from typing import Dict, Any, List, Annotated, Optional
 import logging
-import asyncio
 import json
+import time
 
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
@@ -109,16 +110,18 @@ def generate_sql_query(
     schema_info: str,
     state: Annotated[dict, InjectedState],
     value_mappings: Optional[str] = None,
+    sample_qa_pairs: Optional[str] = None,
     db_type: str = "mysql"
 ) -> str:
     """
-    根据用户查询和模式信息生成 SQL 语句
+    根据用户查询和模式信息生成 SQL 语句（纯同步，无嵌套事件循环）
     
     Args:
         user_query: 用户的自然语言查询
         schema_info: JSON 格式的数据库模式信息
         state: 注入的状态 (自动获取 connection_id, skip_sample_retrieval 等)
         value_mappings: JSON 格式的值映射信息 (可选)
+        sample_qa_pairs: JSON 格式的预获取的 QA 样本 (可选，由 process 方法异步获取后传入)
         db_type: 数据库类型
         
     Returns:
@@ -126,40 +129,16 @@ def generate_sql_query(
         
     注意:
         - 使用 InjectedState 自动获取 connection_id 和快速模式设置
-        - 样本检索根据 skip_sample_retrieval 设置决定是否执行
+        - 样本由调用方异步预获取后传入，避免嵌套事件循环问题
     """
     try:
         # 从状态获取配置
         connection_id = state.get("connection_id")
-        skip_sample = state.get("skip_sample_retrieval", False)
         
         # 解析输入
         schema_data = json.loads(schema_info) if isinstance(schema_info, str) else schema_info
         mappings_data = json.loads(value_mappings) if value_mappings and isinstance(value_mappings, str) else value_mappings
-        
-        # 获取样本 (如果未跳过)
-        sample_qa_pairs = []
-        if connection_id and not skip_sample:
-            logger.info(f"获取 QA 样本, connection_id={connection_id}")
-            # 注意: 这里使用同步方式，因为 tool 函数是同步的
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # 如果已有事件循环在运行，使用 asyncio.run_coroutine_threadsafe
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(
-                            lambda: asyncio.run(_fetch_qa_samples_async(user_query, schema_data, connection_id))
-                        )
-                        sample_qa_pairs = future.result(timeout=10)
-                else:
-                    sample_qa_pairs = loop.run_until_complete(
-                        _fetch_qa_samples_async(user_query, schema_data, connection_id)
-                    )
-            except Exception as e:
-                logger.warning(f"样本检索失败: {e}")
-        elif skip_sample:
-            logger.info("快速模式: 跳过样本检索")
+        samples = json.loads(sample_qa_pairs) if sample_qa_pairs and isinstance(sample_qa_pairs, str) else (sample_qa_pairs or [])
         
         # 构建上下文
         context = f"""
@@ -177,9 +156,9 @@ def generate_sql_query(
         
         # 添加样本参考
         sample_context = ""
-        if sample_qa_pairs:
+        if samples:
             sample_context = "\n参考样本:\n"
-            for i, sample in enumerate(sample_qa_pairs[:3], 1):
+            for i, sample in enumerate(samples[:3], 1):
                 sample_context += f"""
 样本{i}:
 问题: {sample.get('question', '')}
@@ -222,7 +201,7 @@ SQL: {sample.get('sql', '')}
         return json.dumps({
             "success": True,
             "sql_query": sql_query,
-            "samples_used": len(sample_qa_pairs),
+            "samples_used": len(samples),
             "context_used": len(context)
         }, ensure_ascii=False)
         
@@ -409,7 +388,13 @@ class SQLGeneratorAgent:
 **输出格式**: 只返回工具调用结果，包含生成的 SQL"""
     
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
-        """处理 SQL 生成任务 - 返回标准工具调用格式"""
+        """
+        处理 SQL 生成任务 - 返回标准工具调用格式
+        
+        修复说明 (2026-01-22):
+        - 样本检索在此异步方法中执行，然后传递给同步工具
+        - 避免嵌套事件循环导致的死锁问题
+        """
         try:
             # 获取用户查询
             messages = state.get("messages", [])
@@ -434,10 +419,26 @@ class SQLGeneratorAgent:
             
             logger.info(f"使用 schema 信息生成 SQL, tables={list(schema_info.get('tables', {}).keys())}")
             
-            # 直接调用工具生成 SQL（减少 LLM 调用）
+            # ✅ 在异步上下文中获取 QA 样本（避免嵌套事件循环）
+            sample_qa_pairs = []
+            if connection_id and not skip_sample:
+                logger.info(f"异步获取 QA 样本, connection_id={connection_id}")
+                start_time = time.time()
+                sample_qa_pairs = await _fetch_qa_samples_async(
+                    user_query=user_query,
+                    schema_info=schema_info.get("tables", {}),
+                    connection_id=connection_id
+                )
+                logger.info(f"QA 样本获取完成，耗时 {time.time() - start_time:.2f}s，获取 {len(sample_qa_pairs)} 个样本")
+            elif skip_sample:
+                logger.info("快速模式: 跳过样本检索")
+            
+            # 准备工具参数
             schema_info_json = json.dumps(schema_info.get("tables", {}), ensure_ascii=False)
             value_mappings_json = json.dumps(schema_info.get("value_mappings", {}), ensure_ascii=False) if schema_info.get("value_mappings") else None
+            sample_qa_pairs_json = json.dumps(sample_qa_pairs, ensure_ascii=False) if sample_qa_pairs else None
             
+            # 调用同步工具生成 SQL（样本已经异步获取好了）
             result_json = generate_sql_query.invoke({
                 "user_query": user_query,
                 "schema_info": schema_info_json,
@@ -446,6 +447,7 @@ class SQLGeneratorAgent:
                     "skip_sample_retrieval": skip_sample
                 },
                 "value_mappings": value_mappings_json,
+                "sample_qa_pairs": sample_qa_pairs_json,
                 "db_type": "mysql"
             })
             
@@ -487,7 +489,8 @@ class SQLGeneratorAgent:
                 "status": "success",
                 "data": {
                     "sql_query": generated_sql,
-                    "explanation": result.get("explanation", "")
+                    "explanation": result.get("explanation", ""),
+                    "samples_used": result.get("samples_used", 0)
                 },
                 "metadata": {
                     "connection_id": connection_id
@@ -503,6 +506,10 @@ class SQLGeneratorAgent:
             return {
                 "messages": [ai_message, tool_message],
                 "generated_sql": generated_sql,
+                "sample_retrieval_result": {
+                    "samples_count": len(sample_qa_pairs),
+                    "samples_used": result.get("samples_used", 0)
+                },
                 "current_stage": "sql_execution"
             }
             
@@ -510,7 +517,7 @@ class SQLGeneratorAgent:
             logger.error(f"SQL 生成失败: {str(e)}")
             
             # 错误时也返回标准格式
-            error_tool_call_id = generate_tool_call_id("generate_sql_query", {"error": str(e)})
+            error_tool_call_id = generate_tool_call_id("generate_sql_query", {"error": str(e), "timestamp": time.time()})
             
             ai_message = AIMessage(
                 content="正在生成 SQL 查询...",
@@ -537,7 +544,8 @@ class SQLGeneratorAgent:
                 "error_history": state.get("error_history", []) + [{
                     "stage": "sql_generation",
                     "error": str(e),
-                    "retry_count": state.get("retry_count", 0)
+                    "retry_count": state.get("retry_count", 0),
+                    "timestamp": time.time()
                 }]
             }
     

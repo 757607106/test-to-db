@@ -10,10 +10,14 @@
 - 分析错误模式
 - 提供恢复策略
 - 协助重试决策
+
+修复历史:
+- 2026-01-22: 改进错误消息，提供用户友好的反馈
 """
 from typing import Dict, Any, List
 import json
 import logging
+import time
 
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage
@@ -23,6 +27,38 @@ from app.core.state import SQLMessageState
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# 用户友好的错误消息映射
+# ============================================================================
+
+USER_FRIENDLY_MESSAGES = {
+    "regenerate_sql": {
+        "retrying": "抱歉，生成的查询语句有误。正在为您重新生成更准确的查询...",
+        "failed": "很抱歉，多次尝试后仍无法生成正确的查询语句。建议您：\n1. 尝试简化查询描述\n2. 提供更具体的筛选条件\n3. 检查是否涉及不存在的数据"
+    },
+    "verify_schema": {
+        "retrying": "抱歉，无法找到您查询的数据表或字段。正在重新分析数据库结构...",
+        "failed": "很抱歉，无法匹配到相关的数据表。可能原因：\n1. 数据库中没有相关数据\n2. 表名或字段名表述不同\n3. 建议检查数据库连接是否正确"
+    },
+    "check_connection": {
+        "retrying": "数据库连接出现问题，正在尝试重新连接...",
+        "failed": "数据库连接失败。请检查：\n1. 网络连接是否正常\n2. 数据库服务是否运行\n3. 连接配置是否正确"
+    },
+    "simplify_query": {
+        "retrying": "当前权限可能不足，正在尝试简化查询...",
+        "failed": "权限不足，无法执行此查询。建议：\n1. 联系管理员获取相应权限\n2. 尝试查询其他可访问的数据"
+    },
+    "optimize_query": {
+        "retrying": "查询超时，正在优化查询语句以提高效率...",
+        "failed": "查询执行超时。建议：\n1. 缩小查询的时间范围\n2. 减少查询的数据量\n3. 添加更多筛选条件"
+    },
+    "restart": {
+        "retrying": "遇到问题，正在重新开始处理您的查询...",
+        "failed": "处理过程中遇到未知问题。建议：\n1. 重新描述您的查询需求\n2. 稍后再试\n3. 如问题持续，请联系技术支持"
+    }
+}
 
 
 # ============================================================================
@@ -256,11 +292,30 @@ class ErrorRecoveryAgent:
 
 **输出格式**: 简洁的恢复方案和建议"""
     
+    def _get_user_friendly_message(self, action: str, is_retrying: bool) -> str:
+        """
+        获取用户友好的错误消息
+        
+        Args:
+            action: 恢复动作类型
+            is_retrying: 是否正在重试
+            
+        Returns:
+            用户友好的消息文本
+        """
+        messages = USER_FRIENDLY_MESSAGES.get(action, USER_FRIENDLY_MESSAGES["restart"])
+        return messages["retrying"] if is_retrying else messages["failed"]
+    
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
-        """执行错误恢复"""
+        """
+        执行错误恢复
+        
+        修复 (2026-01-22): 改进错误消息，提供用户友好的反馈
+        """
         try:
             error_history = state.get("error_history", [])
             retry_count = state.get("retry_count", 0)
+            max_retries = state.get("max_retries", 3)
             
             # 分析错误
             error_analysis = analyze_error_pattern.invoke({
@@ -279,40 +334,72 @@ class ErrorRecoveryAgent:
             # 决定下一步
             if strategy_data.get("success"):
                 strategy_info = strategy_data.get("strategy", {})
+                primary_action = strategy_info.get("primary_action", "restart")
                 
-                if strategy_info.get("auto_fixable") and retry_count < state.get("max_retries", 3):
+                if strategy_info.get("auto_fixable") and retry_count < max_retries:
                     # 可以自动修复，返回到适当的阶段重试
-                    primary_action = strategy_info.get("primary_action", "restart")
-                    
                     if primary_action == "regenerate_sql":
                         next_stage = "sql_generation"
                     elif primary_action == "verify_schema":
                         next_stage = "schema_analysis"
+                    elif primary_action == "optimize_query":
+                        next_stage = "sql_generation"
                     else:
                         next_stage = "schema_analysis"
                     
+                    # 获取用户友好的消息
+                    user_message = self._get_user_friendly_message(primary_action, is_retrying=True)
+                    
+                    logger.info(f"错误恢复: {primary_action} -> {next_stage} (重试 {retry_count + 1}/{max_retries})")
+                    
                     return {
-                        "messages": [AIMessage(content=f"错误恢复: {strategy_info.get('description')}")],
+                        "messages": [AIMessage(content=user_message)],
                         "current_stage": next_stage,
                         "retry_count": retry_count + 1
                     }
                 else:
                     # 无法自动修复或已达到重试限制
+                    user_message = self._get_user_friendly_message(primary_action, is_retrying=False)
+                    
+                    # 如果达到重试限制，添加额外说明
+                    if retry_count >= max_retries:
+                        user_message = f"已尝试 {retry_count} 次仍未成功。\n\n{user_message}"
+                    
+                    logger.warning(f"错误恢复失败: {primary_action}, 重试次数: {retry_count}")
+                    
                     return {
-                        "messages": [AIMessage(content=f"错误恢复失败: {strategy_info.get('description')}")],
-                        "current_stage": "completed"
+                        "messages": [AIMessage(content=user_message)],
+                        "current_stage": "completed",
+                        "error_history": error_history + [{
+                            "stage": "error_recovery",
+                            "error": f"恢复失败: {primary_action}",
+                            "retry_count": retry_count,
+                            "timestamp": time.time()
+                        }]
                     }
             else:
+                # 错误分析失败
+                user_message = "抱歉，处理过程中遇到问题。请尝试重新描述您的查询需求。"
+                logger.error(f"错误分析失败: {strategy_data.get('error')}")
+                
                 return {
-                    "messages": [AIMessage(content="错误分析失败，终止流程")],
+                    "messages": [AIMessage(content=user_message)],
                     "current_stage": "completed"
                 }
             
         except Exception as e:
-            logger.error(f"错误恢复失败: {str(e)}")
+            logger.error(f"错误恢复异常: {str(e)}")
+            user_message = "抱歉，处理过程中遇到未知问题。请稍后再试，如问题持续请联系技术支持。"
+            
             return {
-                "messages": [AIMessage(content=f"错误恢复失败: {str(e)}")],
-                "current_stage": "completed"
+                "messages": [AIMessage(content=user_message)],
+                "current_stage": "completed",
+                "error_history": state.get("error_history", []) + [{
+                    "stage": "error_recovery",
+                    "error": str(e),
+                    "retry_count": state.get("retry_count", 0),
+                    "timestamp": time.time()
+                }]
             }
 
 

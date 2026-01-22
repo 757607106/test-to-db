@@ -9,18 +9,26 @@
 
 架构说明:
 - 使用 LangGraph 的 StateGraph 管理整体流程
-- 包含多个核心节点: load_custom_agent、fast_mode_detect、clarification、cache_check、supervisor
+- 包含多个核心节点: intent_router、load_custom_agent、fast_mode_detect、clarification、cache_check、supervisor
 - clarification 节点使用 interrupt() 实现人机交互
 - supervisor 节点协调 Worker Agents 处理查询
 
-图结构:
-    START → load_custom_agent → fast_mode_detect → clarification → cache_check → [supervisor | END]
+图结构 (2026-01-22 更新):
+    START → intent_router → [data_query_flow | general_chat → END]
+    data_query_flow: load_custom_agent → fast_mode_detect → clarification → cache_check → [supervisor | END]
+
+修复历史:
+- 2026-01-22: 添加 checkpointer 回退机制，确保 interrupt 能正常工作
+- 2026-01-22: 添加意图路由，区分闲聊和数据查询
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Literal
 import logging
 import asyncio
+import re
 
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import InMemorySaver
+from langchain_core.messages import AIMessage
 
 from app.core.state import SQLMessageState, detect_fast_mode
 from app.agents.agents.supervisor_agent import SupervisorAgent, create_intelligent_sql_supervisor
@@ -29,6 +37,23 @@ from app.agents.nodes.cache_check_node import cache_check_node
 from app.models.agent_profile import AgentProfile
 
 logger = logging.getLogger(__name__)
+
+# 全局默认 checkpointer（用于非 API Server 场景）
+_default_checkpointer = None
+
+
+def _get_default_checkpointer():
+    """
+    获取默认的内存 checkpointer（单例模式）
+    
+    LangGraph 官方文档：interrupt() 必须配合 checkpointer 使用
+    这是用于直接调用场景的回退机制
+    """
+    global _default_checkpointer
+    if _default_checkpointer is None:
+        _default_checkpointer = InMemorySaver()
+        logger.info("✓ 初始化默认内存 Checkpointer")
+    return _default_checkpointer
 
 
 # ============================================================================
@@ -62,6 +87,72 @@ def extract_agent_id_from_messages(messages) -> Optional[int]:
 
 
 # ============================================================================
+# 意图识别辅助函数
+# ============================================================================
+
+def _detect_intent(query: str) -> Literal["data_query", "general_chat"]:
+    """
+    检测用户查询的意图类型
+    
+    Args:
+        query: 用户查询文本
+        
+    Returns:
+        "data_query" - 数据查询意图（需要走完整 SQL 流程）
+        "general_chat" - 闲聊意图（直接回复）
+    """
+    query_lower = query.lower().strip()
+    
+    # 数据查询关键词（中文）
+    data_query_keywords_cn = [
+        "查询", "查看", "统计", "计算", "显示", "列出", "获取", "搜索", "筛选",
+        "多少", "有哪些", "什么是", "求", "汇总", "分析", "对比", "排名", "排序",
+        "top", "前", "最大", "最小", "平均", "总", "销售", "订单", "库存", "用户",
+        "客户", "产品", "商品", "数据", "表", "字段", "记录", "条目"
+    ]
+    
+    # 闲聊关键词
+    chat_keywords = [
+        "你好", "hello", "hi", "嗨", "在吗", "在么", "谢谢", "感谢", "thanks",
+        "你是谁", "你叫什么", "介绍一下", "帮助", "help", "怎么用", "使用说明",
+        "再见", "bye", "晚安", "早安", "早上好", "下午好", "晚上好"
+    ]
+    
+    # SQL 相关关键词
+    sql_keywords = [
+        "select", "from", "where", "join", "group by", "order by", "having",
+        "count", "sum", "avg", "max", "min", "limit", "distinct"
+    ]
+    
+    # 检查是否包含 SQL 关键词
+    if any(kw in query_lower for kw in sql_keywords):
+        return "data_query"
+    
+    # 检查是否明确是闲聊
+    if any(kw in query_lower for kw in chat_keywords):
+        # 再次确认不是数据查询
+        if not any(kw in query_lower for kw in data_query_keywords_cn):
+            return "general_chat"
+    
+    # 检查是否包含数据查询关键词
+    if any(kw in query_lower for kw in data_query_keywords_cn):
+        return "data_query"
+    
+    # 检查是否是问句格式（通常是数据查询）
+    question_patterns = [
+        r'(有多少|共有多少|一共有多少)',
+        r'(哪些|哪个|什么)',
+        r'\?$|？$',
+        r'(是多少|是什么)',
+    ]
+    if any(re.search(p, query) for p in question_patterns):
+        return "data_query"
+    
+    # 默认为数据查询（保守策略）
+    return "data_query"
+
+
+# ============================================================================
 # 主图类
 # ============================================================================
 
@@ -75,48 +166,79 @@ class IntelligentSQLGraph:
     3. 支持动态加载自定义分析专家
     4. 协调 Supervisor 和 Worker Agents
     5. 支持澄清模式（使用 interrupt 机制）
+    6. 支持意图路由（区分闲聊和数据查询）
     
     LangGraph 官方最佳实践:
     - 图的创建是同步的，编译后返回 CompiledGraph
-    - Checkpointer 由 LangGraph API 在运行时自动注入
+    - Checkpointer 用于支持 interrupt 机制
     - 参考: https://langchain-ai.github.io/langgraph/concepts/langgraph_server/
     """
     
-    def __init__(self, active_agent_profiles: List[AgentProfile] = None, custom_analyst=None):
+    def __init__(
+        self, 
+        active_agent_profiles: List[AgentProfile] = None, 
+        custom_analyst=None,
+        use_default_checkpointer: bool = True
+    ):
         """
         初始化智能 SQL 图
         
-        注意: 图在初始化时同步创建，不依赖异步 checkpointer
+        Args:
+            active_agent_profiles: 活跃的代理配置文件列表
+            custom_analyst: 自定义分析专家
+            use_default_checkpointer: 是否使用默认 checkpointer（用于非 API Server 场景）
         """
         self.supervisor_agent = create_intelligent_sql_supervisor(custom_analyst=custom_analyst)
+        self._use_default_checkpointer = use_default_checkpointer
         self._checkpointer = None
         
         # 同步创建图 - LangGraph API 要求图工厂函数返回编译好的图
         self.graph = self._create_graph_sync()
         self._initialized = True
     
-    def _create_graph_sync(self):
+    def _create_graph_sync(self, checkpointer=None):
         """
         同步创建 LangGraph 状态图
         
-        LangGraph 官方最佳实践:
-        - 图的定义和编译是同步的
-        - Checkpointer 由 LangGraph API Server 自动管理
-        - 不需要在图创建时初始化 checkpointer
+        修复说明 (2026-01-22):
+        - 添加意图路由节点
+        - 添加 checkpointer 回退机制，确保 interrupt 能正常工作
+        
+        Args:
+            checkpointer: 可选的 checkpointer，如果不提供则使用默认值
         """
         graph = StateGraph(SQLMessageState)
         
-        # 添加节点
+        # ============== 添加节点 ==============
+        # 意图路由节点
+        graph.add_node("intent_router", self._intent_router_node)
+        # 闲聊处理节点
+        graph.add_node("general_chat", self._general_chat_node)
+        # 数据查询流程节点
         graph.add_node("load_custom_agent", self._load_custom_agent_node)
         graph.add_node("fast_mode_detect", self._fast_mode_detect_node)
         graph.add_node("clarification", clarification_node)
         graph.add_node("cache_check", cache_check_node)
         graph.add_node("supervisor", self._supervisor_node)
         
-        # 设置入口点
-        graph.set_entry_point("load_custom_agent")
+        # ============== 设置入口点 ==============
+        graph.set_entry_point("intent_router")
         
-        # 定义边
+        # ============== 定义边 ==============
+        # 意图路由条件边
+        graph.add_conditional_edges(
+            "intent_router",
+            self._route_by_intent,
+            {
+                "data_query": "load_custom_agent",
+                "general_chat": "general_chat"
+            }
+        )
+        
+        # 闲聊直接结束
+        graph.add_edge("general_chat", END)
+        
+        # 数据查询流程
         graph.add_edge("load_custom_agent", "fast_mode_detect")
         graph.add_edge("fast_mode_detect", "clarification")
         graph.add_edge("clarification", "cache_check")
@@ -134,9 +256,21 @@ class IntelligentSQLGraph:
         # supervisor → END
         graph.add_edge("supervisor", END)
         
-        # 编译图 - 不指定 checkpointer，由 LangGraph API 注入
-        logger.info("✓ 编译 SQL Agent 图 (checkpointer 由 LangGraph API 管理)")
-        return graph.compile()
+        # ============== 编译图 ==============
+        # 确定使用哪个 checkpointer
+        if checkpointer:
+            self._checkpointer = checkpointer
+            logger.info("✓ 使用提供的 Checkpointer 编译图")
+            return graph.compile(checkpointer=checkpointer)
+        elif self._use_default_checkpointer:
+            # 使用默认内存 checkpointer（确保 interrupt 能工作）
+            self._checkpointer = _get_default_checkpointer()
+            logger.info("✓ 使用默认内存 Checkpointer 编译图 (interrupt 支持已启用)")
+            return graph.compile(checkpointer=self._checkpointer)
+        else:
+            # 不使用 checkpointer（由 LangGraph API Server 注入）
+            logger.info("✓ 编译 SQL Agent 图 (checkpointer 由 LangGraph API 管理)")
+            return graph.compile()
     
     async def _ensure_initialized(self):
         """
@@ -147,6 +281,91 @@ class IntelligentSQLGraph:
         if not self._initialized:
             self.graph = self._create_graph_sync()
             self._initialized = True
+    
+    async def _intent_router_node(self, state: SQLMessageState) -> Dict[str, Any]:
+        """
+        意图路由节点 - 检测用户查询意图并设置路由决策
+        
+        返回:
+            route_decision: "data_query" | "general_chat"
+        """
+        messages = state.get("messages", [])
+        user_query = None
+        
+        for msg in messages:
+            if hasattr(msg, 'type') and msg.type == 'human':
+                user_query = msg.content
+                if isinstance(user_query, list):
+                    user_query = user_query[0].get("text", "") if user_query else ""
+                break
+        
+        if not user_query:
+            logger.warning("无法提取用户查询，默认为数据查询")
+            return {"route_decision": "data_query"}
+        
+        # 检测意图
+        intent = _detect_intent(user_query)
+        logger.info(f"=== 意图识别: {intent} ===")
+        logger.info(f"  查询: {user_query[:50]}...")
+        
+        return {"route_decision": intent}
+    
+    def _route_by_intent(self, state: SQLMessageState) -> str:
+        """
+        根据意图决策路由到对应的处理流程
+        """
+        route_decision = state.get("route_decision", "data_query")
+        return route_decision
+    
+    async def _general_chat_node(self, state: SQLMessageState) -> Dict[str, Any]:
+        """
+        闲聊处理节点 - 处理非数据查询的闲聊请求
+        """
+        from app.core.llms import get_default_model
+        from langchain_core.messages import HumanMessage
+        
+        messages = state.get("messages", [])
+        user_query = None
+        
+        for msg in messages:
+            if hasattr(msg, 'type') and msg.type == 'human':
+                user_query = msg.content
+                if isinstance(user_query, list):
+                    user_query = user_query[0].get("text", "") if user_query else ""
+                break
+        
+        if not user_query:
+            return {
+                "messages": [AIMessage(content="您好！请问有什么可以帮助您的？")],
+                "current_stage": "completed"
+            }
+        
+        # 构建闲聊提示
+        chat_prompt = f"""你是一个友好的数据查询助手。用户发送了一条闲聊消息，请给出友好、简洁的回复。
+
+用户消息: {user_query}
+
+注意:
+1. 如果用户打招呼，友好回应并简单介绍你的功能
+2. 如果用户说谢谢，礼貌回应
+3. 如果用户问你是谁，介绍你是一个 Text-to-SQL 数据查询助手
+4. 如果用户问如何使用，简单说明：可以用自然语言描述想查询的数据
+5. 保持回复简洁友好
+
+请回复："""
+        
+        try:
+            llm = get_default_model()
+            response = await llm.ainvoke([HumanMessage(content=chat_prompt)])
+            reply = response.content
+        except Exception as e:
+            logger.error(f"闲聊处理失败: {e}")
+            reply = "您好！我是数据查询助手，可以帮您用自然语言查询数据库。请告诉我您想查询什么数据？"
+        
+        return {
+            "messages": [AIMessage(content=reply)],
+            "current_stage": "completed"
+        }
     
     async def _create_graph_async(self):
         """
@@ -486,9 +705,23 @@ def graph():
     LangGraph 官方最佳实践:
     - 图工厂函数必须返回一个编译好的 CompiledGraph
     - 函数可以是同步的（推荐）或异步的
-    - Checkpointer 由 LangGraph API Server 自动管理，无需在此处指定
+    - Checkpointer 由 LangGraph API Server 自动管理
+    
+    注意: 此函数返回的图不使用默认 checkpointer，
+    因为 LangGraph API Server 会自动注入 checkpointer
     
     参考: https://langchain-ai.github.io/langgraph/concepts/langgraph_server/
+    """
+    # 为 API Server 创建不带默认 checkpointer 的图
+    api_graph = IntelligentSQLGraph(use_default_checkpointer=False)
+    return api_graph.graph
+
+
+def graph_with_checkpointer():
+    """
+    带 checkpointer 的图工厂函数 - 供直接调用使用
+    
+    用于非 LangGraph API Server 场景，确保 interrupt 机制能正常工作
     """
     g = get_global_graph()
     return g.graph
@@ -529,6 +762,8 @@ __all__ = [
     "get_global_graph",
     "get_global_graph_async",
     "graph",
+    "graph_with_checkpointer",
     "warmup_services",
     "warmup_services_sync",
+    "_detect_intent",
 ]

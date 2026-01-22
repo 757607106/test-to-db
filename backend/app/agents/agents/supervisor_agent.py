@@ -16,12 +16,17 @@
 2. 根据任务阶段智能路由到合适的 Agent
 3. 管理 Agent 间的消息传递和状态更新
 4. 支持快速模式 (Fast Mode)
+
+修复历史:
+- 2026-01-22: 完善路由上下文，添加用户查询和错误详情
+- 2026-01-22: 改进消息合并逻辑，避免重复消息
 """
 from typing import Dict, Any, List, Optional, Literal
 import logging
 import json
+import time
 
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from pydantic import BaseModel, Field
 
 from app.core.state import SQLMessageState
@@ -118,6 +123,68 @@ class SupervisorAgent:
                 return agent
         return None
     
+    def _extract_user_query(self, state: SQLMessageState) -> str:
+        """从状态中提取用户原始查询"""
+        # 优先使用已保存的原始查询
+        if state.get("original_query"):
+            return state["original_query"]
+        
+        # 使用增强后的查询
+        if state.get("enriched_query"):
+            return state["enriched_query"]
+        
+        # 从消息中提取
+        messages = state.get("messages", [])
+        for msg in messages:
+            if hasattr(msg, 'type') and msg.type == 'human':
+                content = msg.content
+                if isinstance(content, list):
+                    content = content[0].get("text", "") if content else ""
+                return content
+        return ""
+    
+    def _format_recent_errors(self, error_history: List[Dict[str, Any]], max_count: int = 3) -> str:
+        """格式化最近的错误信息"""
+        if not error_history:
+            return "无错误记录"
+        
+        recent_errors = error_history[-max_count:]
+        formatted = []
+        
+        for i, error in enumerate(recent_errors, 1):
+            stage = error.get("stage", "unknown")
+            error_msg = error.get("error", "")
+            retry_count = error.get("retry_count", 0)
+            timestamp = error.get("timestamp")
+            
+            error_info = f"{i}. [{stage}] {error_msg[:100]}"
+            if retry_count > 0:
+                error_info += f" (重试: {retry_count})"
+            if timestamp:
+                import datetime
+                dt = datetime.datetime.fromtimestamp(timestamp)
+                error_info += f" @ {dt.strftime('%H:%M:%S')}"
+            
+            formatted.append(error_info)
+        
+        return "\n".join(formatted)
+    
+    def _get_message_ids(self, messages: List) -> set:
+        """获取消息ID集合，用于去重"""
+        ids = set()
+        for msg in messages:
+            # 使用消息内容的哈希作为ID
+            if hasattr(msg, 'content'):
+                content = msg.content
+                if isinstance(content, str):
+                    ids.add(hash(content[:100]))  # 使用前100字符的哈希
+                elif isinstance(content, list):
+                    ids.add(hash(str(content)[:100]))
+            # 对于 ToolMessage，还要检查 tool_call_id
+            if isinstance(msg, ToolMessage):
+                ids.add(msg.tool_call_id)
+        return ids
+    
     def route_by_stage(self, state: SQLMessageState) -> str:
         """
         基于状态的简单路由 (无需 LLM)
@@ -160,38 +227,78 @@ class SupervisorAgent:
         """
         使用 LLM 进行智能路由 (复杂情况)
         
-        仅在需要复杂决策时使用
+        仅在需要复杂决策时使用，提供完整的上下文信息
+        
+        修复 (2026-01-22): 添加用户查询和错误详情到上下文
         """
         if not self.router_llm:
             # 回退到简单路由
             next_agent = self.route_by_stage(state)
             return RouteDecision(next_agent=next_agent, reason="基于状态路由")
         
-        # 构建路由上下文
+        # 提取完整的上下文信息
+        user_query = self._extract_user_query(state)
+        error_history = state.get("error_history", [])
+        error_details = self._format_recent_errors(error_history)
+        generated_sql = state.get("generated_sql", "")
+        execution_result = state.get("execution_result")
+        
+        # 执行结果摘要
+        exec_summary = "无"
+        if execution_result:
+            if hasattr(execution_result, 'success'):
+                exec_summary = f"成功: {execution_result.success}"
+                if execution_result.error:
+                    exec_summary += f", 错误: {execution_result.error[:50]}"
+                if execution_result.rows_affected:
+                    exec_summary += f", 返回行数: {execution_result.rows_affected}"
+            elif isinstance(execution_result, dict):
+                exec_summary = f"成功: {execution_result.get('success', False)}"
+                if execution_result.get('error'):
+                    exec_summary += f", 错误: {execution_result.get('error', '')[:50]}"
+        
+        # 构建完整的路由上下文
         context = f"""
-当前状态:
-- current_stage: {state.get('current_stage')}
-- fast_mode: {state.get('fast_mode', False)}
-- skip_chart_generation: {state.get('skip_chart_generation', False)}
-- has_generated_sql: {bool(state.get('generated_sql'))}
-- has_execution_result: {bool(state.get('execution_result'))}
-- error_count: {len(state.get('error_history', []))}
-- retry_count: {state.get('retry_count', 0)}
+=== 用户查询 ===
+{user_query[:200]}{'...' if len(user_query) > 200 else ''}
 
-可用的 Agent:
-- schema_agent: 分析用户查询，获取数据库模式
-- sql_generator_agent: 生成 SQL 语句
-- sql_executor_agent: 执行 SQL 查询
-- chart_generator_agent: 生成图表可视化
-- error_recovery_agent: 处理错误和恢复
-- FINISH: 任务完成
+=== 当前状态 ===
+- 阶段: {state.get('current_stage', 'unknown')}
+- 快速模式: {state.get('fast_mode', False)}
+- 跳过图表: {state.get('skip_chart_generation', False)}
+- 重试次数: {state.get('retry_count', 0)} / {state.get('max_retries', 3)}
+- 连接ID: {state.get('connection_id')}
 
-请决定下一步应该调用哪个 Agent。
+=== 执行进度 ===
+- Schema 信息: {'已获取' if state.get('schema_info') else '未获取'}
+- 生成的 SQL: {generated_sql[:100] + '...' if generated_sql and len(generated_sql) > 100 else generated_sql or '无'}
+- 执行结果: {exec_summary}
+
+=== 错误历史 ({len(error_history)} 条) ===
+{error_details}
+
+=== 可用的 Agent ===
+- schema_agent: 分析用户查询，获取数据库模式信息
+- sql_generator_agent: 根据 schema 和查询生成 SQL 语句
+- sql_executor_agent: 执行 SQL 查询并返回结果
+- chart_generator_agent: 分析数据并生成可视化图表
+- error_recovery_agent: 分析错误原因并制定恢复策略
+- FINISH: 任务已完成，结束流程
+
+请根据以上信息决定下一步应该调用哪个 Agent。
 """
         
         try:
             decision = await self.router_llm.ainvoke([
-                SystemMessage(content="你是一个智能路由器，负责决定下一步调用哪个 Agent。"),
+                SystemMessage(content="""你是一个智能路由器，负责决定 Text-to-SQL 流程的下一步。
+
+决策原则：
+1. 如果没有 schema 信息，应该先调用 schema_agent
+2. 有 schema 但没有 SQL，调用 sql_generator_agent
+3. 有 SQL 但没有执行结果，调用 sql_executor_agent
+4. 执行成功且需要可视化，调用 chart_generator_agent
+5. 出现错误且重试次数未超限，调用 error_recovery_agent
+6. 任务完成或重试次数超限，返回 FINISH"""),
                 HumanMessage(content=context)
             ])
             return decision
@@ -210,6 +317,8 @@ class SupervisorAgent:
             
         Returns:
             Agent 执行结果 (状态更新)
+            
+        修复 (2026-01-22): 添加时间戳到错误记录
         """
         agent = self._get_agent_by_name(agent_name)
         if not agent:
@@ -218,11 +327,14 @@ class SupervisorAgent:
                 "current_stage": "error_recovery",
                 "error_history": state.get("error_history", []) + [{
                     "stage": "supervisor",
-                    "error": f"找不到 Agent: {agent_name}"
+                    "error": f"找不到 Agent: {agent_name}",
+                    "retry_count": state.get("retry_count", 0),
+                    "timestamp": time.time()
                 }]
             }
         
         try:
+            start_time = time.time()
             logger.info(f"执行 Agent: {agent_name}")
             
             # 调用 Agent 的处理方法
@@ -236,7 +348,8 @@ class SupervisorAgent:
             else:
                 raise ValueError(f"Agent {agent_name} 没有可调用的方法")
             
-            logger.info(f"Agent {agent_name} 执行完成")
+            elapsed = time.time() - start_time
+            logger.info(f"Agent {agent_name} 执行完成，耗时 {elapsed:.2f}s")
             return result
             
         except Exception as e:
@@ -245,7 +358,9 @@ class SupervisorAgent:
                 "current_stage": "error_recovery",
                 "error_history": state.get("error_history", []) + [{
                     "stage": agent_name,
-                    "error": str(e)
+                    "error": str(e),
+                    "retry_count": state.get("retry_count", 0),
+                    "timestamp": time.time()
                 }]
             }
     
@@ -263,6 +378,8 @@ class SupervisorAgent:
             
         Returns:
             执行结果
+            
+        修复 (2026-01-22): 改进消息合并逻辑，添加去重机制
         """
         # 消息历史修剪
         from app.core.message_history import auto_trim_messages, get_message_stats
@@ -303,13 +420,49 @@ class SupervisorAgent:
                 # 执行 Agent
                 result = await self.execute_agent(next_agent, current_state)
                 
-                # 更新状态
+                # 更新状态（改进的消息合并逻辑）
                 if result:
                     for key, value in result.items():
                         if key == "messages" and value:
-                            # 追加消息而不是替换
+                            # ✅ 改进：使用去重的消息合并
                             current_messages = current_state.get("messages", [])
-                            current_state["messages"] = current_messages + value
+                            existing_ids = self._get_message_ids(current_messages)
+                            
+                            new_messages = []
+                            for msg in value:
+                                # 检查是否是重复消息
+                                msg_id = None
+                                if hasattr(msg, 'content'):
+                                    content = msg.content
+                                    if isinstance(content, str):
+                                        msg_id = hash(content[:100])
+                                    elif isinstance(content, list):
+                                        msg_id = hash(str(content)[:100])
+                                
+                                # 对于 ToolMessage，使用 tool_call_id 去重
+                                if isinstance(msg, ToolMessage):
+                                    if msg.tool_call_id in existing_ids:
+                                        logger.debug(f"跳过重复的 ToolMessage: {msg.tool_call_id}")
+                                        continue
+                                    existing_ids.add(msg.tool_call_id)
+                                elif msg_id and msg_id in existing_ids:
+                                    logger.debug(f"跳过重复的消息")
+                                    continue
+                                
+                                if msg_id:
+                                    existing_ids.add(msg_id)
+                                new_messages.append(msg)
+                            
+                            if new_messages:
+                                current_state["messages"] = current_messages + new_messages
+                                logger.debug(f"添加了 {len(new_messages)} 条新消息")
+                        elif key == "error_history" and value:
+                            # 错误历史也需要添加时间戳
+                            current_errors = current_state.get("error_history", [])
+                            for error in value:
+                                if isinstance(error, dict) and "timestamp" not in error:
+                                    error["timestamp"] = time.time()
+                            current_state["error_history"] = current_errors + value
                         else:
                             current_state[key] = value
                 

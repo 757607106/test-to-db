@@ -21,7 +21,11 @@ import { isAgentInboxInterruptSchema } from "@/lib/agent-inbox-interrupt";
 import { ThreadView } from "../agent-inbox";
 import { useQueryState, parseAsBoolean } from "nuqs";
 import { GenericInterruptView } from "./generic-interrupt";
-import { ClarificationInterruptView, isClarificationInterrupt } from "./clarification-interrupt";
+import { 
+  ClarificationInterruptView, 
+  isClarificationInterrupt, 
+  extractClarificationData 
+} from "./clarification-interrupt";
 import { useArtifact } from "../artifact";
 
 function CustomComponent({
@@ -90,32 +94,39 @@ function Interrupt({
   isLastMessage,
   hasNoAIOrToolMessages,
 }: InterruptProps) {
+  // 提取澄清数据（支持多种包装格式）
+  const clarificationData = extractClarificationData(interrupt);
+  const isClarification = clarificationData !== null;
+  
+  // 通用 fallback 值
   const fallbackValue = Array.isArray(interrupt)
     ? (interrupt as Record<string, any>[])
     : (((interrupt as { value?: unknown } | undefined)?.value ??
         interrupt) as Record<string, any>);
 
+  // 只在最后一条消息或没有 AI 消息时显示 interrupt
+  const shouldShow = isLastMessage || hasNoAIOrToolMessages;
+
+  if (!interrupt || !shouldShow) {
+    return null;
+  }
+
   return (
     <>
       {/* Agent Inbox 类型的 interrupt */}
-      {isAgentInboxInterruptSchema(interrupt) &&
-        (isLastMessage || hasNoAIOrToolMessages) && (
-          <ThreadView interrupt={interrupt} />
-        )}
+      {isAgentInboxInterruptSchema(interrupt) && (
+        <ThreadView interrupt={interrupt} />
+      )}
       
-      {/* 澄清类型的 interrupt */}
-      {isClarificationInterrupt(interrupt) &&
-        (isLastMessage || hasNoAIOrToolMessages) && (
-          <ClarificationInterruptView interrupt={interrupt} />
-        )}
+      {/* 澄清类型的 interrupt - 使用提取后的数据 */}
+      {isClarification && clarificationData && (
+        <ClarificationInterruptView interrupt={clarificationData} />
+      )}
       
       {/* 其他类型的 interrupt */}
-      {interrupt &&
-        !isAgentInboxInterruptSchema(interrupt) &&
-        !isClarificationInterrupt(interrupt) &&
-        (isLastMessage || hasNoAIOrToolMessages) ? (
+      {!isAgentInboxInterruptSchema(interrupt) && !isClarification && (
         <GenericInterruptView interrupt={fallbackValue} />
-      ) : null}
+      )}
     </>
   );
 }
