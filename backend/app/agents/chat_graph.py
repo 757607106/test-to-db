@@ -685,12 +685,10 @@ class IntelligentSQLGraph:
         
         功能:
         1. 从消息中提取 connection_id 和 agent_id
-        2. 根据 agent_id 从数据库加载 AgentProfile
-        3. 使用 agent_factory 创建自定义 agent 实例
-        4. 将自定义 agents 存储到 state["custom_agents"] 供子图使用
+        2. 将 agent_id 存储到 state 供子图使用（不存储 Agent 实例，避免序列化问题）
         
-        支持的自定义 agent 类型:
-        - data_analyst: 数据分析专家
+        注意：Agent 实例包含 LLM 对象（HTTP 客户端、线程锁等），无法被 pickle 序列化
+        因此只存储 agent_id，在 supervisor_subgraph 中按需动态创建 Agent
         """
         # 从消息中提取 connection_id
         messages = state.get("messages", [])
@@ -702,67 +700,14 @@ class IntelligentSQLGraph:
             logger.info(f"从消息中提取到 connection_id={extracted_connection_id}")
             updates["connection_id"] = extracted_connection_id
         
-        # 从消息中提取 agent_id
+        # 从消息中提取 agent_id（只存储 ID，不存储 Agent 实例）
         agent_id = extract_agent_id_from_messages(messages)
         
         if agent_id:
-            logger.info(f"检测到 agent_id={agent_id}，尝试加载自定义 agent")
+            logger.info(f"检测到 agent_id={agent_id}，将在执行时动态加载自定义 agent")
             updates["agent_id"] = agent_id
-            
-            # 尝试加载自定义 agent
-            custom_agents = await self._load_custom_agents_by_id(agent_id)
-            if custom_agents:
-                updates["custom_agents"] = custom_agents
-                logger.info(f"成功加载自定义 agents: {list(custom_agents.keys())}")
         
         return updates if updates else {}
-    
-    async def _load_custom_agents_by_id(self, agent_id: int) -> Dict[str, Any]:
-        """
-        根据 agent_id 从数据库加载自定义 agents
-        
-        Args:
-            agent_id: AgentProfile 的 ID
-            
-        Returns:
-            Dict[str, Any]: 自定义 agents 字典
-            格式: {"data_analyst": agent_instance, ...}
-        """
-        try:
-            from app.db.database import get_db
-            from app.crud import agent_profile as crud_agent_profile
-            from app.agents.agent_factory import create_custom_analyst_agent
-            
-            # 获取数据库会话
-            db = next(get_db())
-            
-            try:
-                # 查询 AgentProfile
-                profile = crud_agent_profile.get(db, id=agent_id)
-                
-                if not profile:
-                    logger.warning(f"未找到 agent_id={agent_id} 对应的 AgentProfile")
-                    return {}
-                
-                if not profile.is_active:
-                    logger.warning(f"AgentProfile {profile.name} 未激活")
-                    return {}
-                
-                logger.info(f"加载 AgentProfile: {profile.name} (id={profile.id})")
-                
-                # 创建自定义 data_analyst agent
-                custom_analyst = create_custom_analyst_agent(profile, db)
-                
-                return {
-                    "data_analyst": custom_analyst
-                }
-                
-            finally:
-                db.close()
-                
-        except Exception as e:
-            logger.error(f"加载自定义 agent 失败: {e}", exc_info=True)
-            return {}
     
     async def _fast_mode_detect_node(self, state: SQLMessageState) -> Dict[str, Any]:
         """

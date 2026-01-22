@@ -99,6 +99,55 @@ def _get_recovery_steps(error_type: str) -> list:
     return steps_map.get(error_type, steps_map["unknown_error"])
 
 
+def _load_custom_agent_by_id(agent_id: int, agent_type: str = "data_analyst"):
+    """
+    根据 agent_id 动态加载自定义 Agent
+    
+    这个函数在每次需要时动态创建 Agent，避免将不可序列化的对象存储到 State
+    
+    Args:
+        agent_id: AgentProfile 的 ID
+        agent_type: Agent 类型（目前支持 data_analyst）
+        
+    Returns:
+        Agent 实例，如果加载失败则返回 None
+    """
+    if agent_type != "data_analyst":
+        return None
+    
+    try:
+        from app.db.session import get_db
+        from app.crud import agent_profile as crud_agent_profile
+        from app.agents.agent_factory import create_custom_analyst_agent
+        
+        # 获取数据库会话
+        db = next(get_db())
+        
+        try:
+            # 查询 AgentProfile
+            profile = crud_agent_profile.get(db, id=agent_id)
+            
+            if not profile:
+                logger.warning(f"未找到 agent_id={agent_id} 对应的 AgentProfile")
+                return None
+            
+            if not profile.is_active:
+                logger.warning(f"AgentProfile {profile.name} 未激活")
+                return None
+            
+            logger.info(f"动态加载 AgentProfile: {profile.name} (id={profile.id})")
+            
+            # 创建自定义 agent
+            return create_custom_analyst_agent(profile, db)
+            
+        finally:
+            db.close()
+            
+    except Exception as e:
+        logger.error(f"动态加载自定义 agent 失败: {e}", exc_info=True)
+        return None
+
+
 # ============================================================================
 # 节点函数
 # ============================================================================
@@ -240,19 +289,22 @@ async def data_analyst_node(state: SQLMessageState) -> Dict[str, Any]:
     读取的上下文:
     - execution_result: SQL 执行结果
     
-    支持自定义 Agent：通过 state["custom_agents"]["data_analyst"] 传入
+    支持自定义 Agent：通过 state["agent_id"] 动态加载
     这是最常需要自定义的 agent，可以根据不同业务场景定制数据分析逻辑
     """
-    # 优先使用自定义 agent
-    custom_agents = state.get("custom_agents") or {}
-    agent = custom_agents.get("data_analyst")
+    agent = None
+    
+    # 根据 agent_id 动态加载自定义 agent（避免将不可序列化的对象存储到 state）
+    agent_id = state.get("agent_id")
+    if agent_id:
+        agent = _load_custom_agent_by_id(agent_id, "data_analyst")
+        if agent:
+            logger.info(f"使用自定义 data_analyst (agent_id={agent_id})")
     
     if agent is None:
         # 回退到默认 agent
         from app.agents.agents.data_analyst_agent import data_analyst_agent
         agent = data_analyst_agent
-    else:
-        logger.info("使用自定义 data_analyst")
     
     logger.info("=== 执行 data_analyst_agent ===")
     
