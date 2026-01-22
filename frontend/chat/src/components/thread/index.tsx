@@ -265,7 +265,7 @@ export function Thread() {
         context: Object.keys(context).length > 0 ? context : undefined,
       } as any,
       {
-        streamMode: ["values"],  // ✅ 官方方式：只使用 values 模式
+        streamMode: ["values", "messages"],  // ✅ 支持实时工具调用显示
         streamSubgraphs: true,
         streamResumable: true,
         optimisticValues: (prev: StateType) => ({
@@ -292,7 +292,7 @@ export function Thread() {
     setFirstTokenReceived(false);
     stream.submit(undefined, {
       checkpoint: parentCheckpoint,
-      streamMode: ["values"],  // ✅ 官方方式
+      streamMode: ["values", "messages"],  // ✅ 支持实时工具调用显示
       streamSubgraphs: true,
       streamResumable: true,
     } as any);

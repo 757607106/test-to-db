@@ -264,6 +264,16 @@ class SQLExecutorAgent:
         这是推荐的执行方式，不经过 ReAct 循环。
         执行成功后会调用 LLM 分析结果并生成自然语言回答。
         """
+        import time
+        from langgraph.config import get_stream_writer
+        from app.schemas.stream_events import create_sql_step_event, create_data_query_event
+        
+        # 获取 stream writer
+        try:
+            writer = get_stream_writer()
+        except Exception:
+            writer = None
+        
         try:
             # 获取生成的 SQL
             sql_query = state.get("generated_sql")
@@ -276,6 +286,16 @@ class SQLExecutorAgent:
             
             logger.info(f"执行 SQL: {sql_query[:100]}...")
             
+            # 发送 final_sql 步骤开始事件
+            step_start_time = time.time()
+            if writer:
+                writer(create_sql_step_event(
+                    step="final_sql",
+                    status="running",
+                    result=sql_query[:100] + "..." if len(sql_query) > 100 else sql_query,
+                    time_ms=0
+                ))
+            
             # 直接调用工具，不经过 LLM
             result_json = execute_sql_query.invoke({
                 "sql_query": sql_query,
@@ -286,6 +306,27 @@ class SQLExecutorAgent:
             # 解析结果
             result = json.loads(result_json)
             
+            # 计算执行耗时
+            elapsed_ms = int((time.time() - step_start_time) * 1000)
+            
+            # 发送 final_sql 步骤完成事件
+            if writer:
+                if result.get("success"):
+                    row_count = result.get("data", {}).get("row_count", 0)
+                    writer(create_sql_step_event(
+                        step="final_sql",
+                        status="completed",
+                        result=f"查询成功，返回 {row_count} 条记录",
+                        time_ms=elapsed_ms
+                    ))
+                else:
+                    writer(create_sql_step_event(
+                        step="final_sql",
+                        status="error",
+                        result=result.get("error", "执行失败"),
+                        time_ms=elapsed_ms
+                    ))
+            
             # 创建执行结果
             execution_result = SQLExecutionResult(
                 success=result.get("success", False),
@@ -294,6 +335,34 @@ class SQLExecutorAgent:
                 execution_time=result.get("execution_time", 0),
                 rows_affected=result.get("data", {}).get("row_count", 0) if result.get("success") else 0
             )
+            
+            # 如果执行成功，发送数据查询事件
+            if result.get("success") and writer:
+                data_result = result.get("data", {})
+                columns = data_result.get("columns", [])
+                raw_rows = data_result.get("data", [])  # 这是值列表的列表
+                row_count = data_result.get("row_count", 0)
+                
+                # 将值列表转换为字典列表（前端需要字典格式）
+                rows = []
+                for raw_row in raw_rows:
+                    if isinstance(raw_row, list) and len(raw_row) == len(columns):
+                        rows.append(dict(zip(columns, raw_row)))
+                    elif isinstance(raw_row, dict):
+                        rows.append(raw_row)
+                
+                # 生成图表配置
+                chart_config = self._generate_chart_config(columns, rows)
+                
+                # 发送数据查询事件（限制返回行数避免数据过大）
+                user_query = self._extract_user_query(state)
+                writer(create_data_query_event(
+                    columns=columns,
+                    rows=rows[:100],  # 最多返回100行
+                    row_count=row_count,
+                    chart_config=chart_config,
+                    title=user_query[:50] if user_query else None
+                ))
             
             # 创建消息用于状态更新 - 遵循 LangGraph SDK 标准
             from app.core.message_utils import generate_tool_call_id
@@ -356,6 +425,15 @@ class SQLExecutorAgent:
         except Exception as e:
             logger.error(f"SQL 执行失败: {str(e)}")
             
+            # 发送错误事件
+            if writer:
+                writer(create_sql_step_event(
+                    step="final_sql",
+                    status="error",
+                    result=str(e),
+                    time_ms=0
+                ))
+            
             execution_result = SQLExecutionResult(
                 success=False,
                 error=str(e)
@@ -372,6 +450,62 @@ class SQLExecutorAgent:
                     "retry_count": state.get("retry_count", 0)
                 }]
             }
+    
+    def _generate_chart_config(self, columns: list, rows: list) -> Dict[str, Any]:
+        """
+        根据数据生成 Recharts 图表配置
+        """
+        if not columns or not rows:
+            return None
+        
+        # 分析列类型
+        numeric_columns = []
+        category_columns = []
+        date_columns = []
+        
+        for col in columns:
+            col_lower = col.lower()
+            # 检测日期列
+            if any(kw in col_lower for kw in ['date', 'time', '日期', '时间', 'day', 'month', 'year']):
+                date_columns.append(col)
+            # 检测分类列
+            elif any(kw in col_lower for kw in ['name', 'type', 'category', '名称', '类型', '分类', 'id']):
+                category_columns.append(col)
+            else:
+                # 检查第一行数据是否为数字
+                if rows:
+                    first_val = rows[0].get(col)
+                    if isinstance(first_val, (int, float)):
+                        numeric_columns.append(col)
+                    else:
+                        category_columns.append(col)
+        
+        # 决定图表类型
+        chart_type = "line"  # 默认折线图
+        if date_columns:
+            x_axis = date_columns[0]
+            chart_type = "line"
+        elif category_columns:
+            x_axis = category_columns[0]
+            if len(rows) <= 10:
+                chart_type = "bar"
+            else:
+                chart_type = "line"
+        elif numeric_columns:
+            x_axis = numeric_columns[0]
+        else:
+            x_axis = columns[0]
+        
+        # Y 轴选择数字列
+        y_axis = numeric_columns[0] if numeric_columns else (columns[1] if len(columns) > 1 else columns[0])
+        
+        return {
+            "type": chart_type,
+            "xAxis": x_axis,
+            "yAxis": y_axis,
+            "dataKey": y_axis,
+            "xDataKey": x_axis
+        }
     
     def _extract_user_query(self, state: SQLMessageState) -> str:
         """从状态中提取用户原始查询"""

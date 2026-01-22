@@ -1,25 +1,35 @@
 """
 缓存检查节点 (Cache Check Node)
 
-在 clarification 之后、supervisor 之前检查查询缓存。
-如果命中缓存，直接返回结果，跳过后续流程。
+全局缓存检查，是三级缓存策略的第二级和第三级：
+1. Thread 历史检查 (thread_history_check_node) - 已在上一节点处理
+2. 全局精确缓存 (本节点) - 100% 匹配，直接执行返回
+3. 全局语义缓存 (本节点) - >=95% 相似度，保存SQL模板进入澄清
 
 工作流程:
 1. 从消息中提取用户查询
 2. 检查精确匹配缓存（L1）
 3. 检查语义匹配缓存（L2）
-4. 如果命中，设置结果并标记跳过 supervisor
-5. 如果未命中，继续正常流程
+4. 精确命中: 执行SQL，发送流式事件，返回结果
+5. 语义命中: 保存SQL模板，进入澄清节点
+6. 未命中: 进入澄清节点
 
 缓存策略:
-- 精确匹配：相同查询 + 相同连接ID
-- 语义匹配：相似度 >= 0.95 的历史 QA 对
+- 精确匹配 (exact): 相同查询 + 相同连接ID -> 直接执行返回
+- 语义匹配 (semantic): 相似度 >= 0.95 -> 保存模板，进入澄清
+
+LangGraph 官方规范:
+- 使用 StreamWriter 参数注入发送流式事件
+- 参考: https://langchain-ai.github.io/langgraph/concepts/streaming/
 """
 import logging
 import json
+import time
+import re
 from typing import Dict, Any, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.types import StreamWriter
 
 from app.core.state import SQLMessageState, SQLExecutionResult
 from app.services.query_cache_service import get_cache_service, CacheHit
@@ -69,114 +79,219 @@ def _normalize_query_content(content: Any) -> Optional[str]:
     return str(content)
 
 
-def format_cached_response(cache_hit: CacheHit, connection_id: int) -> str:
+def _clean_sql(sql: str) -> str:
     """
-    格式化缓存命中的响应
+    清理可能被污染的 SQL
+    
+    修复 Milvus 存储时的污染问题
+    """
+    if not sql:
+        return sql
+    
+    # 移除可能的 JSON 污染: ;", "connection_id": xxx; 或类似模式
+    clean_sql = re.sub(r';\s*"\s*,\s*"connection_id"\s*:\s*\d+\s*;?\s*$', ';', sql)
+    clean_sql = clean_sql.strip()
+    
+    # 确保 SQL 以分号结尾
+    if clean_sql and not clean_sql.endswith(';'):
+        clean_sql += ';'
+    
+    return clean_sql
+
+
+def _generate_chart_config(columns: list, rows: list) -> Optional[Dict[str, Any]]:
+    """
+    根据数据生成图表配置
+    """
+    if not columns or not rows:
+        return None
+    
+    # 分析列类型
+    numeric_columns = []
+    category_columns = []
+    date_columns = []
+    
+    for col in columns:
+        col_lower = col.lower()
+        if any(kw in col_lower for kw in ['date', 'time', '日期', '时间', 'day', 'month', 'year']):
+            date_columns.append(col)
+        elif any(kw in col_lower for kw in ['name', 'type', 'category', '名称', '类型', '分类', 'id']):
+            category_columns.append(col)
+        else:
+            if rows:
+                first_val = rows[0].get(col) if isinstance(rows[0], dict) else None
+                if isinstance(first_val, (int, float)):
+                    numeric_columns.append(col)
+                else:
+                    category_columns.append(col)
+    
+    # 决定图表类型
+    chart_type = "bar"
+    if date_columns:
+        x_axis = date_columns[0]
+        chart_type = "line"
+    elif category_columns:
+        x_axis = category_columns[0]
+        chart_type = "bar" if len(rows) <= 10 else "line"
+    elif numeric_columns:
+        x_axis = numeric_columns[0]
+    else:
+        x_axis = columns[0]
+    
+    y_axis = numeric_columns[0] if numeric_columns else (columns[1] if len(columns) > 1 else columns[0])
+    
+    return {
+        "type": chart_type,
+        "xAxis": x_axis,
+        "yAxis": y_axis,
+        "dataKey": y_axis,
+        "xDataKey": x_axis
+    }
+
+
+def _send_cache_hit_stream_events(
+    writer: StreamWriter,
+    cache_hit: CacheHit,
+    exec_result: Dict[str, Any],
+    connection_id: int,
+    elapsed_ms: int,
+    user_query: str
+):
+    """
+    发送缓存命中时的流式事件（使用注入的 StreamWriter）
+    
+    遵循 LangGraph 官方规范：使用参数注入的 StreamWriter
+    
+    包括: cache_hit, intent_analysis, sql_step, data_query
     
     Args:
+        writer: LangGraph StreamWriter，用于发送流式事件
         cache_hit: 缓存命中结果
+        exec_result: SQL执行结果
         connection_id: 数据库连接ID
-        
-    Returns:
-        格式化的响应字符串
+        elapsed_ms: 耗时(毫秒)
+        user_query: 用户查询
     """
-    hit_type_label = "精确匹配" if cache_hit.hit_type == "exact" else f"语义匹配 (相似度: {cache_hit.similarity:.1%})"
+    from app.schemas.stream_events import (
+        create_cache_hit_event,
+        create_intent_analysis_event,
+        create_sql_step_event,
+        create_data_query_event
+    )
     
-    response_parts = [
-        f"✨ **缓存命中** ({hit_type_label})",
-        "",
-        f"**SQL 查询:**",
-        f"```sql",
-        f"{cache_hit.sql}",
-        f"```",
-    ]
+    # 1. 发送缓存命中事件
+    hit_type = "exact" if cache_hit.hit_type == "exact" else "semantic"
+    writer(create_cache_hit_event(
+        hit_type=hit_type,
+        similarity=cache_hit.similarity,
+        original_query=cache_hit.query[:100] if cache_hit.query else None,
+        time_ms=elapsed_ms
+    ))
     
-    # 添加执行结果（如果有）
-    if cache_hit.result is not None:
-        result = cache_hit.result
-        if isinstance(result, dict):
-            if result.get("success"):
-                raw_data = result.get("data", [])
-                
-                # ✅ 兼容两种数据格式：
-                # 1. 直接列表: [{"col1": val1, ...}, ...]
-                # 2. 嵌套格式: {"columns": [...], "data": [[val1, val2, ...], ...]}
-                if isinstance(raw_data, dict) and "columns" in raw_data and "data" in raw_data:
-                    # 嵌套格式，转换为字典列表
-                    columns = raw_data.get("columns", [])
-                    rows = raw_data.get("data", [])
-                    data = [dict(zip(columns, row)) for row in rows] if columns and rows else []
-                elif isinstance(raw_data, list):
-                    data = raw_data
-                else:
-                    data = []
-                
-                if len(data) > 0:
-                    response_parts.extend([
-                        "",
-                        f"**查询结果:** (共 {len(data)} 条记录)",
-                        "",
-                    ])
-                    # 格式化表格
-                    if isinstance(data[0], dict):
-                        headers = list(data[0].keys())
-                        response_parts.append("| " + " | ".join(headers) + " |")
-                        response_parts.append("| " + " | ".join(["---"] * len(headers)) + " |")
-                        for row in data[:10]:  # 最多显示10行
-                            values = [str(row.get(h, ""))[:30] for h in headers]  # 截断长值
-                            response_parts.append("| " + " | ".join(values) + " |")
-                        if len(data) > 10:
-                            response_parts.append(f"... 还有 {len(data) - 10} 条记录")
-                else:
-                    response_parts.extend([
-                        "",
-                        "**查询结果:** 无数据",
-                    ])
-            else:
-                response_parts.extend([
-                    "",
-                    f"**执行错误:** {result.get('error', '未知错误')}",
-                ])
-    else:
-        response_parts.extend([
-            "",
-            "📝 *SQL 已从缓存获取，正在执行...*",
-        ])
+    # 2. 发送意图解析事件
+    # 获取数据集名称
+    dataset_name = "默认数据集"
+    try:
+        from app.db.session import SessionLocal
+        from app.crud.crud_db_connection import db_connection as crud_connection
+        db = SessionLocal()
+        try:
+            conn = crud_connection.get(db=db, id=connection_id)
+            if conn:
+                dataset_name = conn.name or conn.database
+        finally:
+            db.close()
+    except Exception:
+        pass
     
-    return "\n".join(response_parts)
+    writer(create_intent_analysis_event(
+        dataset=dataset_name,
+        query_mode="缓存模式",
+        metrics=["缓存结果"],
+        filters={},
+        time_ms=elapsed_ms
+    ))
+    
+    # 3. 发送SQL步骤事件（标记为缓存命中）
+    writer(create_sql_step_event(
+        step="few_shot",
+        status="completed",
+        result=f"缓存命中 ({hit_type})",
+        time_ms=0
+    ))
+    
+    writer(create_sql_step_event(
+        step="llm_parse",
+        status="completed",
+        result="使用缓存SQL",
+        time_ms=0
+    ))
+    
+    writer(create_sql_step_event(
+        step="final_sql",
+        status="completed",
+        result=cache_hit.sql[:100] + "..." if len(cache_hit.sql) > 100 else cache_hit.sql,
+        time_ms=elapsed_ms
+    ))
+    
+    # 4. 发送数据查询事件
+    if exec_result and exec_result.get("success"):
+        data = exec_result.get("data", {})
+        columns = data.get("columns", [])
+        raw_rows = data.get("data", [])
+        row_count = data.get("row_count", len(raw_rows))
+        
+        # 转换数据格式
+        rows = []
+        for raw_row in raw_rows:
+            if isinstance(raw_row, list) and len(raw_row) == len(columns):
+                rows.append(dict(zip(columns, raw_row)))
+            elif isinstance(raw_row, dict):
+                rows.append(raw_row)
+        
+        # 生成图表配置
+        chart_config = _generate_chart_config(columns, rows)
+        
+        writer(create_data_query_event(
+            columns=columns,
+            rows=rows[:100],
+            row_count=row_count,
+            chart_config=chart_config,
+            title=user_query[:50] if user_query else None
+        ))
+    
+    logger.info("✓ 缓存命中流式事件已发送")
 
 
-async def cache_check_node(state: SQLMessageState) -> Dict[str, Any]:
+async def cache_check_node(state: SQLMessageState, writer: StreamWriter) -> Dict[str, Any]:
     """
     缓存检查节点 - LangGraph 异步节点函数
     
-    在 clarification 之后、supervisor 之前检查查询缓存。
-    如果命中缓存，直接返回结果，跳过 supervisor。
+    遵循 LangGraph 官方规范：
+    - 使用 StreamWriter 参数注入发送流式事件
+    - 节点签名: (state, writer) -> dict
+    - 参考: https://langchain-ai.github.io/langgraph/concepts/streaming/
+    
+    三级缓存策略的第二/三级：
+    - 精确命中 (100%): 执行SQL，发送流式事件，直接返回结果
+    - 语义命中 (>=95%): 保存SQL模板，进入澄清节点确认
+    - 未命中: 进入澄清节点，走完整流程
     
     Args:
         state: 当前的 SQL 消息状态
+        writer: LangGraph StreamWriter，用于发送流式事件
         
     Returns:
         Dict[str, Any]: 状态更新
             - cache_hit: 是否命中缓存
-            - generated_sql: 缓存的 SQL（如果命中）
-            - execution_result: 缓存的执行结果（如果有）
-            - messages: 添加 AI 响应消息（如果命中）
-            
-    状态字段:
-        读取:
-        - messages: 获取用户查询
-        - connection_id: 数据库连接ID
-        - pending_clarification: 是否正在等待澄清（跳过缓存检查）
-        
-        更新:
-        - cache_hit: 是否命中缓存
-        - cache_hit_type: 命中类型 ("exact" / "semantic" / None)
-        - generated_sql: SQL 语句
-        - execution_result: 执行结果
-        - current_stage: 当前阶段
+            - cache_hit_type: 命中类型 ("exact" / "semantic" / None)
+            - generated_sql: 缓存的 SQL（精确命中时）
+            - cached_sql_template: SQL 模板（语义命中时）
+            - execution_result: 执行结果（精确命中时）
     """
-    logger.info("=== 进入缓存检查节点 ===")
+    logger.info("=== 进入全局缓存检查节点 ===")
+    
+    start_time = time.time()
     
     # 0. 检查是否正在等待澄清回复
     pending_clarification = state.get("pending_clarification", False)
@@ -207,120 +322,12 @@ async def cache_check_node(state: SQLMessageState) -> Dict[str, Any]:
         cache_service = get_cache_service()
         cache_hit = await cache_service.check_cache(user_query, connection_id)
         
-        if cache_hit:
-            logger.info(f"缓存命中! type={cache_hit.hit_type}, similarity={cache_hit.similarity:.3f}")
-
-            # 如果没有执行结果，直接在此节点执行 SQL 并返回结果
-            if cache_hit.result is None:
-                # ✅ 清理可能被污染的 SQL（修复 Milvus 存储时的污染问题）
-                clean_sql = cache_hit.sql
-                if clean_sql:
-                    # 移除可能的 JSON 污染: ;", "connection_id": xxx; 或类似模式
-                    import re
-                    # 匹配 SQL 语句末尾的污染部分
-                    clean_sql = re.sub(r';\s*"\s*,\s*"connection_id"\s*:\s*\d+\s*;?\s*$', ';', clean_sql)
-                    clean_sql = clean_sql.strip()
-                    # 确保 SQL 以分号结尾
-                    if clean_sql and not clean_sql.endswith(';'):
-                        clean_sql += ';'
-                
-                # ✅ 直接执行 SQL，避免走完整的 supervisor 流程
-                try:
-                    from app.agents.agents.sql_executor_agent import execute_sql_query
-                    
-                    exec_result_str = execute_sql_query.invoke({
-                        "sql_query": clean_sql,  # 使用清理后的 SQL
-                        "connection_id": connection_id,
-                        "timeout": 30
-                    })
-                    
-                    # ✅ execute_sql_query 返回的是 JSON 字符串，需要解析
-                    exec_result = json.loads(exec_result_str) if isinstance(exec_result_str, str) else exec_result_str
-                    
-                    if exec_result.get("success"):
-                        # 构建执行结果
-                        execution_result = SQLExecutionResult(
-                            success=True,
-                            data=exec_result.get("data"),
-                            error=None,
-                            execution_time=exec_result.get("execution_time", 0),
-                            rows_affected=exec_result.get("data", {}).get("row_count", 0) if isinstance(exec_result.get("data"), dict) else 0
-                        )
-                        
-                        # 构建缓存命中响应
-                        cache_hit.result = {
-                            "success": True,
-                            "data": exec_result.get("data")
-                        }
-                        response_content = format_cached_response(cache_hit, connection_id)
-                        ai_message = AIMessage(content=response_content)
-                        
-                        return {
-                            "cache_hit": True,
-                            "cache_hit_type": cache_hit.hit_type,
-                            "generated_sql": cache_hit.sql,
-                            "execution_result": execution_result,
-                            "current_stage": "completed",
-                            "messages": list(messages) + [ai_message]
-                        }
-                    else:
-                        # SQL 执行失败，重新开始完整流程（数据库schema可能已变更）
-                        logger.warning(f"缓存 SQL 执行失败: {exec_result.get('error')}")
-                        logger.info("缓存SQL可能已过时，将重新分析数据库schema并生成新的SQL")
-                        
-                        # ✅ 清理并验证消息历史，移除不完整的tool_calls
-                        from app.core.message_utils import validate_and_fix_message_history
-                        clean_messages = validate_and_fix_message_history(list(messages))
-                        
-                        return {
-                            "cache_hit": False,
-                            "cache_hit_type": None,  # 标记为完全未命中
-                            "current_stage": "schema_analysis",  # 从schema分析重新开始
-                            "messages": clean_messages  # 返回清理后的消息历史
-                        }
-                        
-                except Exception as e:
-                    logger.error(f"缓存 SQL 执行异常: {e}")
-                    logger.info("缓存SQL执行异常，将重新分析数据库schema并生成新的SQL")
-                    
-                    # ✅ 清理并验证消息历史，移除不完整的tool_calls
-                    from app.core.message_utils import validate_and_fix_message_history
-                    clean_messages = validate_and_fix_message_history(list(messages))
-                    
-                    return {
-                        "cache_hit": False,
-                        "cache_hit_type": None,  # 标记为完全未命中
-                        "current_stage": "schema_analysis",  # 从schema分析重新开始
-                        "messages": clean_messages  # 返回清理后的消息历史
-                    }
-
-            # 有执行结果，直接返回缓存结果并结束
-            # ✅ 清理并验证消息历史，移除不完整的tool_calls
-            from app.core.message_utils import validate_and_fix_message_history
-            clean_messages = validate_and_fix_message_history(list(messages))
-            
-            response_content = format_cached_response(cache_hit, connection_id)
-            ai_message = AIMessage(content=response_content)
-            
-            updates = {
-                "cache_hit": True,
-                "cache_hit_type": cache_hit.hit_type,
-                "generated_sql": cache_hit.sql,
-                "current_stage": "completed",  # ✅ 修复：使用正确的stage值
-                "execution_result": SQLExecutionResult(
-                    success=cache_hit.result.get("success", True) if isinstance(cache_hit.result, dict) else True,
-                    data=cache_hit.result.get("data") if isinstance(cache_hit.result, dict) else cache_hit.result,
-                    error=cache_hit.result.get("error") if isinstance(cache_hit.result, dict) else None
-                ),
-                "messages": clean_messages + [ai_message]  # ✅ 使用清理后的消息历史
-            }
-            
-            return updates
+        elapsed_ms = int((time.time() - start_time) * 1000)
         
-        else:
-            logger.info("缓存未命中，继续正常流程")
+        if not cache_hit:
+            logger.info(f"缓存未命中 (耗时: {elapsed_ms}ms)")
             
-            # ✅ 即使缓存未命中，也清理消息历史中的不完整tool_calls
+            # 清理消息历史
             from app.core.message_utils import validate_and_fix_message_history
             clean_messages = validate_and_fix_message_history(list(messages))
             
@@ -329,11 +336,142 @@ async def cache_check_node(state: SQLMessageState) -> Dict[str, Any]:
                 "cache_hit_type": None,
                 "messages": clean_messages
             }
+        
+        logger.info(f"缓存命中! type={cache_hit.hit_type}, similarity={cache_hit.similarity:.3f}")
+        
+        # ====================================================================
+        # 区分精确命中和语义命中
+        # ====================================================================
+        
+        is_exact_hit = (
+            cache_hit.hit_type == "exact" or 
+            cache_hit.hit_type == "exact_text" or
+            cache_hit.similarity >= 1.0
+        )
+        
+        if is_exact_hit:
+            # ================================================================
+            # 精确命中: 执行SQL，发送流式事件，直接返回结果
+            # ================================================================
+            logger.info("精确缓存命中，执行SQL并返回结果")
+            
+            clean_sql = _clean_sql(cache_hit.sql)
+            
+            # 执行 SQL
+            exec_result = None
+            if cache_hit.result is None:
+                try:
+                    from app.agents.agents.sql_executor_agent import execute_sql_query
+                    
+                    exec_result_str = execute_sql_query.invoke({
+                        "sql_query": clean_sql,
+                        "connection_id": connection_id,
+                        "timeout": 30
+                    })
+                    
+                    exec_result = json.loads(exec_result_str) if isinstance(exec_result_str, str) else exec_result_str
+                    
+                    if not exec_result.get("success"):
+                        # SQL 执行失败，可能是schema变更，降级为未命中
+                        logger.warning(f"缓存 SQL 执行失败: {exec_result.get('error')}")
+                        
+                        from app.core.message_utils import validate_and_fix_message_history
+                        clean_messages = validate_and_fix_message_history(list(messages))
+                        
+                        return {
+                            "cache_hit": False,
+                            "cache_hit_type": None,
+                            "messages": clean_messages
+                        }
+                        
+                except Exception as e:
+                    logger.error(f"缓存 SQL 执行异常: {e}")
+                    
+                    from app.core.message_utils import validate_and_fix_message_history
+                    clean_messages = validate_and_fix_message_history(list(messages))
+                    
+                    return {
+                        "cache_hit": False,
+                        "cache_hit_type": None,
+                        "messages": clean_messages
+                    }
+            else:
+                exec_result = cache_hit.result
+            
+            # 发送流式事件（使用注入的 StreamWriter）
+            _send_cache_hit_stream_events(
+                writer=writer,
+                cache_hit=cache_hit,
+                exec_result=exec_result,
+                connection_id=connection_id,
+                elapsed_ms=elapsed_ms,
+                user_query=user_query
+            )
+            
+            # 构建执行结果
+            execution_result = SQLExecutionResult(
+                success=True,
+                data=exec_result.get("data") if isinstance(exec_result, dict) else exec_result,
+                error=None,
+                execution_time=exec_result.get("execution_time", 0) if isinstance(exec_result, dict) else 0,
+                rows_affected=exec_result.get("data", {}).get("row_count", 0) if isinstance(exec_result, dict) else 0
+            )
+            
+            # 构建 AI 消息
+            response_content = f"""✨ **缓存命中** (精确匹配)
+
+**SQL 查询:**
+```sql
+{cache_hit.sql}
+```
+
+查询已执行，结果已通过图表展示。"""
+            
+            ai_message = AIMessage(content=response_content)
+            
+            from app.core.message_utils import validate_and_fix_message_history
+            clean_messages = validate_and_fix_message_history(list(messages))
+            
+            return {
+                "cache_hit": True,
+                "cache_hit_type": "exact",
+                "generated_sql": cache_hit.sql,
+                "execution_result": execution_result,
+                "current_stage": "completed",
+                "messages": clean_messages + [ai_message]
+            }
+        
+        else:
+            # ================================================================
+            # 语义命中: 保存SQL模板，进入澄清节点确认
+            # ================================================================
+            logger.info(f"语义缓存命中 (相似度: {cache_hit.similarity:.1%})，保存SQL模板进入澄清")
+            
+            # 发送语义命中事件（使用注入的 StreamWriter）
+            from app.schemas.stream_events import create_cache_hit_event
+            
+            writer(create_cache_hit_event(
+                hit_type="semantic",
+                similarity=cache_hit.similarity,
+                original_query=cache_hit.query[:100] if cache_hit.query else None,
+                time_ms=elapsed_ms
+            ))
+            
+            from app.core.message_utils import validate_and_fix_message_history
+            clean_messages = validate_and_fix_message_history(list(messages))
+            
+            return {
+                "cache_hit": True,
+                "cache_hit_type": "semantic",
+                "cached_sql_template": cache_hit.sql,  # 保存模板供后续使用
+                "cache_similarity": cache_hit.similarity,
+                "cache_matched_query": cache_hit.query,
+                "messages": clean_messages
+            }
             
     except Exception as e:
         logger.error(f"缓存检查失败: {e}")
         
-        # ✅ 异常情况下也清理消息历史
         from app.core.message_utils import validate_and_fix_message_history
         messages = state.get("messages", [])
         clean_messages = validate_and_fix_message_history(list(messages))
@@ -345,23 +483,25 @@ async def cache_check_node(state: SQLMessageState) -> Dict[str, Any]:
         }
 
 
-def cache_check_node_sync(state: SQLMessageState) -> Dict[str, Any]:
+def cache_check_node_sync(state: SQLMessageState, writer: StreamWriter) -> Dict[str, Any]:
     """
     缓存检查节点的同步包装器
     
-    用于在同步上下文中调用异步的 cache_check_node
+    注意: 此包装器主要用于兼容性。在 LangGraph 中建议直接使用异步版本。
+    
+    Args:
+        state: 当前的 SQL 消息状态
+        writer: LangGraph StreamWriter
     """
     import asyncio
     
     try:
         loop = asyncio.get_running_loop()
-        # 有运行中的事件循环，使用 run_coroutine_threadsafe
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(
-                lambda: asyncio.run(cache_check_node(state))
+                lambda: asyncio.run(cache_check_node(state, writer))
             )
             return future.result(timeout=10)
     except RuntimeError:
-        # 没有运行中的事件循环
-        return asyncio.run(cache_check_node(state))
+        return asyncio.run(cache_check_node(state, writer))

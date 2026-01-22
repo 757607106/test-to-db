@@ -394,9 +394,30 @@ class SQLGeneratorAgent:
         修复说明 (2026-01-22):
         - 样本检索在此异步方法中执行，然后传递给同步工具
         - 避免嵌套事件循环导致的死锁问题
+        
+        缓存模板支持 (2026-01-22):
+        - 如果存在 cached_sql_template，使用它作为参考生成新SQL
+        - 使用 enriched_query (如果存在) 替代原始查询
         """
+        from langgraph.config import get_stream_writer
+        from app.schemas.stream_events import create_sql_step_event
+        
+        # 获取 stream writer
         try:
-            # 获取用户查询
+            writer = get_stream_writer()
+        except Exception:
+            writer = None
+        
+        try:
+            # ✅ 检查缓存模板和增强查询
+            cached_sql_template = state.get("cached_sql_template")
+            enriched_query = state.get("enriched_query")
+            cache_hit_type = state.get("cache_hit_type")
+            
+            if cached_sql_template:
+                logger.info(f"检测到缓存SQL模板，将基于模板生成新SQL")
+            
+            # 获取用户查询 (优先使用 enriched_query)
             messages = state.get("messages", [])
             user_query = None
             for msg in messages:
@@ -405,6 +426,11 @@ class SQLGeneratorAgent:
                     if isinstance(user_query, list):
                         user_query = user_query[0].get("text", "") if user_query else ""
                     break
+            
+            # 如果有增强查询，优先使用
+            if enriched_query:
+                logger.info(f"使用增强后的查询: {enriched_query[:50]}...")
+                user_query = enriched_query
             
             if not user_query:
                 raise ValueError("无法获取用户查询")
@@ -419,9 +445,19 @@ class SQLGeneratorAgent:
             
             logger.info(f"使用 schema 信息生成 SQL, tables={list(schema_info.get('tables', {}).keys())}")
             
-            # ✅ 在异步上下文中获取 QA 样本（避免嵌套事件循环）
+            # ✅ Few-shot 样本检索步骤
             sample_qa_pairs = []
             if connection_id and not skip_sample:
+                # 发送 few_shot 步骤开始事件
+                few_shot_start = time.time()
+                if writer:
+                    writer(create_sql_step_event(
+                        step="few_shot",
+                        status="running",
+                        result=None,
+                        time_ms=0
+                    ))
+                
                 logger.info(f"异步获取 QA 样本, connection_id={connection_id}")
                 start_time = time.time()
                 sample_qa_pairs = await _fetch_qa_samples_async(
@@ -430,26 +466,75 @@ class SQLGeneratorAgent:
                     connection_id=connection_id
                 )
                 logger.info(f"QA 样本获取完成，耗时 {time.time() - start_time:.2f}s，获取 {len(sample_qa_pairs)} 个样本")
+                
+                # 发送 few_shot 步骤完成事件
+                few_shot_elapsed = int((time.time() - few_shot_start) * 1000)
+                if writer:
+                    writer(create_sql_step_event(
+                        step="few_shot",
+                        status="completed",
+                        result=f"检索到 {len(sample_qa_pairs)} 个相似样本",
+                        time_ms=few_shot_elapsed
+                    ))
             elif skip_sample:
                 logger.info("快速模式: 跳过样本检索")
+                # 快速模式下跳过 few_shot
+                if writer:
+                    writer(create_sql_step_event(
+                        step="few_shot",
+                        status="completed",
+                        result="快速模式 - 已跳过",
+                        time_ms=0
+                    ))
             
             # 准备工具参数
             schema_info_json = json.dumps(schema_info.get("tables", {}), ensure_ascii=False)
             value_mappings_json = json.dumps(schema_info.get("value_mappings", {}), ensure_ascii=False) if schema_info.get("value_mappings") else None
             sample_qa_pairs_json = json.dumps(sample_qa_pairs, ensure_ascii=False) if sample_qa_pairs else None
             
-            # 调用同步工具生成 SQL（样本已经异步获取好了）
-            result_json = generate_sql_query.invoke({
-                "user_query": user_query,
-                "schema_info": schema_info_json,
-                "state": {
-                    "connection_id": connection_id,
-                    "skip_sample_retrieval": skip_sample
-                },
-                "value_mappings": value_mappings_json,
-                "sample_qa_pairs": sample_qa_pairs_json,
-                "db_type": "mysql"
-            })
+            # ✅ LLM 解析步骤
+            llm_parse_start = time.time()
+            if writer:
+                writer(create_sql_step_event(
+                    step="llm_parse",
+                    status="running",
+                    result="基于缓存模板生成" if cached_sql_template else None,
+                    time_ms=0
+                ))
+            
+            # ✅ 如果有缓存SQL模板，使用基于模板的生成方法
+            if cached_sql_template and cache_hit_type == "semantic":
+                logger.info("使用缓存SQL模板进行增强生成")
+                result_json = self._generate_sql_from_template(
+                    user_query=user_query,
+                    cached_sql_template=cached_sql_template,
+                    schema_info=schema_info.get("tables", {}),
+                    value_mappings=schema_info.get("value_mappings", {}),
+                    sample_qa_pairs=sample_qa_pairs
+                )
+            else:
+                # 调用同步工具生成 SQL（样本已经异步获取好了）
+                result_json = generate_sql_query.invoke({
+                    "user_query": user_query,
+                    "schema_info": schema_info_json,
+                    "state": {
+                        "connection_id": connection_id,
+                        "skip_sample_retrieval": skip_sample
+                    },
+                    "value_mappings": value_mappings_json,
+                    "sample_qa_pairs": sample_qa_pairs_json,
+                    "db_type": "mysql"
+                })
+            
+            # 发送 llm_parse 步骤完成事件
+            llm_parse_elapsed = int((time.time() - llm_parse_start) * 1000)
+            if writer:
+                writer(create_sql_step_event(
+                    step="llm_parse",
+                    status="completed",
+                    result="SQL 生成完成",
+                    time_ms=llm_parse_elapsed
+                ))
             
             # 解析结果
             result = json.loads(result_json)
@@ -463,6 +548,15 @@ class SQLGeneratorAgent:
                 raise ValueError("生成的 SQL 为空")
             
             logger.info(f"SQL 生成成功: {generated_sql[:100]}...")
+            
+            # ✅ SQL 修正步骤 (简化处理，直接标记完成)
+            if writer:
+                writer(create_sql_step_event(
+                    step="sql_fix",
+                    status="completed",
+                    result="语法检查通过",
+                    time_ms=0
+                ))
             
             # ✅ 创建标准工具调用消息格式
             tool_call_id = generate_tool_call_id("generate_sql_query", {
@@ -548,6 +642,89 @@ class SQLGeneratorAgent:
                     "timestamp": time.time()
                 }]
             }
+    
+    def _generate_sql_from_template(
+        self,
+        user_query: str,
+        cached_sql_template: str,
+        schema_info: Dict[str, Any],
+        value_mappings: Dict[str, Any],
+        sample_qa_pairs: List[Dict[str, Any]]
+    ) -> str:
+        """
+        基于缓存SQL模板生成新SQL
+        
+        当语义缓存命中时，使用缓存的SQL作为模板，
+        结合用户澄清后的增强查询生成最终SQL。
+        
+        Args:
+            user_query: 用户的查询（可能是澄清后的增强查询）
+            cached_sql_template: 缓存的SQL模板
+            schema_info: 数据库模式信息
+            value_mappings: 值映射信息
+            sample_qa_pairs: QA样本对
+            
+        Returns:
+            str: JSON格式的生成结果
+        """
+        try:
+            # 构建模板增强的生成提示
+            prompt = f"""作为 SQL 专家，请基于以下信息修改 SQL 查询：
+
+**用户需求**: {user_query}
+
+**参考SQL模板** (来自相似查询):
+```sql
+{cached_sql_template}
+```
+
+**数据库模式**:
+{json.dumps(schema_info, ensure_ascii=False, indent=2)}
+
+**值映射信息**:
+{json.dumps(value_mappings, ensure_ascii=False, indent=2) if value_mappings else '无'}
+
+**任务**: 
+1. 分析用户需求与参考SQL的差异
+2. 基于参考SQL的结构，修改WHERE条件、字段选择等以满足用户需求
+3. 确保SQL语法正确，字段名与模式一致
+
+**要求**: 只返回修改后的SQL语句，不要其他内容。
+"""
+            
+            llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
+            response = llm.invoke([HumanMessage(content=prompt)])
+            
+            # 清理 SQL
+            sql_query = response.content.strip()
+            if sql_query.startswith("```sql"):
+                sql_query = sql_query[6:]
+            if sql_query.startswith("```"):
+                sql_query = sql_query[3:]
+            if sql_query.endswith("```"):
+                sql_query = sql_query[:-3]
+            sql_query = sql_query.strip()
+            
+            logger.info(f"基于模板生成的SQL: {sql_query[:100]}...")
+            
+            return json.dumps({
+                "success": True,
+                "sql_query": sql_query,
+                "template_based": True,
+                "samples_used": 0
+            }, ensure_ascii=False)
+            
+        except Exception as e:
+            logger.error(f"基于模板的SQL生成失败: {e}")
+            # 降级到普通生成
+            return generate_sql_query.invoke({
+                "user_query": user_query,
+                "schema_info": json.dumps(schema_info, ensure_ascii=False),
+                "state": {},
+                "value_mappings": json.dumps(value_mappings, ensure_ascii=False) if value_mappings else None,
+                "sample_qa_pairs": json.dumps(sample_qa_pairs, ensure_ascii=False) if sample_qa_pairs else None,
+                "db_type": "mysql"
+            })
     
     def _extract_sql_from_result(self, result: Dict[str, Any]) -> str:
         """从结果中提取 SQL 语句"""

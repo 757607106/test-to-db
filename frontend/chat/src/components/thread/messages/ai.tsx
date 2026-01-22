@@ -27,6 +27,8 @@ import {
   extractClarificationData 
 } from "./clarification-interrupt";
 import { useArtifact } from "../artifact";
+// 智能查询界面组件
+import { QueryProcessCard } from "./QueryProcessCard";
 
 function CustomComponent({
   message,
@@ -152,7 +154,15 @@ export function AssistantMessage({
   );
 
   const thread = useStreamContext();
+  const { queryContext } = thread;
   const messages = Array.isArray(thread.messages) ? thread.messages : [];
+  
+  // 检查是否有智能查询流程数据（用于隐藏原始工具调用显示）
+  const hasQueryProcess = Boolean(
+    queryContext?.intentAnalysis || 
+    queryContext?.sqlSteps?.length || 
+    queryContext?.dataQuery
+  );
   
   // 基础判断
   const isLastMessage = messages.length > 0 && messages[messages.length - 1]?.id === message?.id;
@@ -175,8 +185,8 @@ export function AssistantMessage({
     : undefined;
   const hasAnthropicToolCalls = anthropicStreamedToolCalls && anthropicStreamedToolCalls.length > 0;
 
-  // 如果隐藏工具调用且是工具结果，不渲染
-  if (isToolResult && hideToolCalls) {
+  // 如果隐藏工具调用且是工具结果，或者有智能查询流程且是工具结果，不渲染
+  if (isToolResult && (hideToolCalls || hasQueryProcess)) {
     return null;
   }
 
@@ -199,7 +209,17 @@ export function AssistantMessage({
   // 渲染 AI 消息
   return (
     <div className="group mr-auto flex w-full items-start gap-2">
-      <div className="flex w-full flex-col gap-2">
+      <div className="flex w-full flex-col gap-3">
+        {/* 统一的智能查询卡片 - 只在最后一条消息显示 */}
+        {isLastMessage && hasQueryProcess && (
+          <QueryProcessCard 
+            queryContext={queryContext}
+            onSelectQuestion={(question) => {
+              console.log("Selected question:", question);
+            }}
+          />
+        )}
+
         {/* 文本内容 */}
         {contentString.length > 0 && (
           <div className="py-1">
@@ -207,8 +227,8 @@ export function AssistantMessage({
           </div>
         )}
 
-        {/* 工具调用显示 - 简化条件判断 */}
-        {!hideToolCalls && (hasToolCalls || hasAnthropicToolCalls) && (
+        {/* 工具调用显示 - 当有智能查询流程时隐藏 */}
+        {!hideToolCalls && !hasQueryProcess && (hasToolCalls || hasAnthropicToolCalls) && (
           <ToolCalls 
             toolCalls={hasToolCalls ? (message as AIMessage).tool_calls : anthropicStreamedToolCalls} 
           />
@@ -251,13 +271,36 @@ export function AssistantMessage({
   );
 }
 
+// 执行阶段映射
+const STAGE_LABELS: Record<string, string> = {
+  clarification: "理解问题中...",
+  cache_check: "检查缓存...",
+  cache_hit: "命中缓存",
+  schema_analysis: "分析数据库结构...",
+  sample_retrieval: "检索相似查询...",
+  sql_generation: "生成 SQL 查询...",
+  sql_validation: "验证 SQL...",
+  sql_execution: "执行查询...",
+  analysis: "分析结果...",
+  chart_generation: "生成图表...",
+  error_recovery: "处理错误...",
+  completed: "完成",
+};
+
 export function AssistantMessageLoading() {
+  const { values } = useStreamContext();
+  const currentStage = (values as any)?.current_stage as string | undefined;
+  const stageLabel = currentStage ? STAGE_LABELS[currentStage] || "处理中..." : "思考中...";
+
   return (
     <div className="mr-auto flex items-start gap-2">
-      <div className="bg-muted flex h-8 items-center gap-1 rounded-2xl px-4 py-2">
-        <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_infinite] rounded-full"></div>
-        <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_0.5s_infinite] rounded-full"></div>
-        <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_1s_infinite] rounded-full"></div>
+      <div className="bg-muted flex h-auto items-center gap-2 rounded-2xl px-4 py-2">
+        <div className="flex items-center gap-1">
+          <div className="bg-blue-500 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_infinite] rounded-full"></div>
+          <div className="bg-blue-500 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_0.5s_infinite] rounded-full"></div>
+          <div className="bg-blue-500 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_1s_infinite] rounded-full"></div>
+        </div>
+        <span className="text-sm text-muted-foreground">{stageLabel}</span>
       </div>
     </div>
   );

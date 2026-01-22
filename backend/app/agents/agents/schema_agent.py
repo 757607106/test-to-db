@@ -217,7 +217,27 @@ class SchemaAnalysisAgent:
     
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
         """处理 Schema 分析任务 - 返回标准工具调用格式"""
+        import time
+        from langgraph.config import get_stream_writer
+        from app.schemas.stream_events import create_sql_step_event
+        
         try:
+            # 获取 stream writer
+            try:
+                writer = get_stream_writer()
+            except Exception:
+                writer = None
+            
+            # 发送 schema_mapping 步骤开始事件
+            step_start_time = time.time()
+            if writer:
+                writer(create_sql_step_event(
+                    step="schema_mapping",
+                    status="running",
+                    result=None,
+                    time_ms=0
+                ))
+            
             # 获取用户查询
             messages = state.get("messages", [])
             user_query = None
@@ -250,6 +270,16 @@ class SchemaAnalysisAgent:
             # 提取 schema 信息
             schema_context = schema_result.get("schema_context", {})
             value_mappings = schema_result.get("value_mappings", {})
+            
+            # 计算耗时并发送完成事件
+            elapsed_ms = int((time.time() - step_start_time) * 1000)
+            if writer:
+                writer(create_sql_step_event(
+                    step="schema_mapping",
+                    status="completed",
+                    result=f"获取到 {len(schema_context)} 个相关表",
+                    time_ms=elapsed_ms
+                ))
             
             logger.info(f"Schema 获取成功: {len(schema_context)} 个表")
             
@@ -307,6 +337,15 @@ class SchemaAnalysisAgent:
             
         except Exception as e:
             logger.error(f"Schema 分析失败: {str(e)}")
+            
+            # 发送错误事件
+            if writer:
+                writer(create_sql_step_event(
+                    step="schema_mapping",
+                    status="error",
+                    result=str(e),
+                    time_ms=0
+                ))
             
             # 错误时也返回标准格式
             error_tool_call_id = generate_tool_call_id("retrieve_database_schema", {"error": str(e)})

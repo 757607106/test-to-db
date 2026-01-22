@@ -132,7 +132,17 @@ class SQLMessageState(TypedDict, total=False):
     # 缓存相关字段
     # ==========================================
     cache_hit: bool
-    cache_hit_type: Optional[Literal["exact", "semantic", "exact_text"]]
+    cache_hit_type: Optional[Literal["exact", "semantic", "exact_text", "thread_history"]]
+    
+    # Thread 历史缓存 (同一对话内相同问题)
+    thread_history_hit: bool
+    
+    # 缓存的 SQL 模板 (语义命中时保存，供澄清后重新生成使用)
+    cached_sql_template: Optional[str]
+    
+    # 语义缓存命中详情
+    cache_similarity: Optional[float]  # 语义相似度
+    cache_matched_query: Optional[str]  # 匹配的原始查询
     
     # ==========================================
     # 快速模式字段 (借鉴官方简洁性思想)

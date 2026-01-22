@@ -45,6 +45,11 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
     - 返回 dict (部分状态更新，LangGraph自动合并)
     - 使用 interrupt() 暂停执行等待用户输入
     
+    缓存感知逻辑:
+    - 语义命中 (semantic): 检测是否需要澄清，澄清后基于缓存模板生成SQL
+    - 未命中: 正常澄清流程
+    - 精确命中: 不会进入此节点 (已在cache_check_node结束)
+    
     Args:
         state: 当前SQL消息状态
         
@@ -54,8 +59,18 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
             - original_query: 原始查询
             - clarification_responses: 用户回复
             - current_stage: 当前阶段
+            - cached_sql_template: 缓存的SQL模板 (语义命中时保留)
     """
     logger.info("=== 澄清节点 (LangGraph标准模式) ===")
+    
+    # 检查缓存命中类型
+    cache_hit_type = state.get("cache_hit_type")
+    cached_sql_template = state.get("cached_sql_template")
+    cache_similarity = state.get("cache_similarity", 0)
+    cache_matched_query = state.get("cache_matched_query")
+    
+    if cache_hit_type == "semantic":
+        logger.info(f"语义缓存命中 (相似度: {cache_similarity:.1%})，检查是否需要澄清差异")
     
     # 1. 提取用户查询
     messages = state.get("messages", [])
@@ -82,35 +97,53 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
     # 3. 快速预检查 (性能优化)
     if should_skip_clarification(user_query):
         logger.info("查询明确，快速跳过澄清")
-        return {
+        base_result = {
             "original_query": user_query,
             "current_stage": "schema_analysis"
         }
+        # 如果有语义缓存命中，保留SQL模板
+        if cache_hit_type == "semantic" and cached_sql_template:
+            base_result["cached_sql_template"] = cached_sql_template
+            base_result["enriched_query"] = user_query  # 使用原查询，不修改
+        return base_result
     
     # 4. LLM检测是否需要澄清
     connection_id = state.get("connection_id", 15)
     
     try:
+        # 如果是语义命中，可以将匹配的原查询作为上下文
+        check_context = {}
+        if cache_hit_type == "semantic" and cache_matched_query:
+            check_context["matched_similar_query"] = cache_matched_query
+        
         check_result = quick_clarification_check(
             query=user_query,
             connection_id=connection_id
         )
     except Exception as e:
         logger.error(f"澄清检测失败: {e}", exc_info=True)
-        return {
+        base_result = {
             "original_query": user_query,
             "current_stage": "schema_analysis"
         }
+        if cache_hit_type == "semantic" and cached_sql_template:
+            base_result["cached_sql_template"] = cached_sql_template
+            base_result["enriched_query"] = user_query
+        return base_result
     
     needs_clarification = check_result.get("needs_clarification", False)
     questions = check_result.get("questions", [])
     
     if not needs_clarification or not questions:
         logger.info(f"不需要澄清: {check_result.get('reason', '')}")
-        return {
+        base_result = {
             "original_query": user_query,
             "current_stage": "schema_analysis"
         }
+        if cache_hit_type == "semantic" and cached_sql_template:
+            base_result["cached_sql_template"] = cached_sql_template
+            base_result["enriched_query"] = user_query
+        return base_result
     
     # 5. 格式化澄清问题
     formatted_questions = format_clarification_questions(questions)
@@ -118,17 +151,21 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
     logger.info(f"需要澄清，生成 {len(formatted_questions)} 个问题，使用interrupt()暂停执行")
     
     # ✅ 6. 使用interrupt()暂停执行，等待用户确认 (LangGraph标准模式)
-    # interrupt()会:
-    # 1. 暂停图执行
-    # 2. 将数据返回给客户端
-    # 3. 等待客户端通过Command(resume=...)恢复执行
-    # 4. user_response接收用户的输入
-    user_response = interrupt({
+    # 如果是语义命中，告知用户这是基于相似查询
+    interrupt_data = {
         "type": "clarification_request",
         "questions": formatted_questions,
         "reason": check_result.get("reason", "查询存在模糊性，需要澄清"),
         "original_query": user_query
-    })
+    }
+    
+    if cache_hit_type == "semantic":
+        interrupt_data["semantic_match"] = {
+            "similarity": cache_similarity,
+            "matched_query": cache_matched_query
+        }
+    
+    user_response = interrupt(interrupt_data)
     
     # 执行到这里说明用户已经回复了
     logger.info(f"收到用户澄清回复: {user_response}")
@@ -156,12 +193,19 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
     logger.info(f"增强后查询: {enriched_query[:100]}...")
     
     # ✅ 9. 返回状态更新 (LangGraph标准 - 只返回需要更新的字段)
-    return {
+    result = {
         "clarification_responses": parsed_answers,
         "enriched_query": enriched_query,
         "original_query": user_query,
         "current_stage": "schema_analysis"
     }
+    
+    # 如果是语义命中，保留SQL模板供sql_generator_agent使用
+    if cache_hit_type == "semantic" and cached_sql_template:
+        result["cached_sql_template"] = cached_sql_template
+        logger.info("保留缓存SQL模板供后续SQL生成参考")
+    
+    return result
 
 
 def should_enter_clarification(state: SQLMessageState) -> bool:

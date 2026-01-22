@@ -4,6 +4,7 @@ import React, {
   ReactNode,
   useState,
   useEffect,
+  useCallback,
 } from "react";
 import { useStream, type UseStream } from "@langchain/langgraph-sdk/react";
 import { type Message } from "@langchain/langgraph-sdk";
@@ -24,8 +25,21 @@ import { PasswordInput } from "@/components/ui/password-input";
 import { getApiKey } from "@/lib/api-key";
 import { useThreads } from "./Thread";
 import { toast } from "sonner";
+import {
+  type QueryContext,
+  type StreamEvent,
+  type CacheHitEvent,
+  createEmptyQueryContext,
+  isStreamEvent,
+} from "@/types/stream-events";
 
 export type StateType = { messages: Message[]; ui?: UIMessage[] };
+
+// 扩展的上下文类型，包含查询上下文
+export type ExtendedStreamContextType = StreamContextType & {
+  queryContext: QueryContext;
+  resetQueryContext: () => void;
+};
 
 const useTypedStream = useStream<
   StateType,
@@ -50,7 +64,7 @@ type BagType = {
   CustomEventType: UIMessage | RemoveUIMessage;
 };
 type StreamContextType = UseStream<StateType, BagType>;
-const StreamContext = createContext<StreamContextType | undefined>(undefined);
+const StreamContext = createContext<ExtendedStreamContextType | undefined>(undefined);
 
 async function sleep(ms = 4000) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -89,6 +103,15 @@ const StreamSession = ({
 }) => {
   const [threadId, setThreadId] = useQueryState("threadId");
   const { getThreads, setThreads } = useThreads();
+  
+  // 查询上下文状态 - 用于存储流式事件数据
+  const [queryContext, setQueryContext] = useState<QueryContext>(createEmptyQueryContext());
+  
+  // 重置查询上下文
+  const resetQueryContext = useCallback(() => {
+    setQueryContext(createEmptyQueryContext());
+  }, []);
+  
   const streamValue = useTypedStream({
     apiUrl,
     apiKey: apiKey ?? undefined,
@@ -96,15 +119,74 @@ const StreamSession = ({
     threadId: threadId ?? null,
     fetchStateHistory: true,
     onCustomEvent: (event, options) => {
+      // 处理 UI 消息
       if (isUIMessage(event) || isRemoveUIMessage(event)) {
         options.mutate((prev) => {
           const ui = uiMessageReducer(prev.ui ?? [], event);
           return { ...prev, ui };
         });
+        return;
+      }
+      
+      // 处理流式事件
+      if (isStreamEvent(event)) {
+        const streamEvent = event as StreamEvent;
+        
+        switch (streamEvent.type) {
+          case "cache_hit":
+            // 缓存命中事件 - 新增
+            setQueryContext(prev => ({
+              ...prev,
+              cacheHit: streamEvent
+            }));
+            break;
+            
+          case "intent_analysis":
+            setQueryContext(prev => ({
+              ...prev,
+              intentAnalysis: streamEvent
+            }));
+            break;
+            
+          case "sql_step":
+            setQueryContext(prev => {
+              // 更新或添加步骤
+              const existingIndex = prev.sqlSteps.findIndex(
+                s => s.step === streamEvent.step
+              );
+              
+              if (existingIndex >= 0) {
+                // 更新现有步骤
+                const newSteps = [...prev.sqlSteps];
+                newSteps[existingIndex] = streamEvent;
+                return { ...prev, sqlSteps: newSteps };
+              } else {
+                // 添加新步骤
+                return { ...prev, sqlSteps: [...prev.sqlSteps, streamEvent] };
+              }
+            });
+            break;
+            
+          case "data_query":
+            setQueryContext(prev => ({
+              ...prev,
+              dataQuery: streamEvent
+            }));
+            break;
+            
+          case "similar_questions":
+            setQueryContext(prev => ({
+              ...prev,
+              similarQuestions: streamEvent
+            }));
+            break;
+        }
       }
     },
     onThreadId: (id) => {
       setThreadId(id);
+      // 新对话时重置查询上下文
+      resetQueryContext();
       // Refetch threads list when thread ID changes.
       // Wait for some seconds before fetching so we're able to get the new thread that was created.
       sleep().then(() => getThreads().then(setThreads).catch(console.error));
@@ -115,6 +197,13 @@ const StreamSession = ({
       sleep(1000).then(() => getThreads().then(setThreads).catch(console.error));
     },
   });
+  
+  // 合并 streamValue 和 queryContext
+  const extendedValue: ExtendedStreamContextType = {
+    ...streamValue,
+    queryContext,
+    resetQueryContext,
+  };
 
   useEffect(() => {
     checkGraphStatus(apiUrl, apiKey).then((ok) => {
@@ -135,7 +224,7 @@ const StreamSession = ({
   }, [apiKey, apiUrl]);
 
   return (
-    <StreamContext.Provider value={streamValue}>
+    <StreamContext.Provider value={extendedValue}>
       {children}
     </StreamContext.Provider>
   );
@@ -269,7 +358,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
 };
 
 // Create a custom hook to use the context
-export const useStreamContext = (): StreamContextType => {
+export const useStreamContext = (): ExtendedStreamContextType => {
   const context = useContext(StreamContext);
   if (context === undefined) {
     throw new Error("useStreamContext must be used within a StreamProvider");

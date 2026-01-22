@@ -28,10 +28,12 @@ import re
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import StreamWriter
 from langchain_core.messages import AIMessage
 
 from app.core.state import SQLMessageState, detect_fast_mode
 from app.agents.agents.supervisor_agent import SupervisorAgent, create_intelligent_sql_supervisor
+from app.agents.nodes.thread_history_check_node import thread_history_check_node
 from app.agents.nodes.clarification_node import clarification_node
 from app.agents.nodes.cache_check_node import cache_check_node
 from app.models.agent_profile import AgentProfile
@@ -203,6 +205,17 @@ class IntelligentSQLGraph:
         修复说明 (2026-01-22):
         - 添加意图路由节点
         - 添加 checkpointer 回退机制，确保 interrupt 能正常工作
+        - 添加 thread_history_check 节点，实现三级缓存策略
+        
+        图结构:
+        START → intent_router → [data_query_flow | general_chat → END]
+        data_query_flow: load_custom_agent → fast_mode_detect → thread_history_check 
+                         → cache_check → clarification → supervisor → END
+        
+        三级缓存策略:
+        1. Thread 历史检查 (thread_history_check) - 同一对话内相同问题
+        2. 全局精确缓存 (cache_check) - query_cache_service
+        3. 全局语义缓存 (cache_check) - Milvus 向量检索
         
         Args:
             checkpointer: 可选的 checkpointer，如果不提供则使用默认值
@@ -217,8 +230,10 @@ class IntelligentSQLGraph:
         # 数据查询流程节点
         graph.add_node("load_custom_agent", self._load_custom_agent_node)
         graph.add_node("fast_mode_detect", self._fast_mode_detect_node)
-        graph.add_node("clarification", clarification_node)
+        # 三级缓存节点
+        graph.add_node("thread_history_check", thread_history_check_node)
         graph.add_node("cache_check", cache_check_node)
+        graph.add_node("clarification", clarification_node)
         graph.add_node("supervisor", self._supervisor_node)
         
         # ============== 设置入口点 ==============
@@ -238,20 +253,33 @@ class IntelligentSQLGraph:
         # 闲聊直接结束
         graph.add_edge("general_chat", END)
         
-        # 数据查询流程
+        # 数据查询流程 (新顺序)
+        # load_custom_agent → fast_mode_detect → thread_history_check
         graph.add_edge("load_custom_agent", "fast_mode_detect")
-        graph.add_edge("fast_mode_detect", "clarification")
-        graph.add_edge("clarification", "cache_check")
+        graph.add_edge("fast_mode_detect", "thread_history_check")
         
-        # 条件边: cache_check → [supervisor | END]
+        # 条件边: thread_history_check → [END | cache_check]
+        graph.add_conditional_edges(
+            "thread_history_check",
+            self._after_thread_history_check,
+            {
+                "cache_check": "cache_check",
+                "end": END
+            }
+        )
+        
+        # 条件边: cache_check → [clarification | END]
         graph.add_conditional_edges(
             "cache_check",
             self._after_cache_check,
             {
-                "supervisor": "supervisor",
+                "clarification": "clarification",
                 "end": END
             }
         )
+        
+        # clarification → supervisor
+        graph.add_edge("clarification", "supervisor")
         
         # supervisor → END
         graph.add_edge("supervisor", END)
@@ -282,13 +310,101 @@ class IntelligentSQLGraph:
             self.graph = self._create_graph_sync()
             self._initialized = True
     
-    async def _intent_router_node(self, state: SQLMessageState) -> Dict[str, Any]:
+    def _extract_metrics(self, query: str) -> List[str]:
+        """
+        从用户查询中提取指标
+        """
+        metrics = []
+        metric_keywords = {
+            "销售额": "销售额",
+            "销量": "销量",
+            "访问量": "访问量",
+            "访问次数": "访问次数",
+            "用户数": "用户数",
+            "订单数": "订单数",
+            "金额": "金额",
+            "数量": "数量",
+            "总数": "总数",
+            "平均": "平均值",
+            "最大": "最大值",
+            "最小": "最小值",
+        }
+        for keyword, metric_name in metric_keywords.items():
+            if keyword in query:
+                metrics.append(metric_name)
+        return metrics if metrics else ["默认指标"]
+    
+    def _extract_filters(self, query: str) -> Dict[str, Any]:
+        """
+        从用户查询中提取筛选条件
+        """
+        import re
+        from datetime import datetime, timedelta
+        
+        filters = {}
+        
+        # 提取日期范围
+        date_patterns = [
+            r'(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})[日号]?',
+            r'最近(\d+)(天|周|月|年)',
+            r'近(\d+)(天|周|月|年)',
+            r'过去(\d+)(天|周|月|年)',
+        ]
+        
+        dates_found = re.findall(date_patterns[0], query)
+        if dates_found:
+            filters["date_range"] = [f"{d[0]}-{d[1].zfill(2)}-{d[2].zfill(2)}" for d in dates_found[:2]]
+        
+        # 检查相对时间
+        for pattern in date_patterns[1:]:
+            match = re.search(pattern, query)
+            if match:
+                num = int(match.group(1))
+                unit = match.group(2)
+                today = datetime.now()
+                if unit == "天":
+                    start = today - timedelta(days=num)
+                elif unit == "周":
+                    start = today - timedelta(weeks=num)
+                elif unit == "月":
+                    start = today - timedelta(days=num * 30)
+                else:  # 年
+                    start = today - timedelta(days=num * 365)
+                filters["date_range"] = [
+                    start.strftime("%Y-%m-%d"),
+                    today.strftime("%Y-%m-%d")
+                ]
+                break
+        
+        return filters
+    
+    def _detect_query_mode(self, query: str) -> str:
+        """
+        检测查询模式
+        """
+        aggregation_keywords = ["统计", "汇总", "总计", "合计", "平均", "最大", "最小", "趋势", "对比"]
+        if any(kw in query for kw in aggregation_keywords):
+            return "聚合模式"
+        return "明细模式"
+    
+    async def _intent_router_node(self, state: SQLMessageState, writer: StreamWriter) -> Dict[str, Any]:
         """
         意图路由节点 - 检测用户查询意图并设置路由决策
+        
+        遵循 LangGraph 官方规范：使用 StreamWriter 参数注入
+        
+        Args:
+            state: 当前状态
+            writer: LangGraph StreamWriter
         
         返回:
             route_decision: "data_query" | "general_chat"
         """
+        import time
+        from app.schemas.stream_events import create_intent_analysis_event
+        
+        start_time = time.time()
+        
         messages = state.get("messages", [])
         user_query = None
         
@@ -307,6 +423,37 @@ class IntelligentSQLGraph:
         intent = _detect_intent(user_query)
         logger.info(f"=== 意图识别: {intent} ===")
         logger.info(f"  查询: {user_query[:50]}...")
+        
+        # 如果是数据查询，发送意图解析流式事件（使用注入的 StreamWriter）
+        if intent == "data_query":
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            
+            # 获取数据集名称
+            connection_id = state.get("connection_id")
+            dataset_name = "默认数据集"
+            if connection_id:
+                try:
+                    from app.db.session import SessionLocal
+                    from app.crud.crud_db_connection import db_connection as crud_connection
+                    db = SessionLocal()
+                    try:
+                        conn = crud_connection.get(db=db, id=connection_id)
+                        if conn:
+                            dataset_name = conn.name or conn.database
+                    finally:
+                        db.close()
+                except Exception:
+                    pass
+            
+            # 发送意图解析事件（使用注入的 writer）
+            writer(create_intent_analysis_event(
+                dataset=dataset_name,
+                query_mode=self._detect_query_mode(user_query),
+                metrics=self._extract_metrics(user_query),
+                filters=self._extract_filters(user_query),
+                time_ms=elapsed_ms
+            ))
+            logger.info(f"✓ 已发送意图解析流式事件")
         
         return {"route_decision": intent}
     
@@ -372,6 +519,8 @@ class IntelligentSQLGraph:
         异步创建 LangGraph 状态图（用于需要自定义 checkpointer 的场景）
         
         使用 AsyncPostgresSaver 进行异步状态持久化
+        
+        图结构与 _create_graph_sync 保持一致，使用三级缓存策略
         """
         from app.core.checkpointer import get_checkpointer_async
         
@@ -380,27 +529,41 @@ class IntelligentSQLGraph:
         # 添加节点
         graph.add_node("load_custom_agent", self._load_custom_agent_node)
         graph.add_node("fast_mode_detect", self._fast_mode_detect_node)
-        graph.add_node("clarification", clarification_node)
+        # 三级缓存节点
+        graph.add_node("thread_history_check", thread_history_check_node)
         graph.add_node("cache_check", cache_check_node)
+        graph.add_node("clarification", clarification_node)
         graph.add_node("supervisor", self._supervisor_node)
         
         # 设置入口点
         graph.set_entry_point("load_custom_agent")
         
-        # 定义边
+        # 定义边 (新顺序)
         graph.add_edge("load_custom_agent", "fast_mode_detect")
-        graph.add_edge("fast_mode_detect", "clarification")
-        graph.add_edge("clarification", "cache_check")
+        graph.add_edge("fast_mode_detect", "thread_history_check")
         
-        # 条件边: cache_check → [supervisor | END]
+        # 条件边: thread_history_check → [END | cache_check]
+        graph.add_conditional_edges(
+            "thread_history_check",
+            self._after_thread_history_check,
+            {
+                "cache_check": "cache_check",
+                "end": END
+            }
+        )
+        
+        # 条件边: cache_check → [clarification | END]
         graph.add_conditional_edges(
             "cache_check",
             self._after_cache_check,
             {
-                "supervisor": "supervisor",
+                "clarification": "clarification",
                 "end": END
             }
         )
+        
+        # clarification → supervisor
+        graph.add_edge("clarification", "supervisor")
         
         # supervisor → END
         graph.add_edge("supervisor", END)
@@ -420,16 +583,46 @@ class IntelligentSQLGraph:
             logger.warning("回退到无状态模式")
             return graph.compile()
     
-    def _after_cache_check(self, state: SQLMessageState) -> str:
-        """判断缓存检查后的下一步"""
-        cache_hit = state.get("cache_hit", False)
+    def _after_thread_history_check(self, state: SQLMessageState) -> str:
+        """
+        判断 Thread 历史检查后的下一步
         
-        if cache_hit:
-            logger.info("缓存命中，跳过 supervisor 直接返回")
+        如果命中历史，直接返回结果（END）
+        否则继续到全局缓存检查（cache_check）
+        """
+        thread_history_hit = state.get("thread_history_hit", False)
+        
+        if thread_history_hit:
+            logger.info("Thread 历史命中，直接返回历史结果")
             return "end"
         else:
-            logger.info("缓存未命中，继续到 supervisor")
-            return "supervisor"
+            logger.info("Thread 历史未命中，继续到全局缓存检查")
+            return "cache_check"
+    
+    def _after_cache_check(self, state: SQLMessageState) -> str:
+        """
+        判断缓存检查后的下一步
+        
+        三级缓存策略:
+        - 完全命中 (100%) -> 直接返回 (END)
+        - 语义命中 (>=95%) -> 进入澄清节点 (clarification)
+        - 未命中 -> 进入澄清节点 (clarification)
+        """
+        cache_hit = state.get("cache_hit", False)
+        cache_hit_type = state.get("cache_hit_type")
+        
+        if cache_hit and cache_hit_type == "exact":
+            # 精确匹配，直接返回
+            logger.info("缓存精确命中，跳过后续流程直接返回")
+            return "end"
+        elif cache_hit and cache_hit_type in ("semantic", "exact_text"):
+            # 语义匹配，需要进入澄清确认
+            logger.info(f"缓存语义命中 ({cache_hit_type})，进入澄清节点确认")
+            return "clarification"
+        else:
+            # 未命中，进入完整流程
+            logger.info("缓存未命中，进入澄清节点")
+            return "clarification"
     
     async def _load_custom_agent_node(self, state: SQLMessageState) -> Dict[str, Any]:
         """

@@ -401,7 +401,27 @@ class SampleRetrievalAgent:
 
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
         """处理样本检索任务"""
+        import time
+        from langgraph.config import get_stream_writer
+        from app.schemas.stream_events import create_sql_step_event, create_similar_questions_event
+        
+        # 获取 stream writer
         try:
+            writer = get_stream_writer()
+        except Exception:
+            writer = None
+        
+        try:
+            # 发送 few_shot 步骤开始事件
+            step_start_time = time.time()
+            if writer:
+                writer(create_sql_step_event(
+                    step="few_shot",
+                    status="running",
+                    result=None,
+                    time_ms=0
+                ))
+            
             # 获取用户查询
             user_query = state["messages"][0].content
             if isinstance(user_query, list):
@@ -444,6 +464,29 @@ class SampleRetrievalAgent:
 
             # 提取样本检索结果
             sample_results = self._extract_samples_from_result(result)
+            
+            # 计算耗时并发送完成事件
+            elapsed_ms = int((time.time() - step_start_time) * 1000)
+            qa_pairs = sample_results.get("qa_pairs", [])
+            if writer:
+                writer(create_sql_step_event(
+                    step="few_shot",
+                    status="completed",
+                    result=f"检索到 {len(qa_pairs)} 个相关样本",
+                    time_ms=elapsed_ms
+                ))
+                
+                # 发送相似问题事件
+                similar_questions = []
+                for qa in qa_pairs[:5]:  # 最多5个相似问题
+                    question = qa.get("question", "")
+                    if question:
+                        similar_questions.append(question)
+                
+                if similar_questions:
+                    writer(create_similar_questions_event(
+                        questions=similar_questions
+                    ))
 
             # 更新状态
             state["sample_retrieval_result"] = sample_results
@@ -457,6 +500,15 @@ class SampleRetrievalAgent:
             }
 
         except Exception as e:
+            # 发送错误事件
+            if writer:
+                writer(create_sql_step_event(
+                    step="few_shot",
+                    status="error",
+                    result=str(e),
+                    time_ms=0
+                ))
+            
             # 记录错误
             error_info = {
                 "stage": "sample_retrieval",
