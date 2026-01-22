@@ -104,11 +104,27 @@ const PIPELINE_NODES: NodeConfig[] = [
   },
   {
     key: "final_sql",
-    label: "最终执行SQL",
+    label: "执行SQL查询",
     icon: Play,
-    description: "执行最终SQL查询",
+    description: "执行最终SQL查询，获取数据",
     dataKey: "sql_step",
     stepKey: "final_sql",
+  },
+  {
+    key: "data_analysis",
+    label: "数据分析",
+    icon: Lightbulb,
+    description: "分析查询结果，生成数据洞察",
+    dataKey: "sql_step",
+    stepKey: "data_analysis",
+  },
+  {
+    key: "chart_generation",
+    label: "图表生成",
+    icon: BarChart2,
+    description: "根据数据生成可视化图表",
+    dataKey: "sql_step",
+    stepKey: "chart_generation",
   },
 ];
 
@@ -756,27 +772,31 @@ function SimilarQuestionsSection({
   questions: string[]; 
   onSelect?: (q: string) => void;
 }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  // 默认展开，显示推荐问题
+  const [isExpanded, setIsExpanded] = useState(true);
 
   return (
-    <div className="mt-4 rounded-xl border border-amber-200 bg-gradient-to-b from-amber-50 to-white overflow-hidden">
+    <div className="mt-4 rounded-xl border border-blue-200 bg-gradient-to-br from-blue-50 via-indigo-50/30 to-white overflow-hidden shadow-sm">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-amber-100/50 transition-colors"
+        className="w-full flex items-center gap-3 px-4 py-3.5 hover:bg-blue-100/30 transition-colors"
       >
-        <div className="p-1.5 rounded-lg bg-amber-100">
-          <Lightbulb className="h-4 w-4 text-amber-600" />
+        <div className="p-2 rounded-lg bg-gradient-to-br from-blue-100 to-indigo-100 shadow-sm">
+          <Lightbulb className="h-4 w-4 text-blue-600" />
         </div>
-        <span className="font-medium text-sm text-amber-800">推荐问题</span>
-        <span className="text-xs text-amber-600 px-2 py-0.5 bg-amber-100 rounded-full">
-          {questions.length}
+        <div className="flex flex-col items-start">
+          <span className="font-semibold text-sm text-blue-800">继续探索</span>
+          <span className="text-xs text-blue-500">猜你想问</span>
+        </div>
+        <span className="text-xs text-white px-2.5 py-1 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full font-medium shadow-sm">
+          {questions.length} 个推荐
         </span>
         <motion.div
           animate={{ rotate: isExpanded ? 180 : 0 }}
           transition={{ duration: 0.2 }}
           className="ml-auto"
         >
-          <ChevronDown className="h-4 w-4 text-amber-500" />
+          <ChevronDown className="h-4 w-4 text-blue-500" />
         </motion.div>
       </button>
 
@@ -788,16 +808,22 @@ function SimilarQuestionsSection({
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.2 }}
           >
-            <div className="px-4 pb-4 space-y-2">
+            <div className="px-4 pb-4 grid gap-2">
               {questions.map((q, i) => (
-                <button
+                <motion.button
                   key={i}
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: i * 0.05 }}
                   onClick={() => onSelect?.(q)}
-                  className="flex items-start gap-2 w-full text-left p-3 rounded-lg bg-white border border-amber-100 text-sm text-slate-600 hover:border-amber-300 hover:bg-amber-50/50 hover:text-amber-800 transition-all"
+                  className="group flex items-start gap-3 w-full text-left p-3.5 rounded-xl bg-white border border-blue-100 text-sm text-slate-700 hover:border-blue-300 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 hover:shadow-md hover:scale-[1.01] transition-all duration-200"
                 >
-                  <MessageCircle className="h-4 w-4 mt-0.5 flex-shrink-0 text-amber-500" />
-                  <span>{q}</span>
-                </button>
+                  <div className="p-1.5 rounded-lg bg-blue-50 group-hover:bg-blue-100 transition-colors flex-shrink-0">
+                    <MessageCircle className="h-3.5 w-3.5 text-blue-500 group-hover:text-blue-600" />
+                  </div>
+                  <span className="leading-relaxed group-hover:text-blue-800">{q}</span>
+                  <ArrowDown className="h-4 w-4 ml-auto flex-shrink-0 text-slate-300 group-hover:text-blue-500 rotate-[-90deg] transition-colors" />
+                </motion.button>
               ))}
             </div>
           </motion.div>

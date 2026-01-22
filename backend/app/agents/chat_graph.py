@@ -36,6 +36,7 @@ from app.agents.agents.supervisor_agent import SupervisorAgent, create_intellige
 from app.agents.nodes.thread_history_check_node import thread_history_check_node
 from app.agents.nodes.clarification_node import clarification_node
 from app.agents.nodes.cache_check_node import cache_check_node
+from app.agents.nodes.question_recommendation_node import question_recommendation_node
 from app.models.agent_profile import AgentProfile
 
 logger = logging.getLogger(__name__)
@@ -206,11 +207,12 @@ class IntelligentSQLGraph:
         - 添加意图路由节点
         - 添加 checkpointer 回退机制，确保 interrupt 能正常工作
         - 添加 thread_history_check 节点，实现三级缓存策略
+        - 添加 question_recommendation 节点，实现问题推荐
         
         图结构:
         START → intent_router → [data_query_flow | general_chat → END]
         data_query_flow: load_custom_agent → fast_mode_detect → thread_history_check 
-                         → cache_check → clarification → supervisor → END
+                         → cache_check → clarification → supervisor → question_recommendation → END
         
         三级缓存策略:
         1. Thread 历史检查 (thread_history_check) - 同一对话内相同问题
@@ -235,6 +237,8 @@ class IntelligentSQLGraph:
         graph.add_node("cache_check", cache_check_node)
         graph.add_node("clarification", clarification_node)
         graph.add_node("supervisor", self._supervisor_node)
+        # 问题推荐节点 (在 supervisor 之后执行)
+        graph.add_node("question_recommendation", question_recommendation_node)
         
         # ============== 设置入口点 ==============
         graph.set_entry_point("intent_router")
@@ -281,8 +285,11 @@ class IntelligentSQLGraph:
         # clarification → supervisor
         graph.add_edge("clarification", "supervisor")
         
-        # supervisor → END
-        graph.add_edge("supervisor", END)
+        # supervisor → question_recommendation (新增: 在完成后推荐问题)
+        graph.add_edge("supervisor", "question_recommendation")
+        
+        # question_recommendation → END
+        graph.add_edge("question_recommendation", END)
         
         # ============== 编译图 ==============
         # 确定使用哪个 checkpointer
@@ -520,7 +527,7 @@ class IntelligentSQLGraph:
         
         使用 AsyncPostgresSaver 进行异步状态持久化
         
-        图结构与 _create_graph_sync 保持一致，使用三级缓存策略
+        图结构与 _create_graph_sync 保持一致，使用三级缓存策略和问题推荐
         """
         from app.core.checkpointer import get_checkpointer_async
         
@@ -534,6 +541,8 @@ class IntelligentSQLGraph:
         graph.add_node("cache_check", cache_check_node)
         graph.add_node("clarification", clarification_node)
         graph.add_node("supervisor", self._supervisor_node)
+        # 问题推荐节点
+        graph.add_node("question_recommendation", question_recommendation_node)
         
         # 设置入口点
         graph.set_entry_point("load_custom_agent")
@@ -565,8 +574,9 @@ class IntelligentSQLGraph:
         # clarification → supervisor
         graph.add_edge("clarification", "supervisor")
         
-        # supervisor → END
-        graph.add_edge("supervisor", END)
+        # supervisor → question_recommendation → END
+        graph.add_edge("supervisor", "question_recommendation")
+        graph.add_edge("question_recommendation", END)
         
         # 获取异步 Checkpointer
         try:

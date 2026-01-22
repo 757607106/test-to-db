@@ -398,10 +398,11 @@ class SQLExecutorAgent:
             
             # 确定下一阶段
             if execution_result.success:
-                # 执行成功，进入分析阶段（由分析专家处理）
+                # 执行成功，进入数据分析阶段
+                # 流程：sql_execution → analysis → chart_generation → completed
                 skip_chart = state.get("skip_chart_generation", False)
                 if skip_chart:
-                    # 如果跳过图表生成，直接在这里做简单分析
+                    # 快速模式：跳过数据分析和图表生成，直接做简单分析
                     user_query = self._extract_user_query(state)
                     analysis_message = await self._analyze_result(
                         user_query=user_query,
@@ -411,8 +412,8 @@ class SQLExecutorAgent:
                     messages.append(analysis_message)
                     next_stage = "completed"
                 else:
-                    # 进入分析/图表生成阶段，由自定义分析专家处理
-                    next_stage = "chart_generation"
+                    # 标准模式：进入数据分析阶段（由 DataAnalystAgent 处理）
+                    next_stage = "analysis"
             else:
                 next_stage = "error_recovery"
             

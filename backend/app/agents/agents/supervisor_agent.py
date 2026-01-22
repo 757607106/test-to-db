@@ -100,21 +100,27 @@ class SupervisorAgent:
         创建工作代理
         
         性能优化: 缓存默认 Worker Agents，避免重复导入和创建
+        
+        Agent 职责分离:
+        - data_analyst_agent: 数据分析和洞察生成
+        - chart_generator_agent: 图表配置生成
         """
-        # 如果有自定义分析专家，需要创建新列表
+        # 如果有自定义分析专家，用它替换默认的 data_analyst_agent
         if self.custom_analyst:
             from app.agents.agents.schema_agent import schema_agent
             from app.agents.agents.sql_generator_agent import sql_generator_agent
             from app.agents.agents.sql_executor_agent import sql_executor_agent
             from app.agents.agents.error_recovery_agent import error_recovery_agent
+            from app.agents.agents.chart_generator_agent import chart_generator_agent
             
-            logger.info("使用自定义分析专家")
+            logger.info("使用自定义分析专家替换默认数据分析智能体")
             return [
                 schema_agent,
                 sql_generator_agent,
                 sql_executor_agent,
                 error_recovery_agent,
-                self.custom_analyst
+                self.custom_analyst,  # 自定义分析专家
+                chart_generator_agent  # 图表生成仍使用默认
             ]
         
         # ✅ 返回缓存的默认 Worker Agents
@@ -123,6 +129,7 @@ class SupervisorAgent:
             from app.agents.agents.sql_generator_agent import sql_generator_agent
             from app.agents.agents.sql_executor_agent import sql_executor_agent
             from app.agents.agents.error_recovery_agent import error_recovery_agent
+            from app.agents.agents.data_analyst_agent import data_analyst_agent
             from app.agents.agents.chart_generator_agent import chart_generator_agent
             
             SupervisorAgent._cached_default_workers = [
@@ -130,9 +137,10 @@ class SupervisorAgent:
                 sql_generator_agent,
                 sql_executor_agent,
                 error_recovery_agent,
-                chart_generator_agent
+                data_analyst_agent,    # 数据分析专家
+                chart_generator_agent  # 图表生成专家
             ]
-            logger.info("✓ 默认 Worker Agents 已缓存")
+            logger.info("✓ 默认 Worker Agents 已缓存（包含数据分析和图表生成智能体）")
         
         return SupervisorAgent._cached_default_workers
     
@@ -213,6 +221,13 @@ class SupervisorAgent:
         - 快速，无 LLM 调用
         - 基于 current_stage 字段
         - 明确的状态机转换
+        
+        流程:
+        schema_analysis → sql_generation → sql_execution → analysis → chart_generation → completed
+        
+        职责分离:
+        - data_analyst_agent: 数据分析和洞察生成
+        - chart_generator_agent: 图表配置生成
         """
         current_stage = state.get("current_stage", "schema_analysis")
         fast_mode = state.get("fast_mode", False)
@@ -227,6 +242,13 @@ class SupervisorAgent:
         
         elif current_stage == "sql_execution":
             return "sql_executor_agent"
+        
+        # 新增：数据分析阶段（在 SQL 执行后）
+        elif current_stage == "analysis":
+            # 使用自定义分析专家或默认数据分析智能体
+            if self.custom_analyst:
+                return self.custom_analyst.name
+            return "data_analyst_agent"
         
         elif current_stage == "chart_generation":
             if skip_chart:

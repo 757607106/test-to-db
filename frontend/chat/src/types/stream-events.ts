@@ -41,7 +41,7 @@ export interface IntentAnalysisEvent {
  */
 export interface SQLStepEvent {
   type: "sql_step";
-  step: "schema_mapping" | "few_shot" | "llm_parse" | "sql_fix" | "final_sql";
+  step: "schema_mapping" | "few_shot" | "llm_parse" | "sql_fix" | "final_sql" | "data_analysis" | "chart_generation";
   status: "pending" | "running" | "completed" | "error";
   result?: string;       // 步骤结果
   time_ms: number;       // 耗时(毫秒)
@@ -140,5 +140,7 @@ export const SQL_STEP_LABELS: Record<string, string> = {
   few_shot: "Few-shot示例",
   llm_parse: "LLM解析S2SQL",
   sql_fix: "修正S2SQL",
-  final_sql: "最终执行SQL"
+  final_sql: "执行SQL查询",
+  data_analysis: "数据分析",
+  chart_generation: "图表生成"
 };
