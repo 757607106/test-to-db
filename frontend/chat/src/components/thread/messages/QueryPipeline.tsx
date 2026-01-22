@@ -300,32 +300,14 @@ export function QueryPipeline({ queryContext, onSelectQuestion }: QueryPipelineP
                 })}
               </div>
 
-              {/* SQL执行结果 */}
+              {/* SQL执行结果（仅显示表格） */}
               {dataQuery && (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.1 }}
                 >
-                  <DataQueryResult
-                    dataQuery={dataQuery}
-                    viewMode={viewMode}
-                    onViewModeChange={setViewMode}
-                  />
-                </motion.div>
-              )}
-
-              {/* 相似问题推荐 */}
-              {similarQuestions && similarQuestions.questions.length > 0 && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.2 }}
-                >
-                  <SimilarQuestionsSection
-                    questions={similarQuestions.questions}
-                    onSelect={onSelectQuestion}
-                  />
+                  <DataQueryResultTable dataQuery={dataQuery} />
                 </motion.div>
               )}
             </div>
@@ -501,6 +483,50 @@ function NodeDetailContent({ node, data, copySQL, copiedSql }: {
         )}
       </div>
     );
+  }
+
+  // Schema 映射详情 - 显示表和列信息
+  if (node.key === "schema_mapping" && data?.result) {
+    try {
+      const schemaData = JSON.parse(data.result);
+      if (schemaData.tables && Array.isArray(schemaData.tables)) {
+        return (
+          <div className="space-y-4">
+            <div className="text-sm font-medium text-slate-700 mb-3">
+              {schemaData.summary}
+            </div>
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              {schemaData.tables.map((table: any, idx: number) => (
+                <div key={idx} className="bg-white rounded-lg border border-slate-200 p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Database className="h-4 w-4 text-blue-600" />
+                    <span className="font-semibold text-sm text-slate-800">{table.name}</span>
+                    {table.comment && (
+                      <span className="text-xs text-slate-500">- {table.comment}</span>
+                    )}
+                  </div>
+                  {table.columns && table.columns.length > 0 && (
+                    <div className="grid grid-cols-2 gap-2 mt-2 pl-6">
+                      {table.columns.map((col: any, colIdx: number) => (
+                        <div key={colIdx} className="flex items-start gap-2 text-xs">
+                          <span className="text-slate-600 font-mono">{col.name}</span>
+                          <span className="text-slate-400">({col.type})</span>
+                          {col.comment && (
+                            <span className="text-slate-500 text-[10px]">// {col.comment}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      }
+    } catch (e) {
+      // 如果解析失败，显示原始文本
+    }
   }
 
   // SQL步骤详情
@@ -829,6 +855,57 @@ function SimilarQuestionsSection({
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+// 简化版数据查询结果组件（仅表格）
+function DataQueryResultTable({ 
+  dataQuery
+}: { 
+  dataQuery: QueryContext["dataQuery"];
+}) {
+  if (!dataQuery) return null;
+
+  const { columns, rows, row_count } = dataQuery;
+  const hasData = rows && rows.length > 0;
+
+  // 转换数据格式
+  const tableData = rows?.map(row => {
+    if (Array.isArray(row)) {
+      const obj: Record<string, any> = {};
+      columns.forEach((col, i) => {
+        obj[col] = row[i];
+      });
+      return obj;
+    }
+    return row;
+  }) || [];
+
+  return (
+    <div className="mt-4 rounded-xl border border-slate-200 bg-white overflow-hidden">
+      {/* 标题栏 */}
+      <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200">
+        <div className="flex items-center gap-2">
+          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+          <span className="font-medium text-sm text-slate-700">查询结果</span>
+          <span className="text-xs text-slate-500 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">
+            {row_count || rows?.length || 0} 条记录
+          </span>
+        </div>
+      </div>
+
+      {/* 内容区域 */}
+      <div className="p-4">
+        {!hasData ? (
+          <div className="flex flex-col items-center justify-center py-8 text-slate-500">
+            <AlertCircle className="h-8 w-8 mb-2 text-slate-400" />
+            <span className="text-sm">查询结果为空</span>
+          </div>
+        ) : (
+          <DataTable data={tableData} columns={columns} />
+        )}
+      </div>
     </div>
   );
 }

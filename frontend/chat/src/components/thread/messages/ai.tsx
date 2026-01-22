@@ -29,6 +29,8 @@ import {
 import { useArtifact } from "../artifact";
 // 智能查询界面组件 - 使用新的统一流水线组件
 import { QueryPipeline } from "./QueryPipeline";
+import { DataChartDisplay } from "./DataChartDisplay";
+import { RecommendedQuestionsDisplay } from "./RecommendedQuestionsDisplay";
 
 function CustomComponent({
   message,
@@ -215,7 +217,8 @@ export function AssistantMessage({
           <QueryPipeline 
             queryContext={queryContext}
             onSelectQuestion={(question) => {
-              console.log("Selected question:", question);
+              // 发送推荐的问题
+              thread.postMessage({ role: "human", content: question });
             }}
           />
         )}
@@ -225,6 +228,22 @@ export function AssistantMessage({
           <div className="py-1">
             <MarkdownText>{contentString}</MarkdownText>
           </div>
+        )}
+
+        {/* 数据可视化图表 - 在回答后单独展示 */}
+        {isLastMessage && queryContext?.dataQuery?.chart_config && (
+          <DataChartDisplay dataQuery={queryContext.dataQuery} />
+        )}
+
+        {/* 推荐问题 - 在回答后展示 */}
+        {isLastMessage && queryContext?.similarQuestions?.questions && queryContext.similarQuestions.questions.length > 0 && (
+          <RecommendedQuestionsDisplay 
+            questions={queryContext.similarQuestions.questions}
+            onSelect={(question) => {
+              // 发送推荐的问题
+              thread.postMessage({ role: "human", content: question });
+            }}
+          />
         )}
 
         {/* 工具调用显示 - 当有智能查询流程时隐藏 */}
@@ -264,6 +283,16 @@ export function AssistantMessage({
             isLoading={isLoading}
             isAiMessage={true}
             handleRegenerate={() => handleRegenerate(parentCheckpoint)}
+            feedbackContext={
+              hasQueryProcess && queryContext?.dataQuery
+                ? {
+                    question: contentString,
+                    sql: queryContext.dataQuery.columns ? "SQL executed" : "",
+                    connectionId: thread.values?.connection_id,
+                    threadId: thread.threadId,
+                  }
+                : undefined
+            }
           />
         </div>
       </div>

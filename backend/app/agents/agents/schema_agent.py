@@ -281,16 +281,43 @@ class SchemaAnalysisAgent:
             finally:
                 db.close()
             
-            # 计算耗时并发送完成事件
+            # 计算耗时并发送完成事件（包含详细的表和列信息）
             elapsed_ms = int((time.time() - step_start_time) * 1000)
             tables_list = schema_context.get("tables", [])
             columns_list = schema_context.get("columns", [])
+            
+            # 构建详细的 schema 信息用于前端展示
+            schema_detail = {
+                "summary": f"获取到 {len(tables_list)} 个相关表, {len(columns_list)} 个列",
+                "tables": []
+            }
+            
+            # 按表组织列信息
+            table_columns_map = {}
+            for col in columns_list:
+                table_name = col.get("table_name", "unknown")
+                if table_name not in table_columns_map:
+                    table_columns_map[table_name] = []
+                table_columns_map[table_name].append({
+                    "name": col.get("column_name", ""),
+                    "type": col.get("data_type", ""),
+                    "comment": col.get("column_comment", "")
+                })
+            
+            # 构建表信息列表
+            for table in tables_list:
+                table_name = table.get("table_name", "")
+                schema_detail["tables"].append({
+                    "name": table_name,
+                    "comment": table.get("table_comment", ""),
+                    "columns": table_columns_map.get(table_name, [])
+                })
             
             if writer:
                 writer(create_sql_step_event(
                     step="schema_mapping",
                     status="completed",
-                    result=f"获取到 {len(tables_list)} 个相关表, {len(columns_list)} 个列",
+                    result=json.dumps(schema_detail, ensure_ascii=False),
                     time_ms=elapsed_ms
                 ))
             
