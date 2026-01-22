@@ -127,6 +127,10 @@ class SQLMessageState(TypedDict, total=False):
     agent_ids: Optional[List[int]]
     agent_messages: Dict[str, Any]
     
+    # 自定义 Agent 实例（支持动态替换默认 agent）
+    # 格式: {"schema_agent": agent, "sql_generator": agent, "data_analyst": agent, ...}
+    custom_agents: Optional[Dict[str, Any]]
+    
     # 会话相关
     thread_id: Optional[str]
     user_id: Optional[str]

@@ -106,14 +106,25 @@ def _get_recovery_steps(error_type: str) -> list:
 async def schema_agent_node(state: SQLMessageState) -> Dict[str, Any]:
     """
     Schema Agent 节点 - 获取数据库模式信息
+    
+    支持自定义 Agent：通过 state["custom_agents"]["schema_agent"] 传入
     """
-    from app.agents.agents.schema_agent import schema_agent
+    # 优先使用自定义 agent
+    custom_agents = state.get("custom_agents") or {}
+    agent = custom_agents.get("schema_agent")
+    
+    if agent is None:
+        # 回退到默认 agent
+        from app.agents.agents.schema_agent import schema_agent
+        agent = schema_agent
+    else:
+        logger.info("使用自定义 schema_agent")
     
     logger.info("=== 执行 schema_agent ===")
     start_time = time.time()
     
     try:
-        result = await schema_agent.process(state)
+        result = await agent.process(state)
         elapsed = time.time() - start_time
         logger.info(f"schema_agent 完成，耗时 {elapsed:.2f}s")
         return result
@@ -138,8 +149,19 @@ async def sql_generator_node(state: SQLMessageState) -> Dict[str, Any]:
     - enriched_query / original_query: 用户查询
     - cached_sql_template: 缓存的 SQL 模板
     - error_recovery_context: 错误恢复上下文（如果是重试）
+    
+    支持自定义 Agent：通过 state["custom_agents"]["sql_generator"] 传入
     """
-    from app.agents.agents.sql_generator_agent import sql_generator_agent
+    # 优先使用自定义 agent
+    custom_agents = state.get("custom_agents") or {}
+    agent = custom_agents.get("sql_generator")
+    
+    if agent is None:
+        # 回退到默认 agent
+        from app.agents.agents.sql_generator_agent import sql_generator_agent
+        agent = sql_generator_agent
+    else:
+        logger.info("使用自定义 sql_generator")
     
     logger.info("=== 执行 sql_generator_agent ===")
     
@@ -152,7 +174,7 @@ async def sql_generator_node(state: SQLMessageState) -> Dict[str, Any]:
     start_time = time.time()
     
     try:
-        result = await sql_generator_agent.process(state)
+        result = await agent.process(state)
         elapsed = time.time() - start_time
         logger.info(f"sql_generator_agent 完成，耗时 {elapsed:.2f}s")
         
@@ -176,14 +198,25 @@ async def sql_generator_node(state: SQLMessageState) -> Dict[str, Any]:
 async def sql_executor_node(state: SQLMessageState) -> Dict[str, Any]:
     """
     SQL Executor 节点 - 执行 SQL 查询
+    
+    支持自定义 Agent：通过 state["custom_agents"]["sql_executor"] 传入
     """
-    from app.agents.agents.sql_executor_agent import sql_executor_agent
+    # 优先使用自定义 agent
+    custom_agents = state.get("custom_agents") or {}
+    agent = custom_agents.get("sql_executor")
+    
+    if agent is None:
+        # 回退到默认 agent
+        from app.agents.agents.sql_executor_agent import sql_executor_agent
+        agent = sql_executor_agent
+    else:
+        logger.info("使用自定义 sql_executor")
     
     logger.info("=== 执行 sql_executor_agent ===")
     start_time = time.time()
     
     try:
-        result = await sql_executor_agent.process(state)
+        result = await agent.process(state)
         elapsed = time.time() - start_time
         logger.info(f"sql_executor_agent 完成，耗时 {elapsed:.2f}s")
         return result
@@ -206,8 +239,20 @@ async def data_analyst_node(state: SQLMessageState) -> Dict[str, Any]:
     
     读取的上下文:
     - execution_result: SQL 执行结果
+    
+    支持自定义 Agent：通过 state["custom_agents"]["data_analyst"] 传入
+    这是最常需要自定义的 agent，可以根据不同业务场景定制数据分析逻辑
     """
-    from app.agents.agents.data_analyst_agent import data_analyst_agent
+    # 优先使用自定义 agent
+    custom_agents = state.get("custom_agents") or {}
+    agent = custom_agents.get("data_analyst")
+    
+    if agent is None:
+        # 回退到默认 agent
+        from app.agents.agents.data_analyst_agent import data_analyst_agent
+        agent = data_analyst_agent
+    else:
+        logger.info("使用自定义 data_analyst")
     
     logger.info("=== 执行 data_analyst_agent ===")
     
@@ -215,17 +260,17 @@ async def data_analyst_node(state: SQLMessageState) -> Dict[str, Any]:
     execution_result = state.get("execution_result")
     if not execution_result:
         logger.warning("没有执行结果，跳过数据分析")
-        return {"current_stage": "completed"}
+        return {"current_stage": "chart_generation"}
     
     # 检查执行是否成功
     if hasattr(execution_result, 'success') and not execution_result.success:
         logger.warning("执行结果不成功，跳过数据分析")
-        return {"current_stage": "completed"}
+        return {"current_stage": "chart_generation"}
     
     start_time = time.time()
     
     try:
-        result = await data_analyst_agent.process(state)
+        result = await agent.process(state)
         elapsed = time.time() - start_time
         logger.info(f"data_analyst_agent 完成，耗时 {elapsed:.2f}s")
         return result
@@ -242,20 +287,30 @@ async def chart_generator_node(state: SQLMessageState) -> Dict[str, Any]:
     读取的上下文:
     - execution_result: SQL 执行结果
     - skip_chart_generation: 是否跳过图表生成
+    
+    支持自定义 Agent：通过 state["custom_agents"]["chart_generator"] 传入
     """
-    from app.agents.agents.chart_generator_agent import chart_generator_agent
-    
-    logger.info("=== 执行 chart_generator_agent ===")
-    
     # 检查是否跳过图表生成
     if state.get("skip_chart_generation", False):
         logger.info("快速模式: 跳过图表生成")
         return {"current_stage": "completed"}
     
+    # 优先使用自定义 agent
+    custom_agents = state.get("custom_agents") or {}
+    agent = custom_agents.get("chart_generator")
+    
+    if agent is None:
+        # 回退到默认 agent
+        from app.agents.agents.chart_generator_agent import chart_generator_agent
+        agent = chart_generator_agent
+    else:
+        logger.info("使用自定义 chart_generator")
+    
+    logger.info("=== 执行 chart_generator_agent ===")
     start_time = time.time()
     
     try:
-        result = await chart_generator_agent.process(state)
+        result = await agent.process(state)
         elapsed = time.time() - start_time
         logger.info(f"chart_generator_agent 完成，耗时 {elapsed:.2f}s")
         
@@ -276,8 +331,19 @@ async def error_handler_node(state: SQLMessageState) -> Dict[str, Any]:
     - 调用 error_recovery_agent 进行智能错误分析
     - 生成用户友好的错误消息
     - 设置 error_recovery_context 供 sql_generator 使用
+    
+    支持自定义 Agent：通过 state["custom_agents"]["error_recovery"] 传入
     """
-    from app.agents.agents.error_recovery_agent import error_recovery_agent
+    # 优先使用自定义 agent
+    custom_agents = state.get("custom_agents") or {}
+    agent = custom_agents.get("error_recovery")
+    
+    if agent is None:
+        # 回退到默认 agent
+        from app.agents.agents.error_recovery_agent import error_recovery_agent
+        agent = error_recovery_agent
+    else:
+        logger.info("使用自定义 error_recovery")
     
     logger.info("=== 执行 error_handler (使用 ErrorRecoveryAgent) ===")
     
@@ -288,7 +354,7 @@ async def error_handler_node(state: SQLMessageState) -> Dict[str, Any]:
     
     try:
         # 使用智能 ErrorRecoveryAgent 进行错误分析和恢复策略生成
-        result = await error_recovery_agent.process(state)
+        result = await agent.process(state)
         
         elapsed = time.time()
         logger.info(f"error_recovery_agent 完成")

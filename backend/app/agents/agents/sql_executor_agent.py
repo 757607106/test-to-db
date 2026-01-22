@@ -398,27 +398,13 @@ class SQLExecutorAgent:
             
             # 确定下一阶段
             if execution_result.success:
-                # 执行成功，进入数据分析阶段
+                # 执行成功，总是进入数据分析阶段
                 # 流程：sql_execution → analysis → chart_generation → completed
-                skip_chart = state.get("skip_chart_generation", False)
-                if skip_chart:
-                    # 快速模式：跳过数据分析和图表生成，直接做简单分析
-                    user_query = self._extract_user_query(state)
-                    analysis_message = await self._analyze_result(
-                        user_query=user_query,
-                        sql_query=sql_query,
-                        result_data=result.get("data", {})
-                    )
-                    messages.append(analysis_message)
-                    next_stage = "completed"
-                else:
-                    # 标准模式：进入数据分析阶段（由 DataAnalystAgent 处理）
-                    next_stage = "analysis"
-                
+                # 快速模式只影响是否生成图表，不影响数据分析
                 return {
                     "messages": messages,
                     "execution_result": execution_result,
-                    "current_stage": next_stage
+                    "current_stage": "analysis"  # 总是进入数据分析阶段
                 }
             else:
                 # ✅ 修复：SQL 执行失败时，必须添加 error_history

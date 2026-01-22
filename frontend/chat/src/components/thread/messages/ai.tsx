@@ -357,7 +357,12 @@ export function AssistantMessage({
             queryContext={effectiveQueryContext}
             onSelectQuestion={(question) => {
               // 发送推荐的问题
-              thread.postMessage({ role: "human", content: question });
+              thread.submit({
+                messages: [{
+                  role: "human",
+                  content: question,
+                }]
+              });
             }}
           />
         )}
@@ -387,7 +392,12 @@ export function AssistantMessage({
             questions={queryContext.similarQuestions.questions}
             onSelect={(question) => {
               // 发送推荐的问题
-              thread.postMessage({ role: "human", content: question });
+              thread.submit({
+                messages: [{
+                  role: "human",
+                  content: question,
+                }]
+              });
             }}
           />
         )}
