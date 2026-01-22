@@ -42,7 +42,13 @@
     ↓
 [IntelligentSQLGraph] ← 高级接口层
     ↓
-[Load Custom Agent Node] ← 动态加载自定义Agent
+[Load Custom Agent Node] ← 动态加载自定义Agent + 提取connection_id
+    ↓
+[Fast Mode Detect Node] ← 快速模式检测 (2026-01-21 新增)
+    ↓
+[Clarification Node] ← 使用interrupt()实现人机交互澄清
+    ↓
+[Cache Check Node] ← 双层缓存检查 (L1精确 + L2语义)
     ↓
 [Supervisor Agent] ← 协调中心
     ↓
@@ -50,14 +56,16 @@
 │  Worker Agents (专业Agent池)             │
 ├─────────────────────────────────────────┤
 │  1. Schema Agent      - 模式分析         │
-│  2. SQL Generator     - SQL生成          │
-│  3. SQL Executor      - SQL执行          │
-│  4. Chart Generator   - 图表生成         │
+│  2. SQL Generator     - SQL生成(含样本)  │
+│  3. SQL Executor      - SQL执行(含缓存)  │
+│  4. Chart Generator   - 图表生成(可跳过) │
 │  5. Error Recovery    - 错误恢复         │
 └─────────────────────────────────────────┘
     ↓
 返回结果 (SQL结果 + 图表配置)
 ```
+
+**注**: `sample_retrieval_agent` 已临时禁用并集成到 `sql_generator_agent` 内部
 
 ### 架构层次
 
@@ -90,28 +98,41 @@
 ```
 1. 用户输入查询
    ↓
-2. [Load Custom Agent] - 检查是否需要加载自定义分析专家
+2. [Load Custom Agent] - 检查是否需要加载自定义分析专家 + 提取connection_id
    ↓
-3. [Supervisor] - 分析查询，决定路由
+3. [Fast Mode Detect] - 检测查询复杂度，决定是否启用快速模式 (2026-01-21 新增)
+   │  ├─ 简单查询 → 设置 skip_sample_retrieval=True, skip_chart_generation=True
+   │  └─ 复杂查询 → 使用完整模式
    ↓
-4. [Schema Agent] - 分析查询意图，获取相关表结构
+4. [Clarification] - 检测查询模糊性
+   │  ├─ 明确查询 → 继续
+   │  └─ 模糊查询 → 使用 interrupt() 暂停，等待用户澄清回复
+   ↓
+5. [Cache Check] - 双层缓存检查 (2026-01-19 新增)
+   │  ├─ L1 精确匹配缓存命中 → 返回SQL+结果，结束
+   │  ├─ L2 语义匹配缓存命中 → 直接执行缓存的SQL并返回
+   │  └─ 缓存未命中 → 继续到Supervisor
+   ↓
+6. [Supervisor] - 协调Worker Agents
+   ↓
+7. [Schema Agent] - 分析查询意图，获取相关表结构
    │  ├─ analyze_user_query: 提取关键实体和意图
    │  └─ retrieve_database_schema: 获取表结构和值映射
    ↓
-5. [SQL Generator Agent] - 生成SQL语句
-   │  ├─ generate_sql_query: 基础SQL生成
-   │  ├─ generate_sql_with_samples: 基于样本生成(如果有)
-   │  └─ explain_sql_query: 解释SQL逻辑
+8. [SQL Generator Agent] - 生成SQL语句 (内置样本检索)
+   │  ├─ generate_sql_query: 自动检索样本并生成SQL
+   │  └─ generate_sql_with_samples: 基于样本生成(如果有)
+   │  注: explain_sql_query 已移除以提升速度
    ↓
-6. [SQL Executor Agent] - 执行SQL
+9. [SQL Executor Agent] - 执行SQL
    │  └─ execute_sql_query: 直接执行(带缓存)
    ↓
-7. [Chart Generator Agent] - 生成图表(可选)
-   │  ├─ should_generate_chart: 判断是否需要图表
-   │  ├─ analyze_data_for_chart: 分析数据特征
-   │  └─ 调用MCP Chart工具生成图表
-   ↓
-8. 返回结果
+10. [Chart Generator Agent] - 生成图表(可选，快速模式跳过)
+    │  ├─ should_generate_chart: 判断是否需要图表
+    │  ├─ analyze_data_for_chart: 分析数据特征
+    │  └─ 调用MCP Chart工具生成图表
+    ↓
+11. 存储结果到缓存 → 返回结果
 ```
 
 ### 错误处理流程
@@ -137,25 +158,45 @@
 
 **职责**: 系统的高级接口和入口点
 
+**图结构** (2026-01-21 优化):
+```
+START → load_custom_agent → fast_mode_detect → clarification → cache_check → [supervisor | END]
+```
+
+**核心节点**:
+1. `load_custom_agent`: 提取 connection_id/agent_id，加载自定义Agent
+2. `fast_mode_detect`: 检测查询复杂度，决定是否启用快速模式
+3. `clarification`: 使用 interrupt() 实现人机交互澄清
+4. `cache_check`: 双层缓存检查 (L1精确 + L2语义)
+5. `supervisor`: 协调 Worker Agents 完成任务
+
 **核心方法**:
 ```python
 # 创建图实例
 def __init__(self, active_agent_profiles=None, custom_analyst=None)
 
-# 加载自定义Agent
+# 加载自定义Agent + 提取connection_id
 async def _load_custom_agent_node(self, state)
+
+# 快速模式检测 (2026-01-21 新增)
+async def _fast_mode_detect_node(self, state)
 
 # Supervisor节点包装
 async def _supervisor_node(self, state)
 
+# 存储结果到缓存 (2026-01-19 新增)
+async def _store_result_to_cache(self, original_state, result)
+
 # 处理查询的便捷方法
-async def process_query(self, query, connection_id)
+async def process_query(self, query, connection_id, thread_id=None)
 ```
 
 **关键特性**:
 - 支持动态加载自定义分析专家
 - 从消息中提取 connection_id 和 agent_id
 - 提供全局单例访问
+- 支持快速模式自动检测
+- 集成 Checkpointer 支持多轮对话
 
 ### 2. SupervisorAgent (supervisor_agent.py)
 
@@ -166,30 +207,33 @@ async def process_query(self, query, connection_id)
 # Worker Agents列表
 worker_agents = [
     schema_agent,
+    # sample_retrieval_agent,  # 已禁用，功能集成到sql_generator
     sql_generator_agent,
     sql_executor_agent,
     error_recovery_agent,
     chart_generator_agent  # 或自定义分析专家
 ]
 
-# Supervisor配置
+# Supervisor配置 (2026-01-21 更新)
 create_supervisor(
     model=llm,
     agents=worker_agents,
     prompt=supervisor_prompt,
-    add_handoff_back_messages=True,
-    output_mode="full_history"
+    add_handoff_back_messages=False,  # ✅ 修复消息重复
+    output_mode="last_message"        # ✅ 只返回最后消息
 )
 ```
 
 **路由策略**:
 - 根据 `current_stage` 字段决定下一个Agent
 - 标准流程: schema → sql_generation → sql_execution → [chart_generation] → completed
+- 快速模式: schema → sql_generation → sql_execution → completed (跳过图表)
 - 错误流程: 任何阶段 → error_recovery → 重试或终止
 
 **重要说明**:
 - SQL Validator Agent 已被移除(2026-01-16)
-- 原因: 简化流程，提升响应速度
+- Sample Retrieval Agent 已临时禁用(2026-01-19)，功能集成到 sql_generator_agent
+- 原因: 简化流程，避免 ReAct agent 调度延迟（原 2+ 分钟）
 - 备份位置: `backend/backups/agents_backup_20260116_175357`
 
 ### 3. Agent Factory (agent_factory.py)
@@ -224,10 +268,10 @@ def create_custom_analyst_agent(profile, db):
 
 #### 1. 基础信息
 ```python
-connection_id: int = 15          # 数据库连接ID
-agent_id: Optional[int] = None   # 自定义Agent ID
-thread_id: Optional[str] = None  # 会话线程ID
-user_id: Optional[str] = None    # 用户ID
+connection_id: Optional[int] = None  # 数据库连接ID (由用户选择动态传入)
+agent_id: Optional[int] = None       # 自定义Agent ID
+thread_id: Optional[str] = None      # 会话线程ID
+user_id: Optional[str] = None        # 用户ID
 ```
 
 #### 2. 查询处理
@@ -263,12 +307,50 @@ agent_messages: Dict[str, Any]   # Agent间消息
 messages: List[BaseMessage]      # LangChain消息历史
 ```
 
+#### 7. 缓存相关 (2026-01-19 新增)
+```python
+cache_hit: bool = False                          # 是否命中缓存
+cache_hit_type: Optional[Literal["exact", "semantic", "exact_text"]] = None  # 命中类型
+```
+
+#### 8. 快速模式相关 (2026-01-21 新增)
+```python
+fast_mode: bool = False              # 是否启用快速模式
+skip_sample_retrieval: bool = False  # 是否跳过样本检索
+skip_chart_generation: bool = False  # 是否跳过图表生成
+enable_query_checker: bool = True    # 是否启用SQL检查
+sql_check_passed: bool = False       # SQL检查是否通过
+```
+
+#### 9. 澄清机制相关
+```python
+clarification_history: List[Dict]        # 澄清历史
+clarification_round: int = 0             # 澄清轮次
+needs_clarification: bool = False        # 是否需要澄清
+pending_clarification: bool = False      # 是否等待用户澄清回复
+original_query: Optional[str] = None     # 原始查询
+enriched_query: Optional[str] = None     # 增强后的查询
+```
+
 ### 状态流转
 
 ```
 初始状态
-  current_stage = "schema_analysis"
+  current_stage = "clarification"
   retry_count = 0
+  fast_mode = False (待检测)
+  ↓
+快速模式检测完成
+  fast_mode = True/False
+  skip_sample_retrieval = True/False
+  skip_chart_generation = True/False
+  ↓
+澄清检查完成 (或 interrupt() 等待用户回复)
+  current_stage = "cache_check"
+  ↓
+缓存检查
+  ├─ 命中 → current_stage = "completed", cache_hit = True
+  └─ 未命中 → current_stage = "schema_analysis"
   ↓
 Schema分析完成
   current_stage = "sql_generation"
@@ -282,7 +364,7 @@ SQL执行完成
   current_stage = "completed" 或 "chart_generation"
   execution_result = {...}
   ↓
-(可选)图表生成完成
+(可选，快速模式跳过)图表生成完成
   current_stage = "completed"
   chart_config = {...}
 ```
@@ -339,19 +421,21 @@ SQL执行完成
 **职责**: 根据模式信息生成高质量SQL语句
 
 **工具列表**:
-1. `generate_sql_query`: 基础SQL生成
+1. `generate_sql_query`: 基础SQL生成（内置自动样本检索）
 2. `generate_sql_with_samples`: 基于历史样本生成(更高质量)
-3. `explain_sql_query`: 解释SQL逻辑
+3. ~~`explain_sql_query`~~: 已移除以提升速度 (2026-01-18)
 
 **工作流程**:
 ```python
 1. 接收用户查询和schema信息
-2. 检查是否有样本检索结果
+2. 自动检索相关样本（除非快速模式跳过）
+   - 使用 HybridRetrievalEnginePool.quick_retrieve()
+   - 配置项: QA_SAMPLE_ENABLED, QA_SAMPLE_TOP_K, QA_SAMPLE_MIN_SIMILARITY
 3. 选择生成策略:
    - 有高质量样本 → generate_sql_with_samples
-   - 无样本 → generate_sql_query
+   - 无样本或快速模式 → generate_sql_query
 4. 生成SQL并清理格式
-5. (可选)解释SQL逻辑
+5. 使用 with_structured_output 确保输出一致性
 ```
 
 **生成策略**:
@@ -365,7 +449,18 @@ SQL执行完成
 
 **重要变更**:
 - 简化流程后，SQL生成后直接执行，不再验证
-- 因此生成时必须确保高质量
+- 样本检索已集成到此Agent内部 (2026-01-19)
+- 移除 explain_sql_query 工具以提升速度 (2026-01-18)
+- 支持快速模式跳过样本检索 (2026-01-21)
+
+**QA样本检索配置**:
+```python
+QA_SAMPLE_ENABLED = True           # 是否启用样本召回
+QA_SAMPLE_TOP_K = 3                # 检索数量
+QA_SAMPLE_MIN_SIMILARITY = 0.6     # 最低相似度
+QA_SAMPLE_TIMEOUT = 10             # 超时时间(秒)
+QA_SAMPLE_FAST_FALLBACK = True     # 失败时快速降级
+```
 
 **输出示例**:
 ```python
@@ -602,6 +697,48 @@ strategies = {
 
 **备份位置**: `backend/backups/agents_backup_20260116_175357`
 
+### 1.5 Sample Retrieval Agent 集成 (2026-01-19)
+
+**背景**:
+- 原 sample_retrieval_agent 作为独立 ReAct agent 存在调度延迟问题（2+ 分钟）
+
+**改进**:
+- 临时禁用独立的 sample_retrieval_agent
+- 将样本检索功能集成到 sql_generator_agent 内部
+- 先快速检查是否有样本，没有则跳过检索步骤
+
+**效果**:
+- 消除了 2+ 分钟的调度延迟
+- 样本检索仍可用，但更高效
+
+### 1.6 快速模式 (Fast Mode) 新增 (2026-01-21)
+
+**背景**:
+- 借鉴官方 LangGraph SQL Agent 的简洁性思想
+- 简单查询不需要完整的流程
+
+**改进**:
+- 添加 fast_mode_detect 节点
+- 简单查询自动跳过样本检索和图表生成
+- 配置化控制各项功能的开关
+
+**效果**:
+- 简单查询响应时间减少 30-50%
+- 复杂查询保持完整功能
+
+### 1.7 Supervisor 配置优化 (2026-01-21)
+
+**背景**:
+- 消息重复问题导致上下文过长
+
+**改进**:
+- `add_handoff_back_messages=False`: 不添加 handoff 消息
+- `output_mode="last_message"`: 只返回最后的总结消息
+
+**效果**:
+- 消除消息重复
+- 减少上下文长度
+
 ### 2. SQL Executor优化
 
 **问题**: execute_sql_query工具被重复调用4次
@@ -796,16 +933,26 @@ agent = create_react_agent(llm, wrapped_tools, ...)
 1. **模块化设计**: 每个Agent职责清晰，易于维护和扩展
 2. **智能协调**: Supervisor自动路由，无需硬编码流程
 3. **错误恢复**: 完善的错误处理和自动修复机制
-4. **性能优化**: 缓存、直接调用等优化手段
+4. **性能优化**: 双层缓存、快速模式、直接调用等优化手段
 5. **可扩展性**: 支持自定义Agent和工具
+6. **人机交互**: 使用 LangGraph interrupt() 模式实现澄清机制
 
 ### 最佳实践
 
 1. **状态管理**: 使用共享状态而非消息传递
 2. **工具设计**: 单一职责，可组合
 3. **错误处理**: 分层处理，自动恢复
-4. **性能优化**: 缓存常用结果，避免重复计算
+4. **性能优化**: 双层缓存、快速模式自动检测
 5. **可观测性**: 详细的日志记录
+6. **消息历史管理**: 自动修剪和验证消息历史
+
+### 近期改进 (2026-01)
+
+1. **快速模式** (2026-01-21): 简单查询自动跳过样本检索和图表生成
+2. **缓存直接执行** (2026-01-21): 缓存命中时直接执行SQL，无需走完整流程
+3. **消息重复修复** (2026-01-21): 优化 Supervisor 配置，消除消息重复
+4. **样本检索集成** (2026-01-19): 将样本检索集成到 sql_generator_agent
+5. **双层缓存** (2026-01-19): L1精确匹配 + L2语义匹配
 
 ### 未来改进方向
 
@@ -827,18 +974,26 @@ agent = create_react_agent(llm, wrapped_tools, ...)
 - `backend/app/agents/agents/supervisor_agent.py` - 协调器
 - `backend/app/core/state.py` - 状态定义
 
+**节点文件** (2026-01-19 新增):
+- `backend/app/agents/nodes/cache_check_node.py` - 缓存检查节点
+- `backend/app/agents/nodes/clarification_node.py` - 澄清节点
+
 **Worker Agents**:
 - `backend/app/agents/agents/schema_agent.py`
-- `backend/app/agents/agents/sql_generator_agent.py`
+- `backend/app/agents/agents/sql_generator_agent.py` (含样本检索)
 - `backend/app/agents/agents/sql_executor_agent.py`
 - `backend/app/agents/agents/chart_generator_agent.py`
 - `backend/app/agents/agents/error_recovery_agent.py`
+- `backend/app/agents/agents/clarification_agent.py`
+- ~~`backend/app/agents/agents/sample_retrieval_agent.py`~~ (已禁用)
 
 **服务层**:
 - `backend/app/services/text2sql_service.py`
 - `backend/app/services/text2sql_utils.py`
 - `backend/app/services/db_service.py`
 - `backend/app/services/schema_service.py`
+- `backend/app/services/query_cache_service.py` - 缓存服务
+- `backend/app/services/hybrid_retrieval_service.py` - 混合检索服务
 
 ### 参考文档
 
@@ -848,6 +1003,6 @@ agent = create_react_agent(llm, wrapped_tools, ...)
 
 ---
 
-**文档版本**: v1.0  
-**最后更新**: 2026-01-18  
+**文档版本**: v2.0  
+**最后更新**: 2026-01-22  
 **维护者**: AI Assistant
