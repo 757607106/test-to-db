@@ -57,37 +57,56 @@ export interface ToolResponse {
  * ```
  */
 export function parseToolResult(content: string | any): ToolResponse {
-  // 如果已经是对象，直接返回
+  // 如果已经是对象，规范化返回
   if (typeof content !== "string") {
-    return content as ToolResponse;
+    const obj = content as any;
+    
+    // 如果已有 status 字段，直接返回
+    if (obj.status) {
+      return obj as ToolResponse;
+    }
+    
+    // 如果有 error 字段，标记为错误
+    if (obj.error) {
+      return {
+        status: "error",
+        error: obj.error,
+        data: obj
+      };
+    }
+    
+    // 其他情况视为成功，将整个对象作为 data
+    return {
+      status: "success",
+      data: obj
+    };
   }
   
   // 如果是字符串，尝试解析为JSON
   try {
     const parsed = JSON.parse(content);
-    return parsed as ToolResponse;
+    
+    // 递归处理解析后的对象
+    return parseToolResult(parsed);
   } catch (error) {
     // JSON 解析失败，判断是否为成功的纯文本消息
     const lowerContent = content.toLowerCase();
-    const isSuccessMessage = 
-      lowerContent.includes("success") ||
-      lowerContent.includes("transferred") ||
-      lowerContent.includes("completed") ||
-      lowerContent.includes("done");
+    const isErrorMessage = 
+      lowerContent.includes("error") ||
+      lowerContent.includes("failed") ||
+      lowerContent.includes("exception");
     
-    if (isSuccessMessage) {
-      // 成功的纯文本消息
+    if (isErrorMessage) {
+      return {
+        status: "error",
+        error: content,
+        data: null
+      };
+    } else {
+      // 其他纯文本视为成功消息
       return {
         status: "success",
         data: { message: content }
-      };
-    } else {
-      // 其他情况视为错误
-      console.warn("Failed to parse tool result as JSON:", content);
-      return {
-        status: "error",
-        error: "Failed to parse tool result",
-        data: content
       };
     }
   }
@@ -147,11 +166,36 @@ export function isToolError(result: ToolResponse | null | undefined): boolean {
 /**
  * 检查工具结果是否成功
  * 
+ * 判断逻辑：
+ * 1. 如果有明确的 status === "success"，返回 true
+ * 2. 如果有明确的 status === "error"，返回 false
+ * 3. 如果有 error 字段，返回 false
+ * 4. 如果有 data 字段或其他有效数据（如 columns/rows），返回 true
+ * 5. 其他情况默认为 true（有数据即成功）
+ * 
  * @param result - ToolResponse 对象
  * @returns 是否为成功状态
  */
 export function isToolSuccess(result: ToolResponse | null | undefined): boolean {
-  return result?.status === "success";
+  if (!result) return false;
+  
+  // 明确的 status 字段
+  if (result.status === "success") return true;
+  if (result.status === "error") return false;
+  
+  // 有 error 字段视为失败
+  if (result.error) return false;
+  
+  // 有数据字段视为成功
+  if (result.data !== undefined && result.data !== null) return true;
+  
+  // 检查是否有 SQL 查询结果格式的数据
+  const resultObj = result as any;
+  if (resultObj.columns && Array.isArray(resultObj.columns)) return true;
+  if (resultObj.rows && Array.isArray(resultObj.rows)) return true;
+  
+  // 默认：如果对象非空，视为成功
+  return Object.keys(result).length > 0;
 }
 
 /**

@@ -9,7 +9,7 @@
 import { AIMessage, ToolMessage } from "@langchain/langgraph-sdk";
 import { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, ChevronUp, CheckCircle2, XCircle } from "lucide-react";
+import { ChevronDown, ChevronRight, CheckCircle2, XCircle, Circle, Database, Code, Zap } from "lucide-react";
 import { parseToolResult, isToolSuccess, isToolError } from "@/types/agent-message";
 
 function isComplexValue(value: unknown): boolean {
@@ -72,7 +72,7 @@ function getToolLabel(name: string | undefined): string {
 }
 
 /**
- * 工具调用组件 - 官方实现
+ * 工具调用组件
  */
 export function ToolCalls({
   toolCalls,
@@ -82,93 +82,107 @@ export function ToolCalls({
   if (!toolCalls || toolCalls.length === 0) return null;
 
   return (
-    <div className="mx-auto grid max-w-3xl grid-rows-[1fr_auto] gap-2">
-      {toolCalls.map((tc, idx) => {
-        const args = tc.args as Record<string, any>;
-        const hasArgs = Object.keys(args).length > 0;
-        const toolLabel = getToolLabel(tc.name);
+    <div className="space-y-2">
+      {toolCalls.map((tc, idx) => (
+        <ToolCallCard key={tc.id || idx} toolCall={tc} />
+      ))}
+    </div>
+  );
+}
 
-        return (
-          <div
-            key={idx}
-            className="overflow-hidden rounded-lg border border-gray-200"
+/**
+ * 工具调用卡片 - 显示调用中状态
+ */
+function ToolCallCard({ toolCall }: { toolCall: AIMessage["tool_calls"][0] }) {
+  const [isExpanded, setIsExpanded] = useState(true);
+  const args = toolCall.args as Record<string, any>;
+  const hasArgs = Object.keys(args).length > 0;
+  const toolLabel = getToolLabel(toolCall.name);
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white shadow-sm overflow-hidden">
+      {/* 头部 */}
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors"
+      >
+        <motion.div
+          animate={{ rotate: isExpanded ? 90 : 0 }}
+          transition={{ duration: 0.2 }}
+          className="text-slate-400"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </motion.div>
+        
+        <div className="flex items-center gap-2">
+          <Circle className="h-2 w-2 fill-blue-500 text-blue-500" />
+          <span className="text-sm font-medium text-slate-700">{toolLabel}</span>
+        </div>
+        
+        <span className="ml-auto text-xs text-slate-400 font-mono">
+          {toolCall.id ? `#${toolCall.id.slice(-8)}` : ''}
+        </span>
+      </button>
+
+      {/* 参数内容 */}
+      <AnimatePresence>
+        {isExpanded && hasArgs && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
           >
-            <div className="border-b border-gray-200 bg-gray-50 px-4 py-2">
-              <h3 className="font-medium text-gray-900">
-                {toolLabel}
-                {tc.id && (
-                  <code className="ml-2 rounded bg-gray-100 px-2 py-1 text-sm">
-                    {tc.id}
-                  </code>
-                )}
-              </h3>
+            <div className="border-t border-slate-100 bg-slate-50/50">
+              <div className="divide-y divide-slate-100">
+                {Object.entries(args).map(([key, value]) => (
+                  <div key={key} className="flex">
+                    <div className="w-36 flex-shrink-0 px-4 py-2.5 text-xs font-medium text-slate-500 bg-slate-50">
+                      {key}
+                    </div>
+                    <div className="flex-1 px-4 py-2.5 text-sm text-slate-700 break-all">
+                      {isComplexValue(value) ? (
+                        <code className="text-xs bg-slate-100 px-2 py-1 rounded font-mono block whitespace-pre-wrap">
+                          {JSON.stringify(value, null, 2)}
+                        </code>
+                      ) : (
+                        String(value)
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-
-            {hasArgs ? (
-              <table className="min-w-full divide-y divide-gray-200">
-                <tbody className="divide-y divide-gray-200">
-                  {Object.entries(args).map(([key, value], argIdx) => (
-                    <tr key={argIdx}>
-                      <td className="px-4 py-2 text-sm font-medium whitespace-nowrap text-gray-900">
-                        {key}
-                      </td>
-                      <td className="px-4 py-2 text-sm text-gray-500">
-                        {isComplexValue(value) ? (
-                          <code className="rounded bg-gray-50 px-2 py-1 font-mono text-sm break-all">
-                            {JSON.stringify(value, null, 2)}
-                          </code>
-                        ) : (
-                          String(value)
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <code className="block p-3 text-sm">{"{}"}</code>
-            )}
-          </div>
-        );
-      })}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
 /**
  * 工具结果组件
- * 
- * 统一解析和显示工具执行结果
- * 支持后端统一的 ToolResponse 格式
  */
 export function ToolResult({ message }: { message: ToolMessage }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(true);
   const toolLabel = getToolLabel(message.name);
 
-  // 使用 useMemo 避免重复解析
-  const { parsedResult, isSuccess, displayData, hasExpandableContent } = useMemo(() => {
-    // 尝试使用统一的 ToolResponse 解析
+  const { parsedResult, isSuccess, displayData } = useMemo(() => {
     const parsed = parseToolResult(message.content);
     const success = isToolSuccess(parsed);
     
-    // 提取要显示的数据
     let data: unknown = parsed.data;
-    let expandable = false;
     
-    // 如果是成功的结果，优先显示 data 字段
-    if (success && parsed.data) {
-      data = parsed.data;
-      // 检查是否有可展开的内容
-      if (typeof data === "object" && data !== null) {
-        const dataObj = data as Record<string, unknown>;
-        // SQL 查询结果通常有 data 数组
-        if (Array.isArray(dataObj.data) && dataObj.data.length > 5) {
-          expandable = true;
-        } else if (Array.isArray(data) && (data as unknown[]).length > 5) {
-          expandable = true;
-        }
+    // 如果 data 为空但有其他字段（如 columns, rows），使用整个解析结果
+    if (!data && parsed && typeof parsed === 'object') {
+      const keys = Object.keys(parsed).filter(k => k !== 'status' && k !== 'error');
+      if (keys.length > 0) {
+        data = parsed;
       }
-    } else if (parsed.error) {
+    }
+    
+    // 如果是错误，显示错误信息
+    if (!success && parsed.error) {
       data = { error: parsed.error };
     }
     
@@ -176,186 +190,178 @@ export function ToolResult({ message }: { message: ToolMessage }) {
       parsedResult: parsed,
       isSuccess: success,
       displayData: data,
-      hasExpandableContent: expandable,
     };
   }, [message.content]);
 
-  // 格式化显示内容
-  const formatDisplayContent = () => {
-    if (!displayData) return "无数据";
-    
-    if (typeof displayData === "string") {
-      return displayData;
-    }
-    
-    // 对于对象/数组，格式化为 JSON
-    return JSON.stringify(displayData, null, 2);
-  };
-
-  const displayContent = formatDisplayContent();
-  const shouldTruncate = displayContent.length > 500 || displayContent.split("\n").length > 10;
+  const borderColor = isSuccess ? "border-emerald-200" : "border-red-200";
+  const headerBg = isSuccess ? "bg-emerald-50" : "bg-red-50";
+  const statusColor = isSuccess ? "text-emerald-600" : "text-red-600";
+  const statusBg = isSuccess ? "bg-emerald-100" : "bg-red-100";
 
   return (
-    <div className="mx-auto grid max-w-3xl grid-rows-[1fr_auto] gap-2">
-      <div className="overflow-hidden rounded-lg border border-gray-200">
-        {/* 标题栏 - 显示状态指示器 */}
-        <div className={`border-b px-4 py-2 ${isSuccess ? "border-green-200 bg-green-50" : "border-red-200 bg-red-50"}`}>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              {isSuccess ? (
-                <CheckCircle2 className="h-4 w-4 text-green-600" />
-              ) : (
-                <XCircle className="h-4 w-4 text-red-600" />
-              )}
-              <h3 className="font-medium text-gray-900">
-                {toolLabel}
-              </h3>
-            </div>
-            
-            {/* 元数据显示 */}
-            {parsedResult.metadata?.execution_time && (
-              <span className="text-xs text-gray-500">
-                {(parsedResult.metadata.execution_time as number).toFixed(2)}s
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* 内容区域 */}
+    <div className={`rounded-lg border ${borderColor} bg-white shadow-sm overflow-hidden`}>
+      {/* 头部 */}
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className={`w-full flex items-center gap-3 px-4 py-3 ${headerBg} hover:brightness-95 transition-all`}
+      >
         <motion.div
-          className="min-w-full bg-gray-50"
-          initial={false}
-          animate={{ height: "auto" }}
-          transition={{ duration: 0.3 }}
+          animate={{ rotate: isExpanded ? 90 : 0 }}
+          transition={{ duration: 0.2 }}
+          className="text-slate-400"
         >
-          <div className="p-3">
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.div
-                key={isExpanded ? "expanded" : "collapsed"}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
-              >
-                {/* 显示结构化数据 */}
-                {typeof displayData === "object" && displayData !== null ? (
-                  <StructuredDataDisplay 
-                    data={displayData as Record<string, unknown>} 
-                    isExpanded={isExpanded} 
-                  />
-                ) : (
-                  <code className="block text-sm whitespace-pre-wrap break-all">
-                    {shouldTruncate && !isExpanded 
-                      ? displayContent.slice(0, 500) + "..." 
-                      : displayContent}
-                  </code>
-                )}
-              </motion.div>
-            </AnimatePresence>
-          </div>
-
-          {/* 展开/收起按钮 */}
-          {(shouldTruncate || hasExpandableContent) && (
-            <motion.button
-              onClick={() => setIsExpanded(!isExpanded)}
-              className="flex w-full cursor-pointer items-center justify-center border-t border-gray-200 py-2 text-gray-500 transition-all hover:bg-gray-100 hover:text-gray-700"
-              whileHover={{ scale: 1.01 }}
-              whileTap={{ scale: 0.99 }}
-            >
-              {isExpanded ? (
-                <>
-                  <ChevronUp className="h-4 w-4 mr-1" />
-                  <span className="text-sm">收起</span>
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="h-4 w-4 mr-1" />
-                  <span className="text-sm">展开更多</span>
-                </>
-              )}
-            </motion.button>
-          )}
+          <ChevronRight className="h-4 w-4" />
         </motion.div>
-      </div>
+        
+        <div className="flex items-center gap-2">
+          {isSuccess ? (
+            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+          ) : (
+            <XCircle className="h-4 w-4 text-red-500" />
+          )}
+          <span className="text-sm font-medium text-slate-700">{toolLabel}</span>
+          <span className={`text-xs px-1.5 py-0.5 rounded ${statusBg} ${statusColor}`}>
+            {isSuccess ? "成功" : "失败"}
+          </span>
+        </div>
+        
+        {parsedResult.metadata?.execution_time && (
+          <span className="ml-auto text-xs text-slate-400">
+            {(parsedResult.metadata.execution_time as number).toFixed(2)}s
+          </span>
+        )}
+      </button>
+
+      {/* 结果内容 */}
+      <AnimatePresence>
+        {isExpanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <div className="border-t border-slate-100 p-4">
+              {typeof displayData === "object" && displayData !== null ? (
+                <DataDisplay data={displayData as Record<string, unknown>} isSuccess={isSuccess} />
+              ) : (
+                <code className="block text-sm whitespace-pre-wrap break-all bg-slate-50 rounded-lg p-3 border border-slate-200">
+                  {displayData ? String(displayData) : "无数据"}
+                </code>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
 /**
- * 结构化数据显示组件
+ * 数据展示组件
  */
-function StructuredDataDisplay({ 
+function DataDisplay({ 
   data, 
-  isExpanded 
+  isSuccess = true 
 }: { 
   data: Record<string, unknown>; 
-  isExpanded: boolean;
+  isSuccess?: boolean;
 }) {
-  // SQL 查询结果特殊处理
-  if ("columns" in data && "data" in data && Array.isArray(data.data)) {
+  // SQL 查询结果 - 表格展示
+  // 支持两种格式：
+  // 1. {columns: [...], data: [...]}
+  // 2. {columns: [...], rows: [...]}
+  const hasColumns = "columns" in data && Array.isArray(data.columns);
+  const rowsData = data.data || data.rows;
+  const hasRows = Array.isArray(rowsData);
+  
+  if (hasColumns && hasRows) {
     const columns = data.columns as string[];
-    const rows = data.data as unknown[][];
-    const displayRows = isExpanded ? rows : rows.slice(0, 5);
+    const rows = rowsData as unknown[][];
+    
+    if (rows.length === 0) {
+      return (
+        <div className="text-center py-6 text-slate-500 text-sm">
+          查询结果为空
+        </div>
+      );
+    }
     
     return (
-      <div className="overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-200 text-sm">
-          <thead className="bg-gray-100">
+      <div className="overflow-x-auto rounded-lg border border-slate-200">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-100">
             <tr>
               {columns.map((col, idx) => (
-                <th key={idx} className="px-3 py-2 text-left font-medium text-gray-700">
+                <th key={idx} className="px-4 py-2.5 text-left font-semibold text-slate-600 border-b border-slate-200">
                   {col}
                 </th>
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
-            {displayRows.map((row, rowIdx) => (
-              <tr key={rowIdx} className="hover:bg-gray-50">
+          <tbody className="bg-white divide-y divide-slate-100">
+            {rows.slice(0, 10).map((row, rowIdx) => (
+              <tr key={rowIdx} className="hover:bg-slate-50 transition-colors">
                 {(row as unknown[]).map((cell, cellIdx) => (
-                  <td key={cellIdx} className="px-3 py-2 text-gray-600">
+                  <td key={cellIdx} className="px-4 py-2.5 text-slate-700">
                     {isComplexValue(cell) 
-                      ? JSON.stringify(cell) 
-                      : String(cell ?? "")}
+                      ? <code className="text-xs bg-slate-100 px-1.5 py-0.5 rounded">{JSON.stringify(cell)}</code>
+                      : String(cell ?? "-")}
                   </td>
                 ))}
               </tr>
             ))}
           </tbody>
         </table>
-        {!isExpanded && rows.length > 5 && (
-          <div className="text-center text-xs text-gray-500 py-2">
-            还有 {rows.length - 5} 行未显示
+        {rows.length > 10 && (
+          <div className="text-center text-xs text-slate-500 py-2 bg-slate-50 border-t border-slate-200">
+            显示前 10 条，共 {rows.length} 条数据
           </div>
         )}
       </div>
     );
   }
   
-  // 通用对象显示
+  // 错误信息
+  if ("error" in data) {
+    return (
+      <div className="rounded-lg bg-red-50 border border-red-200 p-4">
+        <div className="flex items-start gap-3">
+          <XCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <div className="font-medium text-red-700 mb-1">错误信息</div>
+            <code className="text-sm text-red-600 whitespace-pre-wrap break-all">
+              {String(data.error)}
+            </code>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  
+  // 通用键值对展示
   const entries = Object.entries(data);
-  const displayEntries = isExpanded ? entries : entries.slice(0, 10);
   
   return (
-    <table className="min-w-full divide-y divide-gray-200">
-      <tbody className="divide-y divide-gray-100">
-        {displayEntries.map(([key, value], idx) => (
-          <tr key={idx}>
-            <td className="px-3 py-2 text-sm font-medium text-gray-700 whitespace-nowrap">
+    <div className="rounded-lg border border-slate-200 overflow-hidden">
+      <div className="divide-y divide-slate-100">
+        {entries.map(([key, value]) => (
+          <div key={key} className="flex">
+            <div className="w-40 flex-shrink-0 px-4 py-2.5 text-xs font-medium text-slate-500 bg-slate-50">
               {key}
-            </td>
-            <td className="px-3 py-2 text-sm text-gray-600">
+            </div>
+            <div className="flex-1 px-4 py-2.5 text-sm text-slate-700 break-all bg-white">
               {isComplexValue(value) ? (
-                <code className="rounded bg-gray-100 px-2 py-1 font-mono text-xs break-all block max-h-40 overflow-auto">
+                <code className="text-xs bg-slate-100 px-2 py-1 rounded font-mono block whitespace-pre-wrap max-h-48 overflow-auto">
                   {JSON.stringify(value, null, 2)}
                 </code>
               ) : (
-                String(value ?? "")
+                String(value ?? "-")
               )}
-            </td>
-          </tr>
+            </div>
+          </div>
         ))}
-      </tbody>
-    </table>
+      </div>
+    </div>
   );
 }
