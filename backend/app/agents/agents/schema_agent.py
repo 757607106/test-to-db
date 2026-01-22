@@ -1,24 +1,37 @@
 """
-Schema分析代理
-负责分析用户查询并获取相关的数据库模式信息
+Schema 分析代理 (优化版本)
+
+遵循 LangGraph 官方最佳实践:
+1. 使用 InjectedState 注入状态参数
+2. 工具返回标准格式 (字符串或 JSON)
+3. 使用 ToolNode 配合 ReAct Agent
+
+官方文档参考:
+- https://langchain-ai.github.io/langgraph/how-tos/tool-calling
+- https://langchain-ai.github.io/langgraph/reference/agents
 """
-from typing import Dict, Any
+from typing import Dict, Any, Annotated
+import json
+import logging
 
-from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, AIMessage, AnyMessage
-from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import HumanMessage, AIMessage
+from langgraph.prebuilt import create_react_agent, InjectedState
 
-from app.core.state import SQLMessageState, extract_connection_id
-from app.core.llms import get_default_model
+from app.core.state import SQLMessageState
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 from app.db.session import SessionLocal
 from app.services.text2sql_utils import retrieve_relevant_schema, get_value_mappings, analyze_query_with_llm
-from app.schemas.agent_message import ToolResponse
 
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# 工具定义 (使用 InjectedState 注入状态)
+# ============================================================================
 
 @tool
-def analyze_user_query(query: str) -> ToolResponse:
+def analyze_user_query(query: str) -> str:
     """
     分析用户的自然语言查询，提取关键实体和意图
     
@@ -26,36 +39,51 @@ def analyze_user_query(query: str) -> ToolResponse:
         query: 用户的自然语言查询
         
     Returns:
-        包含实体、关系和查询意图的分析结果
+        str: JSON 格式的分析结果，包含实体、关系和查询意图
     """
     try:
         analysis = analyze_query_with_llm(query)
-        return ToolResponse(
-            status="success",
-            data={"analysis": analysis}
-        )
+        return json.dumps({
+            "success": True,
+            "analysis": analysis
+        }, ensure_ascii=False)
     except Exception as e:
-        return ToolResponse(
-            status="error",
-            error=str(e)
-        )
+        logger.error(f"查询分析失败: {str(e)}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        }, ensure_ascii=False)
 
 
 @tool
-def retrieve_database_schema(query: str, connection_id: int) -> ToolResponse:
+def retrieve_database_schema(
+    query: str,
+    state: Annotated[dict, InjectedState]
+) -> str:
     """
-    根据查询分析结果获取相关的数据库表结构信息
-
+    根据查询获取相关的数据库表结构信息
+    
     Args:
         query: 用户查询
-        connection_id: 数据库连接ID
-
+        state: 注入的状态 (自动从 LangGraph 状态获取 connection_id)
+        
     Returns:
-        相关的表结构和值映射信息
+        str: JSON 格式的表结构和值映射信息
+        
+    注意:
+        使用 InjectedState 自动获取 connection_id，无需显式传递
     """
-
-    # 开始分析用户查询
     try:
+        # 从状态中获取 connection_id
+        connection_id = state.get("connection_id")
+        if not connection_id:
+            return json.dumps({
+                "success": False,
+                "error": "未指定数据库连接 ID"
+            }, ensure_ascii=False)
+        
+        logger.info(f"检索数据库 schema, connection_id={connection_id}")
+        
         db = SessionLocal()
         try:
             # 获取相关表结构
@@ -68,42 +96,50 @@ def retrieve_database_schema(query: str, connection_id: int) -> ToolResponse:
             # 获取值映射
             value_mappings = get_value_mappings(db, schema_context)
             
-            return ToolResponse(
-                status="success",
-                data={
-                    "schema_context": schema_context,
-                    "value_mappings": value_mappings
-                }
-            )
+            return json.dumps({
+                "success": True,
+                "schema_context": schema_context,
+                "value_mappings": value_mappings,
+                "connection_id": connection_id
+            }, ensure_ascii=False, default=str)
         finally:
             db.close()
+            
     except Exception as e:
-        return ToolResponse(
-            status="error",
-            error=str(e)
-        )
+        logger.error(f"Schema 检索失败: {str(e)}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        }, ensure_ascii=False)
 
 
 @tool
-def validate_schema_completeness(schema_info: Dict[str, Any], query_analysis: Dict[str, Any]) -> ToolResponse:
+def validate_schema_completeness(
+    schema_info: str,
+    query_analysis: str
+) -> str:
     """
     验证获取的模式信息是否足够完整来回答用户查询
     
     Args:
-        schema_info: 获取的模式信息
-        query_analysis: 查询分析结果
+        schema_info: JSON 格式的模式信息
+        query_analysis: JSON 格式的查询分析结果
         
     Returns:
-        验证结果和建议
+        str: JSON 格式的验证结果和建议
     """
     try:
+        # 解析输入
+        schema_data = json.loads(schema_info) if isinstance(schema_info, str) else schema_info
+        analysis_data = json.loads(query_analysis) if isinstance(query_analysis, str) else query_analysis
+        
         # 检查是否有足够的表信息
-        required_entities = query_analysis.get("entities", [])
-        available_tables = list(schema_info.get("schema_context", {}).keys())
+        required_entities = analysis_data.get("entities", [])
+        schema_context = schema_data.get("schema_context", {})
+        available_tables = list(schema_context.keys()) if isinstance(schema_context, dict) else []
         
         missing_entities = []
         for entity in required_entities:
-            # 简单的匹配逻辑，可以进一步优化
             if not any(entity.lower() in table.lower() for table in available_tables):
                 missing_entities.append(entity)
         
@@ -113,115 +149,164 @@ def validate_schema_completeness(schema_info: Dict[str, Any], query_analysis: Di
         if missing_entities:
             suggestions.append(f"可能缺少与以下实体相关的表信息: {', '.join(missing_entities)}")
         
-        return ToolResponse(
-            status="success",
-            data={
-                "is_complete": is_complete,
-                "missing_entities": missing_entities,
-                "suggestions": suggestions
-            }
-        )
+        return json.dumps({
+            "success": True,
+            "is_complete": is_complete,
+            "missing_entities": missing_entities,
+            "suggestions": suggestions
+        }, ensure_ascii=False)
+        
     except Exception as e:
-        return ToolResponse(
-            status="error",
-            error=str(e)
-        )
+        logger.error(f"Schema 完整性验证失败: {str(e)}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        }, ensure_ascii=False)
 
+
+# ============================================================================
+# Schema 分析代理类
+# ============================================================================
 
 class SchemaAnalysisAgent:
-    """Schema分析代理"""
-
+    """
+    Schema 分析代理 - 使用 InjectedState 优化
+    
+    重要变更:
+    - retrieve_database_schema 工具现在使用 InjectedState 获取 connection_id
+    - 无需在提示词中显式传递 connection_id
+    """
+    
     def __init__(self):
-        self.name = "schema_agent"  # 添加name属性
+        self.name = "schema_agent"
         self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
-        self.tools = [analyze_user_query, retrieve_database_schema] #, validate_schema_completeness]
-
-        # 创建ReAct代理
+        self.tools = [analyze_user_query, retrieve_database_schema]
+        
+        # 创建 ReAct 代理
         self.agent = create_react_agent(
             self.llm,
             self.tools,
-            prompt=self._create_system_prompt,  # 动态提示词
+            prompt=self._create_system_prompt(),
             name=self.name,
+            state_schema=SQLMessageState  # 指定状态 schema，让 InjectedState 能正确注入
         )
     
-    def _create_system_prompt(self, state: SQLMessageState, config: RunnableConfig) -> list[AnyMessage]:
-        connection_id = extract_connection_id(state)
-
+    def _create_system_prompt(self) -> str:
         """创建系统提示"""
-        system_msg = f"""你是一个专业的数据库模式分析专家。
-
-**重要：当前数据库connection_id是 {connection_id}**
+        return """你是一个专业的数据库模式分析专家。
 
 **核心职责**: 分析用户查询，获取相关的数据库表结构信息
 
 **工作流程**:
 1. 使用 analyze_user_query 工具分析用户查询意图
 2. 使用 retrieve_database_schema 工具获取相关表结构
-3. **只返回模式信息，不生成SQL，不预测结果**
+   - connection_id 会自动从状态中获取，无需手动传递
+3. **只返回模式信息，不生成 SQL，不预测结果**
 
 **输出内容**:
 - 相关的表和字段信息
 - 必要的值映射信息
 
 **禁止的行为**:
-- ❌ 不要生成SQL语句
+- ❌ 不要生成 SQL 语句
 - ❌ 不要预测查询结果
 - ❌ 不要重复调用工具
 
 **输出格式**: 只返回工具调用结果，包含表结构和值映射信息"""
-
-        return [{"role": "system", "content": system_msg}] + state["messages"]
-
-    # 3. 最后使用 validate_schema_completeness 工具验证信息完整性
-
+    
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
-        """处理Schema分析任务"""
+        """处理 Schema 分析任务"""
         try:
             # 获取用户查询
-            user_query = state["messages"][-1].content
-            if isinstance(user_query, list):
-                user_query = user_query[0]["text"]
+            messages = state.get("messages", [])
+            user_query = None
+            for msg in messages:
+                if hasattr(msg, 'type') and msg.type == 'human':
+                    user_query = msg.content
+                    if isinstance(user_query, list):
+                        user_query = user_query[0].get("text", "") if user_query else ""
+                    break
             
-            # 获取connection_id
-            connection_id = state.get("connection_id", 15)
-
-            # 准备输入消息，包含connection_id信息
-            messages = [
-                HumanMessage(content=f"""请分析以下用户查询并获取相关的数据库模式信息：{user_query}
-
-重要：当前数据库连接ID是 {connection_id}，在调用 retrieve_database_schema 工具时，必须传递 connection_id={connection_id} 参数。""")
-            ]
-
-            # 调用代理
-            result = await self.agent.ainvoke({
-                "messages": messages
+            if not user_query:
+                raise ValueError("无法获取用户查询")
+            
+            connection_id = state.get("connection_id")
+            
+            # 直接调用工具获取 schema（不通过 ReAct Agent，减少 LLM 调用）
+            logger.info(f"直接获取 schema 信息, connection_id={connection_id}")
+            
+            schema_result_json = retrieve_database_schema.invoke({
+                "query": user_query,
+                "state": {"connection_id": connection_id}
             })
             
-            # 更新状态
-            state["current_stage"] = "sql_generation"
-            state["agent_messages"]["schema_agent"] = result
+            # 解析 schema 结果
+            schema_result = json.loads(schema_result_json)
+            
+            if not schema_result.get("success"):
+                raise ValueError(f"Schema 获取失败: {schema_result.get('error')}")
+            
+            # 提取 schema 信息
+            schema_context = schema_result.get("schema_context", {})
+            value_mappings = schema_result.get("value_mappings", {})
+            
+            logger.info(f"Schema 获取成功: {len(schema_context)} 个表")
+            
+            # 构建 schema_info 存储到状态
+            schema_info = {
+                "tables": schema_context,
+                "value_mappings": value_mappings,
+                "connection_id": connection_id
+            }
+            
+            # 创建消息记录
+            result_message = AIMessage(
+                content=f"已获取数据库模式信息：共 {len(schema_context)} 个相关表"
+            )
             
             return {
-                "messages": result["messages"],
+                "messages": [result_message],
+                "schema_info": schema_info,
                 "current_stage": "sql_generation"
             }
             
         except Exception as e:
-            # 记录错误
-            error_info = {
-                "stage": "schema_analysis",
-                "error": str(e),
-                "retry_count": state.get("retry_count", 0)
-            }
-            
-            state["error_history"].append(error_info)
-            state["current_stage"] = "error_recovery"
+            logger.error(f"Schema 分析失败: {str(e)}")
             
             return {
-                "messages": [AIMessage(content=f"Schema分析失败: {str(e)}")],
-                "current_stage": "error_recovery"
+                "messages": [AIMessage(content=f"Schema 分析失败: {str(e)}")],
+                "current_stage": "error_recovery",
+                "error_history": state.get("error_history", []) + [{
+                    "stage": "schema_analysis",
+                    "error": str(e),
+                    "retry_count": state.get("retry_count", 0)
+                }]
             }
 
 
-# 创建全局实例
+# ============================================================================
+# 节点函数 (用于 LangGraph 图)
+# ============================================================================
+
+async def schema_analysis_node(state: SQLMessageState) -> Dict[str, Any]:
+    """
+    Schema 分析节点函数 - 用于 LangGraph 图
+    """
+    agent = SchemaAnalysisAgent()
+    return await agent.process(state)
+
+
+# ============================================================================
+# 导出
+# ============================================================================
+
+# 创建全局实例（兼容现有代码）
 schema_agent = SchemaAnalysisAgent()
+
+__all__ = [
+    "schema_agent",
+    "schema_analysis_node",
+    "analyze_user_query",
+    "retrieve_database_schema",
+    "SchemaAnalysisAgent",
+]

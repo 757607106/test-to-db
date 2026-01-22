@@ -120,14 +120,73 @@ class ChartGeneratorAgent:
 
 **输出格式**: 只返回图表配置，不添加数据总结"""
 
-    async def generate_chart(self, state: SQLMessageState) -> Dict[str, Any]:
-        """生成图表"""
+    async def process(self, state: SQLMessageState) -> Dict[str, Any]:
+        """
+        处理数据分析和图表生成任务
+        
+        这是 supervisor 调用的主要入口方法
+        """
+        import json
+        from langchain_core.messages import HumanMessage
+        
         try:
-            # 调用代理处理
-            result = await self.agent.ainvoke(state)
+            # 从状态中获取执行结果
+            execution_result = state.get("execution_result")
+            generated_sql = state.get("generated_sql", "")
+            
+            # 获取用户原始查询
+            messages = state.get("messages", [])
+            user_query = ""
+            for msg in messages:
+                if hasattr(msg, 'type') and msg.type == 'human':
+                    user_query = msg.content
+                    if isinstance(user_query, list):
+                        user_query = user_query[0].get("text", "") if user_query else ""
+                    break
+            
+            # 准备数据
+            if execution_result and hasattr(execution_result, 'data'):
+                result_data = execution_result.data
+            else:
+                result_data = {}
+            
+            columns = result_data.get("columns", []) if isinstance(result_data, dict) else []
+            data = result_data.get("data", []) if isinstance(result_data, dict) else []
+            row_count = result_data.get("row_count", 0) if isinstance(result_data, dict) else 0
+            
+            # 限制数据量
+            data_preview = data[:20] if len(data) > 20 else data
+            
+            # 构建分析提示
+            analysis_prompt = f"""请根据以下查询结果，提供专业的数据分析。
+
+**用户问题**: {user_query}
+
+**执行的 SQL**:
+```sql
+{generated_sql}
+```
+
+**查询结果**:
+- 列名: {columns}
+- 数据行数: {row_count}
+- 数据内容: {json.dumps(data_preview, ensure_ascii=False, default=str)}
+
+请提供：
+1. **直接回答**: 针对用户问题的简明回答
+2. **数据洞察**: 从数据中发现的关键信息和规律
+3. **业务建议**: 基于数据的可行性建议（如果适用）
+
+如果数据为空，请分析可能的原因并给出建议。
+"""
+            
+            # 调用 LLM 进行分析
+            response = await self.llm.ainvoke([HumanMessage(content=analysis_prompt)])
+            
+            analysis_message = AIMessage(content=response.content)
             
             return {
-                "messages": result.get("messages", []),
+                "messages": [analysis_message],
                 "current_stage": "completed"
             }
             
@@ -139,13 +198,18 @@ class ChartGeneratorAgent:
                 "retry_count": state.get("retry_count", 0)
             }
             
-            state["error_history"].append(error_info)
-            state["current_stage"] = "error_recovery"
+            error_history = state.get("error_history", [])
+            error_history.append(error_info)
             
             return {
-                "messages": [AIMessage(content=f"图表生成失败: {str(e)}")],
-                "current_stage": "error_recovery"
+                "messages": [AIMessage(content=f"数据分析失败: {str(e)}")],
+                "current_stage": "error_recovery",
+                "error_history": error_history
             }
+    
+    async def generate_chart(self, state: SQLMessageState) -> Dict[str, Any]:
+        """生成图表（保留原有方法，向后兼容）"""
+        return await self.process(state)
 
 
 # 创建全局实例

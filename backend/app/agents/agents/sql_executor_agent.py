@@ -1,38 +1,86 @@
 """
-SQL执行代理
-负责安全地执行SQL查询并处理结果
+SQL 执行代理 (优化版本)
+
+遵循 LangGraph 官方最佳实践:
+1. 使用 ToolNode 替代 ReAct Agent (SQL 执行不需要推理)
+2. 直接执行工具，避免不必要的 LLM 调用
+3. 内置缓存机制防止重复执行
+
+官方文档参考:
+- https://langchain-ai.github.io/langgraph/how-tos/tool-calling
+- https://langchain-ai.github.io/langgraph/reference/prebuilt/#toolnode
 """
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+import time
+import json
+import logging
 
-from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, AIMessage, AnyMessage, ToolMessage
-from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.prebuilt import ToolNode
 
-from app.core.state import SQLMessageState, SQLExecutionResult, extract_connection_id
-from app.core.llms import get_default_model
-from app.db.db_manager import db_manager, ensure_db_connection
+from app.core.state import SQLMessageState, SQLExecutionResult
 from app.schemas.agent_message import ToolResponse
 
-# 全局缓存 - 防止重复执行
-import time
-_execution_cache = {}
-_cache_timestamps = {}
-_cache_lock = {}  # 防止并发重复执行
+logger = logging.getLogger(__name__)
 
+# ============================================================================
+# 全局缓存 - 防止重复执行
+# ============================================================================
+_execution_cache: Dict[str, ToolResponse] = {}
+_cache_timestamps: Dict[str, float] = {}
+_cache_lock: Dict[str, bool] = {}
+
+# 缓存配置
+CACHE_TTL_SECONDS = 300  # 5分钟
+CACHE_MAX_SIZE = 100
+
+
+def _clean_old_cache():
+    """清理过期缓存"""
+    current_time = time.time()
+    expired_keys = [
+        key for key, timestamp in _cache_timestamps.items()
+        if current_time - timestamp > CACHE_TTL_SECONDS
+    ]
+    for key in expired_keys:
+        _execution_cache.pop(key, None)
+        _cache_timestamps.pop(key, None)
+    
+    # 如果还是超过最大容量，删除最旧的一半
+    if len(_execution_cache) > CACHE_MAX_SIZE:
+        sorted_keys = sorted(_cache_timestamps.items(), key=lambda x: x[1])
+        keys_to_delete = [k for k, v in sorted_keys[:CACHE_MAX_SIZE // 2]]
+        for key in keys_to_delete:
+            _execution_cache.pop(key, None)
+            _cache_timestamps.pop(key, None)
+
+
+# ============================================================================
+# SQL 执行工具 (遵循 LangChain 工具标准)
+# ============================================================================
 
 @tool
-def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> ToolResponse:
+def execute_sql_query(
+    sql_query: str,
+    connection_id: int,
+    timeout: int = 30
+) -> str:
     """
-    执行SQL查询 - 带缓存防止重复执行
-
+    执行 SQL 查询 - 带缓存防止重复执行
+    
     Args:
-        sql_query: SQL查询语句
-        connection_id: 数据库连接ID
+        sql_query: SQL 查询语句
+        connection_id: 数据库连接 ID
         timeout: 超时时间（秒）
-
+        
     Returns:
-        ToolResponse: 统一格式的查询执行结果
+        str: JSON 格式的查询执行结果
+        
+    注意:
+        - 工具返回 JSON 字符串，符合 LangChain 标准
+        - 内置缓存机制，防止重复执行
+        - 只缓存 SELECT 查询，不缓存修改操作
     """
     # 生成缓存键
     cache_key = f"{connection_id}:{hash(sql_query)}"
@@ -45,46 +93,57 @@ def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> ToolR
     # 检查缓存（只对查询操作使用缓存，且未过期）
     if not is_modification and cache_key in _execution_cache:
         cache_age = time.time() - _cache_timestamps.get(cache_key, 0)
-        if cache_age < 300:  # 5分钟内的缓存有效
+        if cache_age < CACHE_TTL_SECONDS:
             cached_result = _execution_cache[cache_key]
-            # 更新缓存元数据
-            if cached_result.metadata is None:
-                cached_result.metadata = {}
-            cached_result.metadata["from_cache"] = True
-            cached_result.metadata["cache_age_seconds"] = int(cache_age)
-            return cached_result
+            logger.info(f"SQL 执行缓存命中 (age: {int(cache_age)}s)")
+            # 返回 JSON 字符串
+            result_dict = {
+                "success": cached_result.status == "success",
+                "data": cached_result.data,
+                "error": cached_result.error,
+                "from_cache": True,
+                "cache_age_seconds": int(cache_age)
+            }
+            return json.dumps(result_dict, ensure_ascii=False, default=str)
     
     # 检查是否正在执行（防止并发重复）
     if cache_key in _cache_lock:
-        # 等待一小段时间后返回提示
         time.sleep(0.5)
         if cache_key in _execution_cache:
-            return _execution_cache[cache_key]
-        return ToolResponse(
-            status="error",
-            error="查询正在执行中，请稍后重试"
-        )
+            cached = _execution_cache[cache_key]
+            return json.dumps({
+                "success": cached.status == "success",
+                "data": cached.data,
+                "error": cached.error,
+                "from_cache": True
+            }, ensure_ascii=False, default=str)
+        return json.dumps({
+            "success": False,
+            "error": "查询正在执行中，请稍后重试",
+            "from_cache": False
+        }, ensure_ascii=False)
     
     # 标记正在执行
     _cache_lock[cache_key] = True
     
     try:
-        
-        # 根据connection_id获取数据库连接并执行查询
         from app.services.db_service import get_db_connection_by_id, execute_query_with_connection
-
+        
         # 获取数据库连接
         connection = get_db_connection_by_id(connection_id)
         if not connection:
-            return ToolResponse(
-                status="error",
-                error=f"找不到连接ID为 {connection_id} 的数据库连接",
-                metadata={"connection_id": connection_id}
-            )
-
+            return json.dumps({
+                "success": False,
+                "error": f"找不到连接 ID 为 {connection_id} 的数据库连接",
+                "from_cache": False
+            }, ensure_ascii=False)
+        
         # 执行查询
+        start_time = time.time()
         result_data = execute_query_with_connection(connection, sql_query)
-
+        execution_time = time.time() - start_time
+        
+        # 构建结果
         result = ToolResponse(
             status="success",
             data={
@@ -94,7 +153,7 @@ def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> ToolR
                 "column_count": len(result_data[0].keys()) if result_data else 0
             },
             metadata={
-                "execution_time": 0,  # TODO: 添加执行时间计算
+                "execution_time": execution_time,
                 "rows_affected": len(result_data),
                 "from_cache": False
             }
@@ -102,68 +161,90 @@ def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> ToolR
         
         # 缓存结果（只缓存查询操作）
         if not is_modification:
+            _clean_old_cache()
             _execution_cache[cache_key] = result
             _cache_timestamps[cache_key] = time.time()
-            
-            # 清理旧缓存（保持缓存大小）
-            if len(_execution_cache) > 100:
-                # 删除最旧的一半
-                sorted_keys = sorted(_cache_timestamps.items(), key=lambda x: x[1])
-                keys_to_delete = [k for k, v in sorted_keys[:50]]
-                for key in keys_to_delete:
-                    _execution_cache.pop(key, None)
-                    _cache_timestamps.pop(key, None)
         
-        return result
-
+        # 返回 JSON 字符串
+        return json.dumps({
+            "success": True,
+            "data": result.data,
+            "execution_time": execution_time,
+            "from_cache": False
+        }, ensure_ascii=False, default=str)
+        
     except Exception as e:
-        return ToolResponse(
-            status="error",
-            error=str(e),
-            metadata={
-                "execution_time": 0,
-                "from_cache": False
-            }
-        )
+        logger.error(f"SQL 执行失败: {str(e)}")
+        return json.dumps({
+            "success": False,
+            "error": str(e),
+            "from_cache": False
+        }, ensure_ascii=False)
     finally:
         # 移除执行锁
         _cache_lock.pop(cache_key, None)
 
 
 # ============================================================================
-# 性能优化：已移除未使用的性能分析和格式化工具（2026-01-21）
-# 移除的工具：
-# - analyze_query_performance: 查询性能分析
-# - format_query_results: 结果格式化
-# 原因：SQL 执行已简化为直接调用工具，这些工具从未被实际调用
+# SQL 执行节点 (使用 ToolNode - 官方推荐)
 # ============================================================================
+
+# 创建 ToolNode - 官方推荐用于不需要推理的工具调用
+sql_executor_tool_node = ToolNode(
+    tools=[execute_sql_query],
+    handle_tool_errors=True  # 自动处理工具错误
+)
 
 
 class SQLExecutorAgent:
-    """SQL执行代理"""
-
+    """
+    SQL 执行代理 - 使用 ToolNode 实现
+    
+    重要变更 (2026-01):
+    - 移除了 ReAct Agent，改用 ToolNode
+    - SQL 执行不需要推理，直接调用工具即可
+    - 大幅减少 LLM 调用次数
+    
+    官方推荐:
+    - 对于简单的工具调用场景，使用 ToolNode
+    - 只有需要推理的场景才使用 ReAct Agent
+    """
+    
     def __init__(self):
         self.name = "sql_executor_agent"
-        self.llm = get_default_model()
         self.tools = [execute_sql_query]
+        # 使用 ToolNode 而不是 ReAct Agent
+        self.tool_node = sql_executor_tool_node
         
-        # 创建ReAct代理
+        # 为了兼容现有的 supervisor 接口，创建一个伪 agent
+        # 实际执行时会直接调用工具
+        self._create_compatible_agent()
+    
+    def _create_compatible_agent(self):
+        """
+        创建兼容现有 supervisor 接口的 agent
+        
+        注意: 这是为了向后兼容。在完成 supervisor 重构后可以移除。
+        """
+        from langgraph.prebuilt import create_react_agent
+        from app.core.llms import get_default_model
+        
+        self.llm = get_default_model()
         self.agent = create_react_agent(
             self.llm,
             self.tools,
-            prompt=self._create_system_prompt,
+            prompt=self._create_system_prompt(),
             name=self.name
         )
     
-    def _create_system_prompt(self, state: SQLMessageState, config: RunnableConfig) -> list[AnyMessage]:
-        connection_id = extract_connection_id(state)
+    def _create_system_prompt(self) -> str:
         """创建系统提示 - 只负责执行，不负责总结"""
-        system_msg = f"""你是一个SQL执行专家。当前数据库connection_id是 {connection_id}。
+        return """你是一个 SQL 执行专家。
 
-**核心职责**: 执行SQL查询，返回原始数据
+**核心职责**: 执行 SQL 查询，返回原始数据
 
 **执行规则**:
-1. 使用 execute_sql_query 工具执行SQL查询（仅一次）
+1. 使用 execute_sql_query 工具执行 SQL 查询（仅一次）
 2. 返回工具执行的原始结果
 3. **禁止生成查询结果的总结或解读**
 4. **禁止重复调用工具**
@@ -174,34 +255,36 @@ class SQLExecutorAgent:
 - ❌ 不要重复调用工具
 - ❌ 不要添加任何额外说明
 
-**你的输出**: 只返回工具调用结果，不添加任何文字
-"""
-        return [{"role": "system", "content": system_msg}] + state["messages"]
-
-    # 2. 使用 analyze_query_performance 分析性能
-    # 3. 使用 format_query_results 格式化结果
-    async def process(self, state: SQLMessageState) -> Dict[str, Any]:
-        """处理SQL执行任务 - 直接调用工具，避免 ReAct 重复调用
+**你的输出**: 只返回工具调用结果，不添加任何文字"""
+    
+    async def execute(self, state: SQLMessageState) -> Dict[str, Any]:
+        """
+        执行 SQL 查询 - 直接调用工具，避免 LLM 推理
         
-        注意：简化流程后，不再检查验证结果，直接执行SQL
-        修复：不使用 ReAct agent，直接调用工具，避免重复执行
+        这是推荐的执行方式，不经过 ReAct 循环。
+        执行成功后会调用 LLM 分析结果并生成自然语言回答。
         """
         try:
-            import json
-            
-            # 获取生成的SQL
+            # 获取生成的 SQL
             sql_query = state.get("generated_sql")
             if not sql_query:
-                raise ValueError("没有找到需要执行的SQL语句")
+                raise ValueError("没有找到需要执行的 SQL 语句")
             
-            connection_id = state.get("connection_id", 15)
+            connection_id = state.get("connection_id")
+            if not connection_id:
+                raise ValueError("没有指定数据库连接 ID")
             
-            # 直接调用工具，不经过 LLM 推理（避免重复调用）
-            result = execute_sql_query.invoke({
+            logger.info(f"执行 SQL: {sql_query[:100]}...")
+            
+            # 直接调用工具，不经过 LLM
+            result_json = execute_sql_query.invoke({
                 "sql_query": sql_query,
                 "connection_id": connection_id,
                 "timeout": 30
             })
+            
+            # 解析结果
+            result = json.loads(result_json)
             
             # 创建执行结果
             execution_result = SQLExecutionResult(
@@ -209,26 +292,11 @@ class SQLExecutorAgent:
                 data=result.get("data"),
                 error=result.get("error"),
                 execution_time=result.get("execution_time", 0),
-                rows_affected=result.get("rows_affected", 0)
+                rows_affected=result.get("data", {}).get("row_count", 0) if result.get("success") else 0
             )
             
-            # 更新状态
-            state["execution_result"] = execution_result
-            if execution_result.success:
-                state["current_stage"] = "completed"
-            else:
-                # 增强错误信息 - 包含SQL查询
-                error_info = {
-                    "stage": "sql_execution",
-                    "error": execution_result.error,
-                    "sql_query": sql_query,
-                    "retry_count": state.get("retry_count", 0)
-                }
-                state["error_history"].append(error_info)
-                state["current_stage"] = "error_recovery"
-            
-            # 创建消息用于前端显示（模拟 ReAct 的消息格式）
-            tool_call_id = f"call_{abs(hash(sql_query))}"
+            # 创建消息用于状态更新
+            tool_call_id = f"call_{abs(hash(sql_query)) % 10000000}"
             
             ai_message = AIMessage(
                 content="",
@@ -244,50 +312,155 @@ class SQLExecutorAgent:
                 }]
             )
             
-            # 创建对应的 tool message
             tool_message = ToolMessage(
-                content=result.model_dump_json(),  # ✅ 使用 Pydantic 标准序列化
+                content=result_json,
                 tool_call_id=tool_call_id,
                 name="execute_sql_query",
-                status=result.status  # ✅ 直接使用 ToolResponse.status
+                status="success" if result.get("success") else "error"
             )
             
-            # 保存到 agent_messages
-            state["agent_messages"]["sql_executor"] = {
-                "messages": [ai_message, tool_message]
-            }
+            messages = [ai_message, tool_message]
+            
+            # 确定下一阶段
+            if execution_result.success:
+                # 执行成功，进入分析阶段（由分析专家处理）
+                skip_chart = state.get("skip_chart_generation", False)
+                if skip_chart:
+                    # 如果跳过图表生成，直接在这里做简单分析
+                    user_query = self._extract_user_query(state)
+                    analysis_message = await self._analyze_result(
+                        user_query=user_query,
+                        sql_query=sql_query,
+                        result_data=result.get("data", {})
+                    )
+                    messages.append(analysis_message)
+                    next_stage = "completed"
+                else:
+                    # 进入分析/图表生成阶段，由自定义分析专家处理
+                    next_stage = "chart_generation"
+            else:
+                next_stage = "error_recovery"
             
             return {
-                "messages": [ai_message, tool_message],
+                "messages": messages,
                 "execution_result": execution_result,
-                "current_stage": state["current_stage"]
+                "current_stage": next_stage
             }
             
         except Exception as e:
-            # 详细的错误记录 - 包含所有必需字段
-            error_info = {
-                "stage": "sql_execution",
-                "error": str(e),
-                "sql_query": state.get("generated_sql"),
-                "retry_count": state.get("retry_count", 0)
-            }
+            logger.error(f"SQL 执行失败: {str(e)}")
             
-            state["error_history"].append(error_info)
-            state["current_stage"] = "error_recovery"
-            
-            # 创建失败的执行结果
             execution_result = SQLExecutionResult(
                 success=False,
                 error=str(e)
             )
             
             return {
-                "messages": [AIMessage(content=f"SQL执行失败: {str(e)}")],
+                "messages": [AIMessage(content=f"SQL 执行失败: {str(e)}")],
                 "execution_result": execution_result,
-                "current_stage": "error_recovery"
+                "current_stage": "error_recovery",
+                "error_history": state.get("error_history", []) + [{
+                    "stage": "sql_execution",
+                    "error": str(e),
+                    "sql_query": state.get("generated_sql"),
+                    "retry_count": state.get("retry_count", 0)
+                }]
             }
+    
+    def _extract_user_query(self, state: SQLMessageState) -> str:
+        """从状态中提取用户原始查询"""
+        messages = state.get("messages", [])
+        for msg in messages:
+            if hasattr(msg, 'type') and msg.type == 'human':
+                content = msg.content
+                if isinstance(content, list):
+                    content = content[0].get("text", "") if content else ""
+                return content
+        return ""
+    
+    async def _analyze_result(
+        self,
+        user_query: str,
+        sql_query: str,
+        result_data: Dict[str, Any]
+    ) -> AIMessage:
+        """
+        使用 LLM 分析查询结果并生成自然语言回答
+        """
+        from langchain_core.messages import HumanMessage
+        
+        columns = result_data.get("columns", [])
+        data = result_data.get("data", [])
+        row_count = result_data.get("row_count", 0)
+        
+        # 构建数据摘要（限制数据量避免 token 过多）
+        data_preview = data[:10] if len(data) > 10 else data
+        
+        prompt = f"""请根据以下查询结果，用简洁的自然语言回答用户的问题。
+
+用户问题: {user_query}
+
+执行的 SQL:
+```sql
+{sql_query}
+```
+
+查询结果:
+- 列名: {columns}
+- 数据行数: {row_count}
+- 数据预览 (最多10行): {json.dumps(data_preview, ensure_ascii=False, default=str)}
+
+请用简洁、专业的语言回答用户的问题，包括：
+1. 直接回答用户的问题
+2. 关键数据的总结
+3. 如果数据为空，说明可能的原因
+
+注意：不要重复输出完整的查询结果数据，只做总结分析。"""
+        
+        try:
+            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+            return AIMessage(content=response.content)
+        except Exception as e:
+            logger.warning(f"结果分析失败: {e}")
+            # 回退到简单摘要
+            if row_count == 0:
+                summary = f"查询执行成功，但没有找到符合条件的数据。"
+            else:
+                summary = f"查询执行成功，共返回 {row_count} 条记录。"
+            return AIMessage(content=summary)
+    
+    # 兼容旧接口
+    async def process(self, state: SQLMessageState) -> Dict[str, Any]:
+        """兼容旧的 process 接口"""
+        return await self.execute(state)
 
 
+# ============================================================================
+# 节点函数 (用于 LangGraph 图)
+# ============================================================================
 
-# 创建全局实例
+async def sql_executor_node(state: SQLMessageState) -> Dict[str, Any]:
+    """
+    SQL 执行节点函数 - 用于 LangGraph 图
+    
+    这是一个独立的节点函数，可以直接在图中使用。
+    不需要通过 Agent 类。
+    """
+    executor = SQLExecutorAgent()
+    return await executor.execute(state)
+
+
+# ============================================================================
+# 导出
+# ============================================================================
+
+# 创建全局实例（兼容现有代码）
 sql_executor_agent = SQLExecutorAgent()
+
+__all__ = [
+    "sql_executor_agent",
+    "sql_executor_tool_node",
+    "sql_executor_node",
+    "execute_sql_query",
+    "SQLExecutorAgent",
+]
