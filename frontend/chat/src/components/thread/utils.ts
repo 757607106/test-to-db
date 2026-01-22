@@ -1,127 +1,93 @@
 import type { Message } from "@langchain/langgraph-sdk";
 
 /**
- * 检测字符串是否看起来像 JSON 数据
- * 用于过滤工具返回的原始 JSON，避免在 AI 消息中显示
- */
-function looksLikeJson(text: string): boolean {
-  const trimmed = text.trim();
-  // 检查是否以 { 或 [ 开头，以 } 或 ] 结尾
-  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-      (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-    try {
-      JSON.parse(trimmed);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  return false;
-}
-
-/**
- * 检测字符串是否是工具结果的典型特征
- * 包括：
- * - JSON 格式的分析结果（包含 analysis, entities, status 等字段）
- * - Python repr 格式的工具结果（status='success' data={...}）
- * - 工具返回的数据结构
- */
-function isToolResultContent(text: string): boolean {
-  const trimmed = text.trim();
-  
-  // 检测 Python repr 格式：status='success' data={...}
-  // 或者 status='error' error='...'
-  if (/^status=['"](success|error)['"]/.test(trimmed)) {
-    return true;
-  }
-  
-  // 检测纯 Python dict 格式（以 { 开头，包含单引号键）
-  if (trimmed.startsWith('{') && trimmed.includes("'")) {
-    // 检查是否包含工具结果的典型字段（Python 格式使用单引号）
-    const pythonToolResultPatterns = [
-      /'analysis':/,
-      /'entities':/,
-      /'relationships':/,
-      /'query_intent':/,
-      /'relevant_tables':/,
-      /'table_id':/,
-      /'relevance_score':/,
-      /'reasoning':/,
-      /'status':/,
-      /'data':/,
-      /'error':/,
-      /'sql':/,
-      /'result':/,
-      /'include':/,
-      /'likely_aggregations':/,
-      /'time_related':/,
-      /'comparison_related':/,
-    ];
-    if (pythonToolResultPatterns.some(pattern => pattern.test(trimmed))) {
-      return true;
-    }
-  }
-  
-  // 检测数组格式的工具结果（如表选择结果）
-  // [ { "table_id": 33, "include": false, "reasoning": "..." }, ... ]
-  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object') {
-        const toolResultFields = ['table_id', 'include', 'reasoning', 'relevance_score'];
-        const hasToolResultField = toolResultFields.some(field => field in parsed[0]);
-        if (hasToolResultField) {
-          return true;
-        }
-      }
-    } catch {
-      // 不是有效 JSON，继续检查其他模式
-    }
-  }
-  
-  // 如果是 JSON，检查是否包含工具结果的典型字段
-  if (looksLikeJson(trimmed)) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      // 检查是否包含工具结果的典型字段
-      const toolResultFields = [
-        'analysis', 'entities', 'relationships', 'query_intent',
-        'relevant_tables', 'table_id', 'relevance_score', 'reasoning',
-        'status', 'data', 'error', 'sql', 'result', 'include',
-        'likely_aggregations', 'time_related', 'comparison_related'
-      ];
-      const hasToolResultField = toolResultFields.some(field => field in parsed);
-      return hasToolResultField;
-    } catch {
-      return false;
-    }
-  }
-  
-  return false;
-}
-
-/**
- * Extracts a string summary from a message's content, supporting multimodal (text, image, file, etc.).
- * - If text is present, returns the joined text.
- * - If not, returns a label for the first non-text modality (e.g., 'Image', 'Other').
- * - If unknown, returns 'Multimodal message'.
+ * 检测内容是否是原始 JSON 工具数据
  * 
- * 重要：过滤掉工具返回的原始 JSON 数据，避免在 AI 消息中重复显示
+ * 这些数据应该通过工具调用组件显示，而不是作为文本渲染
+ */
+function isRawToolData(content: string): boolean {
+  if (!content.startsWith("{") && !content.startsWith("[")) {
+    return false;
+  }
+  
+  try {
+    const parsed = JSON.parse(content);
+    // 检测常见的工具返回格式
+    if (typeof parsed === "object" && parsed !== null) {
+      // ToolResponse 格式
+      if ("status" in parsed && ["success", "error", "pending"].includes(parsed.status)) {
+        return true;
+      }
+      // 分析结果格式
+      if ("analysis" in parsed || "relevant_tables" in parsed || "schema_context" in parsed) {
+        return true;
+      }
+      // SQL 生成结果格式
+      if ("sql_query" in parsed || "generated_sql" in parsed) {
+        return true;
+      }
+    }
+  } catch {
+    // 不是有效 JSON，当作普通文本
+  }
+  
+  return false;
+}
+
+/**
+ * 从消息内容中提取文本字符串
+ * 
+ * 遵循 LangGraph SDK 官方标准：
+ * - 支持字符串和多模态内容（text, image, file 等）
+ * - 工具结果在 ToolResult 组件中单独显示
+ * - 过滤掉原始 JSON 工具数据（应该通过工具组件显示）
+ * 
+ * @see https://github.com/langchain-ai/agent-chat-ui
  */
 export function getContentString(content: Message["content"]): string {
+  // 字符串内容处理
   if (typeof content === "string") {
-    // 过滤掉原始 JSON 数据
-    if (isToolResultContent(content)) {
+    // 过滤掉原始 JSON 工具数据
+    if (isRawToolData(content)) {
       return "";
     }
     return content;
   }
   
+  // 空内容返回空字符串
+  if (!content || !Array.isArray(content)) return "";
+
+  // 提取所有文本内容（过滤掉原始工具数据）
   const texts = content
-    .filter((c): c is { type: "text"; text: string } => c.type === "text")
+    .filter((c): c is { type: "text"; text: string } => c.type === "text" && typeof c.text === "string")
     .map((c) => c.text)
-    // 过滤掉原始 JSON 数据
-    .filter((text) => !isToolResultContent(text));
-    
+    .filter((text) => !isRawToolData(text));
+
   return texts.join(" ");
+}
+
+/**
+ * 检查消息是否有实质性内容
+ * 
+ * 用于判断是否需要渲染消息组件
+ */
+export function hasSubstantialContent(message: Message): boolean {
+  // AI 消息：有文本内容或工具调用
+  if (message.type === "ai") {
+    const content = getContentString(message.content);
+    const hasToolCalls = "tool_calls" in message && message.tool_calls && message.tool_calls.length > 0;
+    return content.length > 0 || hasToolCalls;
+  }
+  
+  // 工具消息：始终有内容
+  if (message.type === "tool") {
+    return true;
+  }
+  
+  // 人类消息：有内容
+  if (message.type === "human") {
+    return getContentString(message.content).length > 0;
+  }
+  
+  return false;
 }

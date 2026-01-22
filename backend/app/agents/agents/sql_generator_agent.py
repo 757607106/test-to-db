@@ -17,12 +17,13 @@ import asyncio
 import json
 
 from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langgraph.prebuilt import create_react_agent, InjectedState
 from pydantic import BaseModel, Field
 
 from app.core.state import SQLMessageState
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
+from app.core.message_utils import generate_tool_call_id
 
 logger = logging.getLogger(__name__)
 
@@ -408,7 +409,7 @@ class SQLGeneratorAgent:
 **输出格式**: 只返回工具调用结果，包含生成的 SQL"""
     
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
-        """处理 SQL 生成任务"""
+        """处理 SQL 生成任务 - 返回标准工具调用格式"""
         try:
             # 获取用户查询
             messages = state.get("messages", [])
@@ -461,13 +462,46 @@ class SQLGeneratorAgent:
             
             logger.info(f"SQL 生成成功: {generated_sql[:100]}...")
             
-            # 创建消息记录
-            result_message = AIMessage(
-                content=f"已生成 SQL 查询:\n```sql\n{generated_sql}\n```"
+            # ✅ 创建标准工具调用消息格式
+            tool_call_id = generate_tool_call_id("generate_sql_query", {
+                "user_query": user_query,
+                "connection_id": connection_id
+            })
+            
+            # AIMessage 包含 tool_calls
+            ai_message = AIMessage(
+                content="正在生成 SQL 查询...",
+                tool_calls=[{
+                    "name": "generate_sql_query",
+                    "args": {
+                        "user_query": user_query,
+                        "db_type": "mysql"
+                    },
+                    "id": tool_call_id,
+                    "type": "tool_call"
+                }]
+            )
+            
+            # ToolMessage 包含工具执行结果
+            tool_result = {
+                "status": "success",
+                "data": {
+                    "sql_query": generated_sql,
+                    "explanation": result.get("explanation", "")
+                },
+                "metadata": {
+                    "connection_id": connection_id
+                }
+            }
+            
+            tool_message = ToolMessage(
+                content=json.dumps(tool_result, ensure_ascii=False),
+                tool_call_id=tool_call_id,
+                name="generate_sql_query"
             )
             
             return {
-                "messages": [result_message],
+                "messages": [ai_message, tool_message],
                 "generated_sql": generated_sql,
                 "current_stage": "sql_execution"
             }
@@ -475,8 +509,30 @@ class SQLGeneratorAgent:
         except Exception as e:
             logger.error(f"SQL 生成失败: {str(e)}")
             
+            # 错误时也返回标准格式
+            error_tool_call_id = generate_tool_call_id("generate_sql_query", {"error": str(e)})
+            
+            ai_message = AIMessage(
+                content="正在生成 SQL 查询...",
+                tool_calls=[{
+                    "name": "generate_sql_query",
+                    "args": {},
+                    "id": error_tool_call_id,
+                    "type": "tool_call"
+                }]
+            )
+            
+            tool_message = ToolMessage(
+                content=json.dumps({
+                    "status": "error",
+                    "error": str(e)
+                }, ensure_ascii=False),
+                tool_call_id=error_tool_call_id,
+                name="generate_sql_query"
+            )
+            
             return {
-                "messages": [AIMessage(content=f"SQL 生成失败: {str(e)}")],
+                "messages": [ai_message, tool_message],
                 "current_stage": "error_recovery",
                 "error_history": state.get("error_history", []) + [{
                     "stage": "sql_generation",

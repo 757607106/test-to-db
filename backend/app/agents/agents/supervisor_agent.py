@@ -1,286 +1,391 @@
 """
-监督代理 (Supervisor Agent) - 使用LangGraph内置supervisor模式
+监督代理 (Supervisor Agent) - 使用 LangGraph 原生模式重构
+
+遵循 LangGraph 官方最佳实践:
+1. 移除 langgraph_supervisor 第三方库依赖
+2. 使用原生条件边 (conditional_edges) 实现路由
+3. 使用 LLM 进行智能路由决策
+4. 简化消息管理，避免消息重复
+
+官方文档参考:
+- https://langchain-ai.github.io/langgraph/how-tos/react-agent-structured-output
+- https://langchain-ai.github.io/langgraph/concepts/low_level
 
 核心职责:
-1. 协调所有Worker Agents的工作流程
-2. 根据任务阶段智能路由到合适的Agent
-3. 管理Agent间的消息传递和状态更新
-4. 处理错误和异常情况
-5. 支持快速模式 (Fast Mode) - 借鉴官方简洁性思想
-
-架构模式:
-- 使用LangGraph的create_supervisor创建协调器
-- 采用Supervisor-Worker模式
-- Worker Agents包括: schema, sql_generator, sql_executor, error_recovery, chart_generator
-
-工作流程:
-用户查询 → Supervisor分析 → 选择Worker Agent → Agent执行 → 
-更新状态 → Supervisor再次分析 → 继续或结束
-
-依赖:
-pip install langgraph-supervisor
-
-历史变更:
-- 2026-01-16: 移除SQL Validator Agent以简化流程
-- 2026-01-21: 添加快速模式 (Fast Mode) 支持
-- 备份位置: backend/backups/agents_backup_20260116_175357
+1. 协调所有 Worker Agents 的工作流程
+2. 根据任务阶段智能路由到合适的 Agent
+3. 管理 Agent 间的消息传递和状态更新
+4. 支持快速模式 (Fast Mode)
 """
-
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Literal
 import logging
+import json
 
-from langchain_core.runnables import RunnableConfig
-from langgraph_supervisor import create_supervisor
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from pydantic import BaseModel, Field
 
 from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
 from app.core.message_utils import validate_and_fix_message_history
 
-# 配置日志
 logger = logging.getLogger(__name__)
 
 
-class SupervisorAgent:
-    """监督代理 - 基于LangGraph自带supervisor"""
+# ============================================================================
+# 路由决策 Schema (用于结构化输出)
+# ============================================================================
 
-    def __init__(self, worker_agents: List[Any] = None, custom_analyst = None):
+class RouteDecision(BaseModel):
+    """路由决策 - 用于 LLM 结构化输出"""
+    next_agent: Literal[
+        "schema_agent",
+        "sql_generator_agent", 
+        "sql_executor_agent",
+        "chart_generator_agent",
+        "error_recovery_agent",
+        "FINISH"
+    ] = Field(description="下一个要执行的 Agent 或 FINISH 表示完成")
+    reason: str = Field(description="路由决策的简要原因")
+
+
+# ============================================================================
+# Supervisor 实现 (原生 LangGraph 模式)
+# ============================================================================
+
+class SupervisorAgent:
+    """
+    监督代理 - 使用 LangGraph 原生条件边模式
+    
+    重要变更 (2026-01-22):
+    - 移除了 langgraph_supervisor 第三方库依赖
+    - 使用原生条件边实现路由
+    - 支持结构化输出进行路由决策
+    
+    架构模式:
+    - 基于状态的路由：根据 current_stage 字段路由
+    - LLM 辅助决策：复杂情况下使用 LLM 判断
+    - 简化消息管理：避免消息重复
+    """
+    
+    def __init__(self, worker_agents: List[Any] = None, custom_analyst=None):
         """
-        初始化Supervisor
+        初始化 Supervisor
         
         Args:
             worker_agents: 工作智能体列表（可选）
-            custom_analyst: 自定义数据分析专家（可选），如果提供则替换默认的chart_analyst_core
+            custom_analyst: 自定义数据分析专家（可选）
         """
         self.llm = get_default_model()
         self.custom_analyst = custom_analyst
         self.worker_agents = worker_agents or self._create_worker_agents()
-        self.supervisor = self._create_supervisor()
-
+        
+        # 尝试启用结构化输出
+        try:
+            self.router_llm = self.llm.with_structured_output(RouteDecision)
+            logger.info("✓ Supervisor 路由器已启用结构化输出")
+        except Exception as e:
+            logger.warning(f"⚠ Supervisor 结构化输出不可用: {e}")
+            self.router_llm = None
+    
     def _create_worker_agents(self) -> List[Any]:
-        """创建工作代理
+        """创建工作代理"""
+        from app.agents.agents.schema_agent import schema_agent
+        from app.agents.agents.sql_generator_agent import sql_generator_agent
+        from app.agents.agents.sql_executor_agent import sql_executor_agent
+        from app.agents.agents.error_recovery_agent import error_recovery_agent
+        from app.agents.agents.chart_generator_agent import chart_generator_agent
         
-        如果提供了custom_analyst，使用它替换默认的chart_generator_agent
-        
-        注意：SQL Validator Agent已被移除以简化流程
-        - 移除原因：减少不必要的验证步骤，提升响应速度
-        - 移除时间：2026-01-16
-        - 备份位置：backend/backups/agents_backup_20260116_175357
-        """
-
-        # 导入各个专业代理
-        from app.agents.agents.schema_agent import schema_agent  # 数据库模式分析代理
-        from app.agents.agents.sample_retrieval_agent import sample_retrieval_agent  # SQL样本检索代理
-        from app.agents.agents.sql_generator_agent import sql_generator_agent  # SQL生成代理
-        # 已移除：from app.agents.agents.sql_validator_agent import sql_validator_agent
-        from app.agents.agents.sql_executor_agent import sql_executor_agent  # SQL执行代理
-        from app.agents.agents.error_recovery_agent import error_recovery_agent  # 错误恢复代理
-        from app.agents.agents.chart_generator_agent import chart_generator_agent  # 图表生成代理
-
-        # 返回agent对象而不是包装类 简化后只包含5个核心代理
-
         agents = [
-            schema_agent.agent,
-            # 临时禁用 sample_retrieval_agent - 由于 ReAct agent 调度延迟问题，该步骤会导致 2+ 分钟的等待
-            # 在问题修复前，SQL 生成器可以在无样本参考的情况下正常工作
-            # sample_retrieval_agent.agent,
-            sql_generator_agent.agent,
-            # 已移除：sql_validator_agent.agent  # 验证步骤已移除
-            # parallel_sql_validator_agent.agent,
-            sql_executor_agent.agent,
-            error_recovery_agent.agent,
+            schema_agent,
+            sql_generator_agent,
+            sql_executor_agent,
+            error_recovery_agent,
         ]
         
-        # 如果提供了自定义分析专家，使用它；否则使用默认的
+        # 添加图表生成代理
         if self.custom_analyst:
-            logger.info("Using custom analyst agent instead of default chart_generator_agent")
-            agents.append(self.custom_analyst.agent)
+            logger.info("使用自定义分析专家")
+            agents.append(self.custom_analyst)
         else:
-            logger.info("Using default chart_generator_agent")
-            agents.append(chart_generator_agent.agent)
+            agents.append(chart_generator_agent)
         
         return agents
-
-    # def pre_model_hook(self, state):
-    #     print("哈哈哈哈哈哈松林测试：：：：", state)
-    def _create_supervisor(self):
-        """创建LangGraph supervisor"""
-        supervisor = create_supervisor(
-            model=self.llm,
-            agents=self.worker_agents,
-            prompt=self._get_supervisor_prompt(),
-            add_handoff_back_messages=False,  # ✅ 修复消息重复：不添加handoff消息
-            # pre_model_hook=self.pre_model_hook,
-            # parallel_tool_calls=True,
-            output_mode="last_message",  # ✅ 修复消息重复：只返回最后的总结消息
-        )
-
-        return supervisor.compile()
-
-    # 📚 样本检索功能已集成到 sql_generator_agent 中
-    # 
-    # 优化历史 (2026-01-19):
-    # - 原 sample_retrieval_agent 作为独立 ReAct agent 存在调度延迟问题（2+ 分钟）
-    # - 现已将样本检索集成到 sql_generator_agent 内部
-    # - 特点：先快速检查是否有样本，没有则跳过；有则自动检索
-
-    def _get_supervisor_prompt(self) -> str:
+    
+    def _get_agent_by_name(self, name: str):
+        """根据名称获取 Agent"""
+        for agent in self.worker_agents:
+            if hasattr(agent, 'name') and agent.name == name:
+                return agent
+        return None
+    
+    def route_by_stage(self, state: SQLMessageState) -> str:
         """
-        获取监督代理提示
+        基于状态的简单路由 (无需 LLM)
         
-        支持快速模式 (Fast Mode) - 借鉴官方 LangGraph SQL Agent 的简洁性思想
+        这是推荐的路由方式：
+        - 快速，无 LLM 调用
+        - 基于 current_stage 字段
+        - 明确的状态机转换
         """
+        current_stage = state.get("current_stage", "schema_analysis")
+        fast_mode = state.get("fast_mode", False)
+        skip_chart = state.get("skip_chart_generation", False)
+        
+        # 状态机路由
+        if current_stage == "schema_analysis":
+            return "schema_agent"
+        
+        elif current_stage == "sql_generation":
+            return "sql_generator_agent"
+        
+        elif current_stage == "sql_execution":
+            return "sql_executor_agent"
+        
+        elif current_stage == "chart_generation":
+            if skip_chart:
+                return "FINISH"
+            return "chart_generator_agent"
+        
+        elif current_stage == "error_recovery":
+            return "error_recovery_agent"
+        
+        elif current_stage == "completed":
+            return "FINISH"
+        
+        else:
+            logger.warning(f"未知的 stage: {current_stage}, 默认到 schema_analysis")
+            return "schema_agent"
+    
+    async def route_with_llm(self, state: SQLMessageState) -> RouteDecision:
+        """
+        使用 LLM 进行智能路由 (复杂情况)
+        
+        仅在需要复杂决策时使用
+        """
+        if not self.router_llm:
+            # 回退到简单路由
+            next_agent = self.route_by_stage(state)
+            return RouteDecision(next_agent=next_agent, reason="基于状态路由")
+        
+        # 构建路由上下文
+        context = f"""
+当前状态:
+- current_stage: {state.get('current_stage')}
+- fast_mode: {state.get('fast_mode', False)}
+- skip_chart_generation: {state.get('skip_chart_generation', False)}
+- has_generated_sql: {bool(state.get('generated_sql'))}
+- has_execution_result: {bool(state.get('execution_result'))}
+- error_count: {len(state.get('error_history', []))}
+- retry_count: {state.get('retry_count', 0)}
 
-        system_msg = f"""你是一个智能的SQL Agent系统监督者。
+可用的 Agent:
+- schema_agent: 分析用户查询，获取数据库模式
+- sql_generator_agent: 生成 SQL 语句
+- sql_executor_agent: 执行 SQL 查询
+- chart_generator_agent: 生成图表可视化
+- error_recovery_agent: 处理错误和恢复
+- FINISH: 任务完成
 
-**管理的代理及其职责**（严格分工，不得越界）:
-
-🔍 **schema_agent**: 分析用户查询 → 返回表结构信息
-⚙️ **sql_generator_agent**: 生成SQL语句 → 返回SQL代码
-🚀 **sql_executor_agent**: 执行SQL查询 → 返回原始数据（不总结）
-📊 **chart_generator_agent**: 生成图表 → 返回图表配置（不重复数据）
-🔧 **error_recovery_agent**: 处理错误 → 返回修复方案
-
-**标准流程**:
-schema_agent → sql_generator_agent → sql_executor_agent → [可选] chart_generator_agent → 完成
-
-**关键原则**:
-1. 一次只分配给一个代理
-2. 不要自己执行具体工作
-3. **禁止生成重复内容** - 如果 agent 已返回查询结果，不要再次输出
-4. 最终结果由最后一个 agent 直接返回
-
-**快速模式**:
-- skip_chart_generation=True 时：跳过图表生成
-- skip_sample_retrieval=True 时：跳过样本检索
-
-**图表生成条件**（仅当 skip_chart_generation=False 时）:
-- 用户查询包含可视化意图（图表、趋势、分布、对比等）
-- 查询结果适合可视化（2-1000行）
-
-**错误处理**:
-出错 → error_recovery_agent → 修复一次 → 失败则返回错误信息"""
-
-        return system_msg
-
+请决定下一步应该调用哪个 Agent。
+"""
+        
+        try:
+            decision = await self.router_llm.ainvoke([
+                SystemMessage(content="你是一个智能路由器，负责决定下一步调用哪个 Agent。"),
+                HumanMessage(content=context)
+            ])
+            return decision
+        except Exception as e:
+            logger.error(f"LLM 路由失败: {e}")
+            next_agent = self.route_by_stage(state)
+            return RouteDecision(next_agent=next_agent, reason=f"LLM 失败，回退到状态路由: {e}")
+    
+    async def execute_agent(self, agent_name: str, state: SQLMessageState) -> Dict[str, Any]:
+        """
+        执行指定的 Agent
+        
+        Args:
+            agent_name: Agent 名称
+            state: 当前状态
+            
+        Returns:
+            Agent 执行结果 (状态更新)
+        """
+        agent = self._get_agent_by_name(agent_name)
+        if not agent:
+            logger.error(f"找不到 Agent: {agent_name}")
+            return {
+                "current_stage": "error_recovery",
+                "error_history": state.get("error_history", []) + [{
+                    "stage": "supervisor",
+                    "error": f"找不到 Agent: {agent_name}"
+                }]
+            }
+        
+        try:
+            logger.info(f"执行 Agent: {agent_name}")
+            
+            # 调用 Agent 的处理方法
+            if hasattr(agent, 'process'):
+                result = await agent.process(state)
+            elif hasattr(agent, 'execute'):
+                result = await agent.execute(state)
+            elif hasattr(agent, 'agent') and hasattr(agent.agent, 'ainvoke'):
+                # 兼容 ReAct Agent
+                result = await agent.agent.ainvoke(state)
+            else:
+                raise ValueError(f"Agent {agent_name} 没有可调用的方法")
+            
+            logger.info(f"Agent {agent_name} 执行完成")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Agent {agent_name} 执行失败: {e}")
+            return {
+                "current_stage": "error_recovery",
+                "error_history": state.get("error_history", []) + [{
+                    "stage": agent_name,
+                    "error": str(e)
+                }]
+            }
+    
     async def supervise(
         self, 
         state: SQLMessageState,
         config: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        监督整个流程 - 支持配置传递和多轮对话
+        监督整个流程 - 主要入口方法
         
         Args:
-            state: SQL消息状态
-            config: LangGraph配置（可选）
-                   - 包含thread_id等配置信息
-                   - 用于状态持久化和会话恢复
-                   
+            state: SQL 消息状态
+            config: LangGraph 配置（可选）
+            
         Returns:
-            Dict[str, Any]: 执行结果
-                - success: bool - 是否成功
-                - result: Dict - 执行结果
-                - error: str - 错误信息（如果失败）
-                
-        说明:
-            - 在执行前后验证并修复消息历史
-            - 自动修剪消息历史以控制token使用
-            - 如果提供了config，将传递给LangGraph以启用持久化
-            - 支持多轮对话和会话恢复
+            执行结果
         """
-        # ✅ Phase 3: 在执行前修剪消息历史
+        # 消息历史修剪
         from app.core.message_history import auto_trim_messages, get_message_stats
         
         if "messages" in state and state["messages"]:
-            # 获取修剪前的统计信息
             before_stats = get_message_stats(state["messages"])
-            logger.info(f"执行前消息统计: {before_stats}")
-            
-            # 自动修剪消息（如果需要）
             state["messages"] = auto_trim_messages(state["messages"])
-            
-            # 获取修剪后的统计信息
             after_stats = get_message_stats(state["messages"])
-            if after_stats["total"] < before_stats["total"]:
-                logger.info(
-                    f"消息历史已修剪: {before_stats['total']} -> {after_stats['total']} "
-                    f"(估算token: {before_stats['estimated_tokens']} -> {after_stats['estimated_tokens']})"
-                )
-        
-        # 在执行前先验证并修复消息历史
-        if "messages" in state and state["messages"]:
-            original_count = len(state["messages"])
-            state["messages"] = validate_and_fix_message_history(state["messages"])
-            fixed_count = len(state["messages"])
             
-            if fixed_count > original_count:
-                logger.info(
-                    f"执行前修复消息历史: 添加了 {fixed_count - original_count} 个占位ToolMessage"
-                )
+            if after_stats["total"] < before_stats["total"]:
+                logger.info(f"消息已修剪: {before_stats['total']} -> {after_stats['total']}")
+        
+        # 验证消息历史
+        if "messages" in state and state["messages"]:
+            state["messages"] = validate_and_fix_message_history(state["messages"])
+        
+        # 检查快速模式
+        fast_mode = state.get("fast_mode", False)
+        if fast_mode:
+            logger.info("=== 快速模式已启用 ===")
         
         try:
-            # ✅ 检查快速模式状态
-            fast_mode = state.get("fast_mode", False)
-            skip_sample_retrieval = state.get("skip_sample_retrieval", False)
-            skip_chart_generation = state.get("skip_chart_generation", False)
+            # 执行循环
+            max_iterations = 10
+            iteration = 0
+            current_state = dict(state)
             
-            if fast_mode:
-                logger.info(f"=== 快速模式已启用 ===")
-                logger.info(f"  跳过样本检索: {skip_sample_retrieval}")
-                logger.info(f"  跳过图表生成: {skip_chart_generation}")
-            
-            # ✅ 执行supervisor，传递config以启用状态持久化
-            # ✅ 设置 recursion_limit 防止工具重复调用
-            invoke_config = {"recursion_limit": 10}
-            if config:
-                invoke_config.update(config)
-                logger.info(f"使用 config 执行 supervisor: {config.get('configurable', {})}")
-            else:
-                logger.info("不使用 config 执行 supervisor（无状态模式）")
-            
-            result = await self.supervisor.ainvoke(state, config=invoke_config)
-            
-            # 执行后再次验证并修复消息历史
-            if "messages" in result:
-                original_count = len(result["messages"])
-                result["messages"] = validate_and_fix_message_history(result["messages"])
-                fixed_count = len(result["messages"])
+            while iteration < max_iterations:
+                iteration += 1
                 
-                # 如果添加了占位消息，记录日志
-                if fixed_count > original_count:
-                    logger.info(
-                        f"执行后修复消息历史: 添加了 {fixed_count - original_count} 个占位ToolMessage"
-                    )
+                # 路由决策
+                next_agent = self.route_by_stage(current_state)
+                
+                if next_agent == "FINISH":
+                    logger.info("任务完成")
+                    break
+                
+                # 执行 Agent
+                result = await self.execute_agent(next_agent, current_state)
+                
+                # 更新状态
+                if result:
+                    for key, value in result.items():
+                        if key == "messages" and value:
+                            # 追加消息而不是替换
+                            current_messages = current_state.get("messages", [])
+                            current_state["messages"] = current_messages + value
+                        else:
+                            current_state[key] = value
+                
+                # 检查是否完成
+                if current_state.get("current_stage") == "completed":
+                    logger.info("任务完成 (stage=completed)")
+                    break
+                
+                # 检查错误重试限制
+                if current_state.get("retry_count", 0) >= current_state.get("max_retries", 3):
+                    logger.warning("达到最大重试次数，终止")
+                    break
+            
+            if iteration >= max_iterations:
+                logger.warning(f"达到最大迭代次数: {max_iterations}")
             
             return {
                 "success": True,
-                "result": result
+                "result": current_state
             }
-                
+            
         except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Supervisor执行出错: {error_msg}")
+            logger.error(f"Supervisor 执行出错: {e}")
             return {
                 "success": False,
-                "error": error_msg
+                "error": str(e)
             }
 
 
-def create_supervisor_agent(worker_agents: List[Any] = None, custom_analyst = None) -> SupervisorAgent:
-    """
-    创建监督代理实例
-    
-    Args:
-        worker_agents: 工作智能体列表（可选）
-        custom_analyst: 自定义数据分析专家（可选）
-    """
+# ============================================================================
+# 工厂函数
+# ============================================================================
+
+def create_supervisor_agent(worker_agents: List[Any] = None, custom_analyst=None) -> SupervisorAgent:
+    """创建监督代理实例"""
     return SupervisorAgent(worker_agents, custom_analyst)
 
-def create_intelligent_sql_supervisor(custom_analyst = None) -> SupervisorAgent:
-    """
-    创建智能SQL监督代理的便捷函数
-    
-    Args:
-        custom_analyst: 自定义数据分析专家（可选）
-    """
+
+def create_intelligent_sql_supervisor(custom_analyst=None) -> SupervisorAgent:
+    """创建智能 SQL 监督代理"""
     return SupervisorAgent(custom_analyst=custom_analyst)
+
+
+# ============================================================================
+# 节点函数 (用于 LangGraph 图)
+# ============================================================================
+
+async def supervisor_node(state: SQLMessageState) -> Dict[str, Any]:
+    """
+    Supervisor 节点函数 - 用于 LangGraph 图
+    
+    这个函数包装了 SupervisorAgent，可以直接在图中使用。
+    """
+    supervisor = SupervisorAgent()
+    result = await supervisor.supervise(state)
+    
+    if result.get("success"):
+        return result.get("result", state)
+    else:
+        return {
+            "current_stage": "error_recovery",
+            "error_history": state.get("error_history", []) + [{
+                "stage": "supervisor",
+                "error": result.get("error", "Unknown error")
+            }]
+        }
+
+
+# ============================================================================
+# 导出
+# ============================================================================
+
+__all__ = [
+    "SupervisorAgent",
+    "create_supervisor_agent",
+    "create_intelligent_sql_supervisor",
+    "supervisor_node",
+    "RouteDecision",
+]

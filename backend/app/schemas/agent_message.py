@@ -57,6 +57,16 @@ class ToolResponse(BaseModel):
         description="附加元数据（execution_time、cache_info、row_count等）"
     )
     
+    def __str__(self) -> str:
+        """
+        返回 JSON 格式字符串
+        
+        LangChain @tool 装饰器会调用 str() 将返回值转换为字符串。
+        我们重写 __str__ 确保返回的是 JSON 格式而不是 Python repr 格式。
+        这对于前端解析工具结果至关重要。
+        """
+        return self.model_dump_json()
+    
     class Config:
         """Pydantic 配置"""
         json_schema_extra = {

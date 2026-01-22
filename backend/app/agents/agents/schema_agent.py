@@ -15,11 +15,12 @@ import json
 import logging
 
 from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langgraph.prebuilt import create_react_agent, InjectedState
 
 from app.core.state import SQLMessageState
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
+from app.core.message_utils import generate_tool_call_id
 from app.db.session import SessionLocal
 from app.services.text2sql_utils import retrieve_relevant_schema, get_value_mappings, analyze_query_with_llm
 
@@ -215,7 +216,7 @@ class SchemaAnalysisAgent:
 **输出格式**: 只返回工具调用结果，包含表结构和值映射信息"""
     
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
-        """处理 Schema 分析任务"""
+        """处理 Schema 分析任务 - 返回标准工具调用格式"""
         try:
             # 获取用户查询
             messages = state.get("messages", [])
@@ -259,13 +260,47 @@ class SchemaAnalysisAgent:
                 "connection_id": connection_id
             }
             
-            # 创建消息记录
-            result_message = AIMessage(
-                content=f"已获取数据库模式信息：共 {len(schema_context)} 个相关表"
+            # ✅ 创建标准工具调用消息格式
+            tool_call_id = generate_tool_call_id("retrieve_database_schema", {
+                "query": user_query,
+                "connection_id": connection_id
+            })
+            
+            # AIMessage 包含 tool_calls
+            ai_message = AIMessage(
+                content="正在获取数据库模式信息...",
+                tool_calls=[{
+                    "name": "retrieve_database_schema",
+                    "args": {
+                        "query": user_query,
+                        "connection_id": connection_id
+                    },
+                    "id": tool_call_id,
+                    "type": "tool_call"
+                }]
+            )
+            
+            # ToolMessage 包含工具执行结果
+            tool_result = {
+                "status": "success",
+                "data": {
+                    "table_count": len(schema_context),
+                    "tables": list(schema_context.keys()),
+                    "has_value_mappings": bool(value_mappings)
+                },
+                "metadata": {
+                    "connection_id": connection_id
+                }
+            }
+            
+            tool_message = ToolMessage(
+                content=json.dumps(tool_result, ensure_ascii=False),
+                tool_call_id=tool_call_id,
+                name="retrieve_database_schema"
             )
             
             return {
-                "messages": [result_message],
+                "messages": [ai_message, tool_message],
                 "schema_info": schema_info,
                 "current_stage": "sql_generation"
             }
@@ -273,8 +308,30 @@ class SchemaAnalysisAgent:
         except Exception as e:
             logger.error(f"Schema 分析失败: {str(e)}")
             
+            # 错误时也返回标准格式
+            error_tool_call_id = generate_tool_call_id("retrieve_database_schema", {"error": str(e)})
+            
+            ai_message = AIMessage(
+                content="正在获取数据库模式信息...",
+                tool_calls=[{
+                    "name": "retrieve_database_schema",
+                    "args": {},
+                    "id": error_tool_call_id,
+                    "type": "tool_call"
+                }]
+            )
+            
+            tool_message = ToolMessage(
+                content=json.dumps({
+                    "status": "error",
+                    "error": str(e)
+                }, ensure_ascii=False),
+                tool_call_id=error_tool_call_id,
+                name="retrieve_database_schema"
+            )
+            
             return {
-                "messages": [AIMessage(content=f"Schema 分析失败: {str(e)}")],
+                "messages": [ai_message, tool_message],
                 "current_stage": "error_recovery",
                 "error_history": state.get("error_history", []) + [{
                     "stage": "schema_analysis",

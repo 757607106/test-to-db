@@ -1,60 +1,79 @@
 """
-错误恢复代理
-负责分析错误、提供恢复策略和自动修复能力
+错误恢复代理 (优化版本)
+
+遵循 LangGraph 官方最佳实践:
+1. 使用标准 JSON 格式返回
+2. 简化错误分析和恢复策略
+3. 与其他 Agent 保持一致的接口
+
+核心职责:
+- 分析错误模式
+- 提供恢复策略
+- 协助重试决策
 """
 from typing import Dict, Any, List
+import json
+import logging
+
 from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.prebuilt import create_react_agent
 
 from app.core.state import SQLMessageState
-from app.core.llms import get_default_model
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
-from app.schemas.agent_message import ToolResponse
 
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# 错误分析工具
+# ============================================================================
 
 @tool
-def analyze_error_pattern(error_history: List[Dict[str, Any]]) -> ToolResponse:
+def analyze_error_pattern(error_history: str) -> str:
     """
     分析错误模式，识别重复错误和根本原因
     
     Args:
-        error_history: 错误历史记录
+        error_history: JSON 格式的错误历史记录
         
     Returns:
-        错误模式分析结果
+        str: JSON 格式的错误模式分析结果
     """
     try:
-        if not error_history:
-            return ToolResponse(
-                status="success",
-                data={
-                    "pattern_found": False,
-                    "message": "没有错误历史记录"
-                }
-            )
+        # 解析输入
+        errors = json.loads(error_history) if isinstance(error_history, str) else error_history
+        
+        if not errors:
+            return json.dumps({
+                "success": True,
+                "pattern_found": False,
+                "message": "没有错误历史记录"
+            }, ensure_ascii=False)
         
         # 统计错误类型
         error_types = {}
         error_stages = {}
         
-        for error in error_history:
-            error_msg = error.get("error", "").lower()
+        for error in errors:
+            error_msg = str(error.get("error", "")).lower()
             stage = error.get("stage", "unknown")
             
             # 分类错误类型
             if "syntax" in error_msg or "语法" in error_msg:
-                error_types["syntax_error"] = error_types.get("syntax_error", 0) + 1
+                error_type = "syntax_error"
             elif "connection" in error_msg or "连接" in error_msg:
-                error_types["connection_error"] = error_types.get("connection_error", 0) + 1
+                error_type = "connection_error"
             elif "permission" in error_msg or "权限" in error_msg:
-                error_types["permission_error"] = error_types.get("permission_error", 0) + 1
+                error_type = "permission_error"
             elif "timeout" in error_msg or "超时" in error_msg:
-                error_types["timeout_error"] = error_types.get("timeout_error", 0) + 1
+                error_type = "timeout_error"
+            elif "not found" in error_msg or "找不到" in error_msg:
+                error_type = "not_found_error"
             else:
-                error_types["unknown_error"] = error_types.get("unknown_error", 0) + 1
+                error_type = "unknown_error"
             
-            # 统计错误阶段
+            error_types[error_type] = error_types.get(error_type, 0) + 1
             error_stages[stage] = error_stages.get(stage, 0) + 1
         
         # 识别模式
@@ -63,144 +82,150 @@ def analyze_error_pattern(error_history: List[Dict[str, Any]]) -> ToolResponse:
         
         pattern_found = most_common_type[1] > 1 or most_common_stage[1] > 1
         
-        return ToolResponse(
-            status="success",
-            data={
-                "pattern_found": pattern_found,
-                "error_types": error_types,
-                "error_stages": error_stages,
-                "most_common_type": most_common_type[0],
-                "most_common_stage": most_common_stage[0],
-                "total_errors": len(error_history)
-            }
-        )
+        return json.dumps({
+            "success": True,
+            "pattern_found": pattern_found,
+            "error_types": error_types,
+            "error_stages": error_stages,
+            "most_common_type": most_common_type[0],
+            "most_common_stage": most_common_stage[0],
+            "total_errors": len(errors)
+        }, ensure_ascii=False)
         
     except Exception as e:
-        return ToolResponse(
-            status="error",
-            error=str(e)
-        )
+        logger.error(f"错误模式分析失败: {str(e)}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        }, ensure_ascii=False)
 
 
 @tool
-def generate_recovery_strategy(error_analysis: Dict[str, Any], current_state: Dict[str, Any]) -> ToolResponse:
+def generate_recovery_strategy(
+    error_analysis: str,
+    retry_count: int = 0
+) -> str:
     """
     基于错误分析生成恢复策略
     
     Args:
-        error_analysis: 错误分析结果
-        current_state: 当前状态信息
+        error_analysis: JSON 格式的错误分析结果
+        retry_count: 当前重试次数
         
     Returns:
-        恢复策略建议
+        str: JSON 格式的恢复策略建议
     """
     try:
-        most_common_type = error_analysis.get("most_common_type", "unknown")
-        most_common_stage = error_analysis.get("most_common_stage", "unknown")
-        retry_count = current_state.get("retry_count", 0)
+        analysis = json.loads(error_analysis) if isinstance(error_analysis, str) else error_analysis
+        
+        most_common_type = analysis.get("most_common_type", "unknown")
         
         # 基于错误类型制定策略
         strategies = {
             "syntax_error": {
-                "primary_action": "regenerate_sql_with_constraints",
-                "secondary_action": "simplify_query",
-                "description": "SQL语法错误，需要重新生成或简化查询",
+                "primary_action": "regenerate_sql",
+                "description": "SQL 语法错误，建议重新生成",
                 "auto_fixable": True,
-                "confidence": 0.8
+                "confidence": 0.8,
+                "steps": [
+                    "重新分析用户查询意图",
+                    "使用更严格的 SQL 生成约束",
+                    "验证生成的 SQL 语法"
+                ]
             },
             "connection_error": {
-                "primary_action": "check_database_connection",
-                "secondary_action": "use_alternative_connection",
+                "primary_action": "check_connection",
                 "description": "数据库连接问题，需要检查连接配置",
                 "auto_fixable": False,
-                "confidence": 0.6
+                "confidence": 0.6,
+                "steps": [
+                    "检查数据库连接状态",
+                    "验证连接参数",
+                    "尝试重新连接"
+                ]
             },
             "permission_error": {
-                "primary_action": "modify_query_scope",
-                "secondary_action": "request_elevated_permissions",
-                "description": "权限不足，需要修改查询范围或提升权限",
+                "primary_action": "simplify_query",
+                "description": "权限不足，建议简化查询范围",
                 "auto_fixable": False,
-                "confidence": 0.4
+                "confidence": 0.4,
+                "steps": [
+                    "减少查询的表数量",
+                    "移除敏感字段",
+                    "使用更基本的查询"
+                ]
             },
             "timeout_error": {
-                "primary_action": "optimize_query_performance",
-                "secondary_action": "add_query_limits",
-                "description": "查询超时，需要优化性能或添加限制",
+                "primary_action": "optimize_query",
+                "description": "查询超时，建议优化查询",
                 "auto_fixable": True,
-                "confidence": 0.7
+                "confidence": 0.7,
+                "steps": [
+                    "添加 LIMIT 子句",
+                    "优化 JOIN 操作",
+                    "减少查询字段"
+                ]
+            },
+            "not_found_error": {
+                "primary_action": "verify_schema",
+                "description": "表或字段不存在，需要重新分析 schema",
+                "auto_fixable": True,
+                "confidence": 0.75,
+                "steps": [
+                    "重新检索数据库 schema",
+                    "验证表名和字段名",
+                    "使用正确的值映射"
+                ]
             }
         }
         
         strategy = strategies.get(most_common_type, {
-            "primary_action": "restart_from_beginning",
-            "secondary_action": "manual_intervention",
-            "description": "未知错误类型，建议重新开始或人工干预",
+            "primary_action": "restart",
+            "description": "未知错误类型，建议从头开始",
             "auto_fixable": False,
-            "confidence": 0.3
+            "confidence": 0.3,
+            "steps": ["重新开始整个流程"]
         })
         
-        # 调整策略基于重试次数
+        # 根据重试次数调整
         if retry_count >= 2:
-            strategy["primary_action"] = strategy["secondary_action"]
-            strategy["confidence"] *= 0.7
+            strategy["confidence"] *= 0.5
+            strategy["recommendation"] = "已多次重试，建议人工干预"
         
-        # 添加具体的恢复步骤
-        recovery_steps = []
-        if strategy["primary_action"] == "regenerate_sql_with_constraints":
-            recovery_steps = [
-                "重新分析用户查询意图",
-                "使用更严格的SQL生成约束",
-                "验证生成的SQL语法",
-                "测试SQL执行"
-            ]
-        elif strategy["primary_action"] == "optimize_query_performance":
-            recovery_steps = [
-                "分析查询复杂度",
-                "添加适当的LIMIT子句",
-                "优化JOIN操作",
-                "考虑使用索引提示"
-            ]
-        elif strategy["primary_action"] == "simplify_query":
-            recovery_steps = [
-                "分解复杂查询为简单查询",
-                "移除非必要的JOIN",
-                "减少查询字段数量",
-                "添加基本的过滤条件"
-            ]
-        
-        return ToolResponse(
-            status="success",
-            data={
-                "strategy": strategy,
-                "recovery_steps": recovery_steps,
-                "estimated_success_rate": strategy["confidence"]
-            }
-        )
+        return json.dumps({
+            "success": True,
+            "strategy": strategy,
+            "estimated_success_rate": strategy["confidence"]
+        }, ensure_ascii=False)
         
     except Exception as e:
-        return ToolResponse(
-            status="error",
-            error=str(e)
-        )
+        logger.error(f"恢复策略生成失败: {str(e)}")
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        }, ensure_ascii=False)
 
 
 # ============================================================================
-# 已移除 auto_fix_sql_error 工具（2026-01-21）
-# 原因：自动修复逻辑过于简单（添加分号、修正大小写等），修复成功率很低
-# 建议方案：分析错误后重新生成 SQL，而不是尝试自动修复
+# 错误恢复代理类
 # ============================================================================
-
 
 class ErrorRecoveryAgent:
-    """错误恢复代理"""
-
+    """
+    错误恢复代理 - 简化版本
+    
+    职责:
+    - 分析错误模式
+    - 提供恢复策略
+    - 协助决定是否重试
+    """
+    
     def __init__(self):
-        self.name = "error_recovery_agent"  # 添加name属性
+        self.name = "error_recovery_agent"
         self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
         self.tools = [analyze_error_pattern, generate_recovery_strategy]
-        # 已移除 auto_fix_sql_error - 修复成功率过低，建议重新生成 SQL
         
-        # 创建ReAct代理
+        # 创建 ReAct 代理
         self.agent = create_react_agent(
             self.llm,
             self.tools,
@@ -230,97 +255,90 @@ class ErrorRecoveryAgent:
 - ❌ 不要重复调用工具
 
 **输出格式**: 简洁的恢复方案和建议"""
-
-    async def recover(self, state: SQLMessageState) -> Dict[str, Any]:
+    
+    async def process(self, state: SQLMessageState) -> Dict[str, Any]:
         """执行错误恢复"""
         try:
             error_history = state.get("error_history", [])
-            current_sql = state.get("generated_sql", "")
-            schema_info = state.get("schema_info")
+            retry_count = state.get("retry_count", 0)
             
-            # 获取最新错误
-            latest_error = error_history[-1] if error_history else {}
-            
-            # 准备输入消息
-            messages = [
-                HumanMessage(content=f"""
-请分析以下错误并制定恢复策略：
-
-错误历史: {error_history}
-当前SQL: {current_sql}
-最新错误: {latest_error}
-
-请分析错误模式、制定恢复策略并尝试自动修复。
-""")
-            ]
-            
-            # 调用恢复代理
-            result = await self.agent.ainvoke({
-                "messages": messages
+            # 分析错误
+            error_analysis = analyze_error_pattern.invoke({
+                "error_history": json.dumps(error_history, ensure_ascii=False)
             })
             
-            # 解析恢复结果
-            recovery_result = self._parse_recovery_result(result, state)
+            # 生成恢复策略
+            strategy = generate_recovery_strategy.invoke({
+                "error_analysis": error_analysis,
+                "retry_count": retry_count
+            })
             
-            # 更新状态
-            if recovery_result.get("recovery_successful"):
-                # 恢复成功，重置错误计数并继续流程
-                state["retry_count"] = 0
-                state["current_stage"] = recovery_result.get("next_stage", "sql_generation")
+            # 解析策略
+            strategy_data = json.loads(strategy)
+            
+            # 决定下一步
+            if strategy_data.get("success"):
+                strategy_info = strategy_data.get("strategy", {})
                 
-                # 如果有修复的SQL，更新它
-                if recovery_result.get("fixed_sql"):
-                    state["generated_sql"] = recovery_result["fixed_sql"]
-            else:
-                # 恢复失败，增加重试计数
-                state["retry_count"] = state.get("retry_count", 0) + 1
-                
-                if state["retry_count"] >= state.get("max_retries", 3):
-                    state["current_stage"] = "terminated"
+                if strategy_info.get("auto_fixable") and retry_count < state.get("max_retries", 3):
+                    # 可以自动修复，返回到适当的阶段重试
+                    primary_action = strategy_info.get("primary_action", "restart")
+                    
+                    if primary_action == "regenerate_sql":
+                        next_stage = "sql_generation"
+                    elif primary_action == "verify_schema":
+                        next_stage = "schema_analysis"
+                    else:
+                        next_stage = "schema_analysis"
+                    
+                    return {
+                        "messages": [AIMessage(content=f"错误恢复: {strategy_info.get('description')}")],
+                        "current_stage": next_stage,
+                        "retry_count": retry_count + 1
+                    }
                 else:
-                    state["current_stage"] = "error_recovery"
-            
-            return recovery_result
+                    # 无法自动修复或已达到重试限制
+                    return {
+                        "messages": [AIMessage(content=f"错误恢复失败: {strategy_info.get('description')}")],
+                        "current_stage": "completed"
+                    }
+            else:
+                return {
+                    "messages": [AIMessage(content="错误分析失败，终止流程")],
+                    "current_stage": "completed"
+                }
             
         except Exception as e:
+            logger.error(f"错误恢复失败: {str(e)}")
             return {
-                "success": False,
-                "error": str(e),
-                "recovery_successful": False
+                "messages": [AIMessage(content=f"错误恢复失败: {str(e)}")],
+                "current_stage": "completed"
             }
-    
-    def _parse_recovery_result(self, result: Dict[str, Any], state: SQLMessageState) -> Dict[str, Any]:
-        """解析恢复结果"""
-        messages = result.get("messages", [])
-        
-        # 默认恢复结果
-        recovery_result = {
-            "success": True,
-            "recovery_successful": False,
-            "fixed_sql": None,
-            "recovery_strategy": "unknown",
-            "next_stage": "sql_generation",
-            "recovery_messages": messages
-        }
-        
-        # 简单的结果解析
-        for message in messages:
-            if hasattr(message, 'content'):
-                content = message.content.lower()
-                
-                if "修复成功" in content or "fixed successfully" in content:
-                    recovery_result["recovery_successful"] = True
-                
-                if "select" in content and "from" in content:
-                    # 尝试提取修复的SQL
-                    lines = message.content.split('\n')
-                    for line in lines:
-                        if line.strip().upper().startswith('SELECT'):
-                            recovery_result["fixed_sql"] = line.strip()
-                            break
-        
-        return recovery_result
 
 
-# 创建全局实例
+# ============================================================================
+# 节点函数 (用于 LangGraph 图)
+# ============================================================================
+
+async def error_recovery_node(state: SQLMessageState) -> Dict[str, Any]:
+    """
+    错误恢复节点函数 - 用于 LangGraph 图
+    """
+    agent = ErrorRecoveryAgent()
+    return await agent.process(state)
+
+
+# ============================================================================
+# 导出
+# ============================================================================
+
+# 创建全局实例（兼容现有代码）
 error_recovery_agent = ErrorRecoveryAgent()
+
+__all__ = [
+    "error_recovery_agent",
+    "error_recovery_node",
+    "analyze_error_pattern",
+    "generate_recovery_strategy",
+    "ErrorRecoveryAgent",
+]

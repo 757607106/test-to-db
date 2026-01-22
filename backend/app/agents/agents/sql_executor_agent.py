@@ -295,11 +295,17 @@ class SQLExecutorAgent:
                 rows_affected=result.get("data", {}).get("row_count", 0) if result.get("success") else 0
             )
             
-            # 创建消息用于状态更新
-            tool_call_id = f"call_{abs(hash(sql_query)) % 10000000}"
+            # 创建消息用于状态更新 - 遵循 LangGraph SDK 标准
+            from app.core.message_utils import generate_tool_call_id
             
+            tool_call_id = generate_tool_call_id("execute_sql_query", {
+                "sql_query": sql_query,
+                "connection_id": connection_id
+            })
+            
+            # AIMessage 包含 tool_calls 数组
             ai_message = AIMessage(
-                content="",
+                content="正在执行 SQL 查询...",
                 tool_calls=[{
                     "name": "execute_sql_query",
                     "args": {
@@ -312,11 +318,11 @@ class SQLExecutorAgent:
                 }]
             )
             
+            # ToolMessage 必须包含 tool_call_id 与上面的 tool_call 匹配
             tool_message = ToolMessage(
                 content=result_json,
                 tool_call_id=tool_call_id,
-                name="execute_sql_query",
-                status="success" if result.get("success") else "error"
+                name="execute_sql_query"
             )
             
             messages = [ai_message, tool_message]
