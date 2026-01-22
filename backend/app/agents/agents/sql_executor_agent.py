@@ -374,7 +374,7 @@ class SQLExecutorAgent:
             
             # AIMessage 包含 tool_calls 数组
             ai_message = AIMessage(
-                content="正在执行 SQL 查询...",
+                content="",  # 状态通过 QueryPipeline 组件展示，不需要文字
                 tool_calls=[{
                     "name": "execute_sql_query",
                     "args": {

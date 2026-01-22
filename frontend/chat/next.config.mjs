@@ -5,6 +5,30 @@ const nextConfig = {
       bodySizeLimit: "10mb",
     },
   },
+  // 禁用页面缓存，确保刷新后获取最新代码
+  generateEtags: false,
+  // 添加自定义响应头禁用缓存
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+          },
+          {
+            key: 'Pragma',
+            value: 'no-cache',
+          },
+          {
+            key: 'Expires',
+            value: '0',
+          },
+        ],
+      },
+    ];
+  },
   async rewrites() {
     // 将特定的 API 路径代理到 FastAPI 后端，避免与 LangGraph 路由冲突
     return [

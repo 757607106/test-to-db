@@ -137,7 +137,6 @@ const StreamSession = ({
       // 处理流式事件
       if (isStreamEvent(event)) {
         const streamEvent = event as StreamEvent;
-        
         switch (streamEvent.type) {
           case "cache_hit":
             // 缓存命中事件

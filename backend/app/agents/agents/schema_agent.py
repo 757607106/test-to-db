@@ -338,7 +338,7 @@ class SchemaAnalysisAgent:
             
             # AIMessage 包含 tool_calls
             ai_message = AIMessage(
-                content="正在获取数据库模式信息...",
+                content="",  # 状态通过 QueryPipeline 组件展示，不需要文字
                 tool_calls=[{
                     "name": "retrieve_database_schema",
                     "args": {
@@ -394,7 +394,7 @@ class SchemaAnalysisAgent:
             error_tool_call_id = generate_tool_call_id("retrieve_database_schema", {"error": str(e)})
             
             ai_message = AIMessage(
-                content="正在获取数据库模式信息...",
+                content="",  # 状态通过 QueryPipeline 组件展示，不需要文字
                 tool_calls=[{
                     "name": "retrieve_database_schema",
                     "args": {},

@@ -161,14 +161,148 @@ export function AssistantMessage({
   const { queryContext } = thread;
   const messages = Array.isArray(thread.messages) ? thread.messages : [];
   
+  // 智能查询相关的工具名列表
+  const SMART_QUERY_TOOLS = [
+    "retrieve_database_schema",
+    "generate_sql_query", 
+    "execute_sql_query",
+    "analyze_user_query"
+  ];
+  
+  // 检查当前消息是否包含智能查询相关的工具调用（用于刷新后也能隐藏工具调用）
+  // 对 AI 消息：检查 tool_calls
+  // 对工具结果消息：检查 name 字段
+  const isSmartQueryToolCall = useMemo(() => {
+    if (!message) return false;
+    
+    // AI 消息：检查 tool_calls
+    if (message.type === "ai" && "tool_calls" in message) {
+      const toolCalls = (message as AIMessage).tool_calls || [];
+      return toolCalls.some(tc => SMART_QUERY_TOOLS.includes(tc.name || ""));
+    }
+    
+    // 工具结果消息：检查 name 字段
+    if (message.type === "tool" && "name" in message) {
+      return SMART_QUERY_TOOLS.includes((message as ToolMessage).name || "");
+    }
+    
+    return false;
+  }, [message]);
+  
+  // 检查整个对话中是否有智能查询工具调用（用于决定是否显示 QueryPipeline）
+  const hasSmartQueryInThread = useMemo(() => {
+    const result = messages.some(m => {
+      if (m.type === "ai" && "tool_calls" in m) {
+        const toolCalls = (m as AIMessage).tool_calls || [];
+        return toolCalls.some(tc => SMART_QUERY_TOOLS.includes(tc.name || ""));
+      }
+      return false;
+    });
+    return result;
+  }, [messages, message?.id]);
+  
+  // 从历史消息中重建查询上下文（刷新后使用）
+  const rebuiltQueryContext = useMemo(() => {
+    // 如果已有实时流数据，不需要重建
+    if (queryContext?.intentAnalysis || queryContext?.sqlSteps?.length || queryContext?.dataQuery) {
+      return null;
+    }
+    
+    // 如果对话中没有智能查询，不需要重建
+    if (!hasSmartQueryInThread) {
+      return null;
+    }
+    
+    // 从工具结果消息中提取数据
+    const toolResults: Record<string, string> = {};
+    messages.forEach(m => {
+      if (m.type === "tool" && "name" in m && "content" in m) {
+        const toolMsg = m as ToolMessage;
+        if (SMART_QUERY_TOOLS.includes(toolMsg.name || "")) {
+          const contentStr = typeof toolMsg.content === "string" 
+            ? toolMsg.content 
+            : JSON.stringify(toolMsg.content);
+          toolResults[toolMsg.name || ""] = contentStr;
+        }
+      }
+    });
+    
+    // 尝试解析 execute_sql_query 的结果来重建 dataQuery
+    let dataQuery = null;
+    if (toolResults["execute_sql_query"]) {
+      try {
+        const result = JSON.parse(toolResults["execute_sql_query"]);
+        if (result.columns && result.rows) {
+          dataQuery = {
+            columns: result.columns,
+            rows: result.rows,
+            row_count: result.row_count || result.rows?.length || 0,
+            chart_config: result.chart_config,
+          };
+        }
+      } catch {
+        // 解析失败，忽略
+      }
+    }
+    
+    // 构建简化的历史 sqlSteps
+    const sqlSteps = [];
+    if (toolResults["retrieve_database_schema"]) {
+      sqlSteps.push({
+        step: "schema_mapping",
+        status: "completed" as const,
+        result: toolResults["retrieve_database_schema"],
+        time_ms: 0,
+      });
+    }
+    if (toolResults["generate_sql_query"]) {
+      sqlSteps.push({
+        step: "llm_parse",
+        status: "completed" as const,
+        result: toolResults["generate_sql_query"],
+        time_ms: 0,
+      });
+    }
+    if (toolResults["execute_sql_query"]) {
+      sqlSteps.push({
+        step: "final_sql",
+        status: "completed" as const,
+        result: "历史查询结果",
+        time_ms: 0,
+      });
+    }
+    
+    // 如果没有提取到任何数据，返回 null
+    if (sqlSteps.length === 0 && !dataQuery) {
+      return null;
+    }
+    
+    return {
+      intentAnalysis: toolResults["analyze_user_query"] ? {
+        intent_type: "data_query",
+        original_query: "",
+        parsed_intent: toolResults["analyze_user_query"],
+      } : { intent_type: "data_query", original_query: "", parsed_intent: "历史查询" },
+      sqlSteps,
+      dataQuery,
+    };
+  }, [queryContext, hasSmartQueryInThread, messages]);
+  
+  // 最终使用的查询上下文：优先实时数据，其次历史重建
+  const effectiveQueryContext = queryContext?.intentAnalysis || queryContext?.sqlSteps?.length || queryContext?.dataQuery
+    ? queryContext
+    : rebuiltQueryContext;
+  
   // 检查是否有智能查询流程数据（用于隐藏原始工具调用显示）
+  // 优先使用 queryContext（实时流），其次检查工具调用类型（刷新后）
   const hasQueryProcess = useMemo(() => {
-    return Boolean(
+    const hasStreamData = Boolean(
       queryContext?.intentAnalysis || 
       queryContext?.sqlSteps?.length || 
       queryContext?.dataQuery
     );
-  }, [queryContext?.intentAnalysis, queryContext?.sqlSteps?.length, queryContext?.dataQuery]);
+    return hasStreamData || isSmartQueryToolCall;
+  }, [queryContext?.intentAnalysis, queryContext?.sqlSteps?.length, queryContext?.dataQuery, isSmartQueryToolCall]);
   
   // 基础判断
   const isLastMessage = messages.length > 0 && messages[messages.length - 1]?.id === message?.id;
@@ -217,9 +351,10 @@ export function AssistantMessage({
     <div className="group mr-auto flex w-full items-start gap-2">
       <div className="flex w-full flex-col gap-3">
         {/* 统一的智能查询流水线 - 只在最后一条消息显示 */}
-        {isLastMessage && hasQueryProcess && (
+        {/* 条件：isLastMessage && (有流数据 || 整个对话中有智能查询工具调用) */}
+        {isLastMessage && (hasQueryProcess || hasSmartQueryInThread) && (
           <QueryPipeline 
-            queryContext={queryContext}
+            queryContext={effectiveQueryContext}
             onSelectQuestion={(question) => {
               // 发送推荐的问题
               thread.postMessage({ role: "human", content: question });
@@ -228,8 +363,8 @@ export function AssistantMessage({
         )}
 
         {/* 数据可视化图表 - 优先展示在文本之前 */}
-        {isLastMessage && queryContext?.dataQuery?.chart_config && (
-          <DataChartDisplay dataQuery={queryContext.dataQuery} />
+        {isLastMessage && effectiveQueryContext?.dataQuery?.chart_config && (
+          <DataChartDisplay dataQuery={effectiveQueryContext.dataQuery} />
         )}
 
         {/* 文本内容（包含回答、数据洞察、建议） - 在图表之后 */}
@@ -310,22 +445,6 @@ export function AssistantMessage({
     </div>
   );
 }
-
-// 执行阶段映射
-const STAGE_LABELS: Record<string, { label: string; icon: string }> = {
-  clarification: { label: "理解问题中", icon: "🧠" },
-  cache_check: { label: "检查缓存", icon: "⚡" },
-  cache_hit: { label: "命中缓存", icon: "✨" },
-  schema_analysis: { label: "分析数据库结构", icon: "🗄️" },
-  sample_retrieval: { label: "检索相似查询", icon: "🔍" },
-  sql_generation: { label: "生成 SQL 查询", icon: "✏️" },
-  sql_validation: { label: "验证 SQL", icon: "🔧" },
-  sql_execution: { label: "执行查询", icon: "▶️" },
-  analysis: { label: "分析结果", icon: "📊" },
-  chart_generation: { label: "生成图表", icon: "📈" },
-  error_recovery: { label: "处理错误", icon: "🔄" },
-  completed: { label: "完成", icon: "✅" },
-};
 
 export function AssistantMessageLoading() {
   // 简化加载提示：只显示简单的思考动画，不显示具体步骤

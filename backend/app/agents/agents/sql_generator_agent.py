@@ -572,7 +572,7 @@ class SQLGeneratorAgent:
             
             # AIMessage 包含 tool_calls
             ai_message = AIMessage(
-                content="正在生成 SQL 查询...",
+                content="",  # 状态通过 QueryPipeline 组件展示，不需要文字
                 tool_calls=[{
                     "name": "generate_sql_query",
                     "args": {
@@ -620,7 +620,7 @@ class SQLGeneratorAgent:
             error_tool_call_id = generate_tool_call_id("generate_sql_query", {"error": str(e), "timestamp": time.time()})
             
             ai_message = AIMessage(
-                content="正在生成 SQL 查询...",
+                content="",  # 状态通过 QueryPipeline 组件展示，不需要文字
                 tool_calls=[{
                     "name": "generate_sql_query",
                     "args": {},

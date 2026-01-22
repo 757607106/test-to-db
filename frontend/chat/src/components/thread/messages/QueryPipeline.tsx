@@ -498,57 +498,118 @@ function NodeDetailContent({ node, data, copySQL, copiedSql }: {
   if (node.key === "schema_mapping" && data?.result) {
     try {
       const schemaData = JSON.parse(data.result);
-      if (schemaData.tables && Array.isArray(schemaData.tables)) {
+      if (schemaData.tables && Array.isArray(schemaData.tables) && schemaData.tables.length > 0) {
         return (
           <div className="space-y-4">
-            <div className="text-sm font-medium text-slate-700 mb-3">
-              {schemaData.summary}
-            </div>
+            {schemaData.summary && (
+              <div className="text-sm font-medium text-slate-700 mb-3">
+                {schemaData.summary}
+              </div>
+            )}
             <div className="space-y-3 max-h-96 overflow-y-auto">
-              {schemaData.tables.map((table: any, idx: number) => (
-                <div key={idx} className="bg-white rounded-lg border border-slate-200 p-3">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Database className="h-4 w-4 text-blue-600" />
-                    <span className="font-semibold text-sm text-slate-800">{table.name}</span>
-                    {table.comment && (
-                      <span className="text-xs text-slate-500">- {table.comment}</span>
+              {schemaData.tables.map((table: any, idx: number) => {
+                const tableName = table.name || table.table_name || `表${idx + 1}`;
+                const tableComment = table.comment || table.table_comment || "";
+                const columns = table.columns || [];
+                
+                return (
+                  <div key={idx} className="bg-white rounded-lg border border-slate-200 p-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Database className="h-4 w-4 text-blue-600 flex-shrink-0" />
+                      <span className="font-semibold text-sm text-slate-800">{tableName}</span>
+                      {tableComment && (
+                        <span className="text-xs text-slate-500">- {tableComment}</span>
+                      )}
+                    </div>
+                    {columns.length > 0 && (
+                      <div className="grid grid-cols-2 gap-2 mt-2 pl-6">
+                        {columns.slice(0, 20).map((col: any, colIdx: number) => {
+                          const colName = col.name || col.column_name || "";
+                          const colType = col.type || col.data_type || "";
+                          const colComment = col.comment || col.column_comment || "";
+                          
+                          return (
+                            <div key={colIdx} className="flex items-start gap-2 text-xs">
+                              <span className="text-slate-600 font-mono">{colName}</span>
+                              {colType && <span className="text-slate-400">({colType})</span>}
+                              {colComment && (
+                                <span className="text-slate-500 text-[10px] truncate max-w-[100px]" title={colComment}>
+                                  // {colComment}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {columns.length > 20 && (
+                          <div className="text-xs text-slate-400 col-span-2">
+                            ... 还有 {columns.length - 20} 个列
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
-                  {table.columns && table.columns.length > 0 && (
-                    <div className="grid grid-cols-2 gap-2 mt-2 pl-6">
-                      {table.columns.map((col: any, colIdx: number) => (
-                        <div key={colIdx} className="flex items-start gap-2 text-xs">
-                          <span className="text-slate-600 font-mono">{col.name}</span>
-                          <span className="text-slate-400">({col.type})</span>
-                          {col.comment && (
-                            <span className="text-slate-500 text-[10px]">// {col.comment}</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         );
       }
+      // 如果 tables 为空或格式不对，显示原始 JSON
+      return (
+        <div className="space-y-3">
+          <span className="text-xs text-slate-500">Schema 信息 (JSON)</span>
+          <pre className={cn(
+            "text-xs whitespace-pre-wrap break-all font-mono p-3 rounded-lg border",
+            "bg-white border-slate-200 text-slate-700",
+            "max-h-64 overflow-auto"
+          )}>
+            {JSON.stringify(schemaData, null, 2)}
+          </pre>
+        </div>
+      );
     } catch (e) {
-      // 如果解析失败，显示原始文本
+      // JSON 解析失败，显示原始文本
+      return (
+        <div className="space-y-3">
+          <span className="text-xs text-slate-500">Schema 信息</span>
+          <pre className={cn(
+            "text-xs whitespace-pre-wrap break-all font-mono p-3 rounded-lg border",
+            "bg-white border-slate-200 text-slate-700",
+            "max-h-64 overflow-auto"
+          )}>
+            {data.result}
+          </pre>
+        </div>
+      );
     }
   }
 
-  // SQL步骤详情
+  // SQL步骤详情 - 检查是否为 SQL 类型的步骤
   if (data?.result) {
     const isSQL = node.key === "llm_parse" || node.key === "sql_fix" || node.key === "final_sql";
+    
+    // 尝试解析 JSON，如果失败则当作纯文本
+    let displayContent = data.result;
+    let isJSON = false;
+    
+    try {
+      const parsed = JSON.parse(data.result);
+      // 如果解析成功且是对象，格式化显示
+      if (typeof parsed === "object" && parsed !== null) {
+        displayContent = JSON.stringify(parsed, null, 2);
+        isJSON = true;
+      }
+    } catch {
+      // 不是 JSON，保持原样
+    }
     
     return (
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <span className="text-xs text-slate-500">
-            {isSQL ? "生成的SQL" : "处理结果"}
+            {isSQL ? "生成的SQL" : isJSON ? "处理结果 (JSON)" : "处理结果"}
           </span>
-          {isSQL && (
+          {(isSQL || displayContent.length > 50) && (
             <button
               onClick={() => copySQL(data.result)}
               className="flex items-center gap-1.5 px-2 py-1 text-xs text-slate-600 hover:text-slate-800 hover:bg-slate-200 rounded-md transition-colors"
@@ -570,9 +631,10 @@ function NodeDetailContent({ node, data, copySQL, copiedSql }: {
         <pre className={cn(
           "text-xs whitespace-pre-wrap break-all font-mono p-3 rounded-lg border",
           "bg-white border-slate-200 text-slate-700",
-          "max-h-64 overflow-auto"
+          "max-h-64 overflow-auto",
+          isSQL && "bg-slate-900 text-green-400 border-slate-700"  // SQL 使用深色主题
         )}>
-          {data.result}
+          {displayContent}
         </pre>
       </div>
     );

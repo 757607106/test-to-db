@@ -63,6 +63,9 @@ export function DataChartDisplay({ dataQuery }: DataChartDisplayProps) {
   // 生成多个图表配置（最多5个）
   const chartConfigs = generateChartConfigs(tableData, columns, chart_config);
 
+  // 如果没有可用的图表配置，不渲染
+  if (chartConfigs.length === 0) return null;
+
   return (
     <div className="mt-4 rounded-xl border border-blue-200 bg-gradient-to-b from-blue-50/50 to-white overflow-hidden shadow-sm">
       <button
@@ -194,7 +197,10 @@ interface ChartConfig {
 }
 
 // 图表渲染器
-function ChartRenderer({ data, config }: { data: Record<string, any>[]; config: ChartConfig }) {
+function ChartRenderer({ data, config }: { data: Record<string, any>[]; config?: ChartConfig }) {
+  // 空值检查
+  if (!config) return null;
+  
   if (config.type === "pie") {
     return (
       <ResponsiveContainer width="100%" height={300}>
