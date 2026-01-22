@@ -4,7 +4,7 @@
  * 整合所有工具调用，展示完整的执行流程
  * 支持点击展开查看详细数据
  */
-import { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   CheckCircle2,
@@ -24,17 +24,13 @@ import {
   Check,
   BarChart2,
   Table2,
-  Lightbulb,
-  MessageCircle,
   History,
   Zap,
   HardDrive,
-  ArrowDown,
   AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Switch } from "@/components/ui/switch";
-import type { QueryContext, SQLStepEvent } from "@/types/stream-events";
+import type { QueryContext } from "@/types/stream-events";
 import { CACHE_HIT_LABELS } from "@/types/stream-events";
 import {
   LineChart,
@@ -51,6 +47,9 @@ import {
 
 // 图表颜色配置
 const CHART_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
+const CHART_MARGIN = { top: 10, right: 30, left: 10, bottom: 10 };
+const DOT_STYLE = { r: 4, fill: "#fff", strokeWidth: 2 };
+const ACTIVE_DOT_STYLE = { r: 6 };
 
 // 执行节点配置
 interface NodeConfig {
@@ -112,12 +111,565 @@ const PIPELINE_NODES: NodeConfig[] = [
   },
 ];
 
+type NodeStatus = "pending" | "running" | "completed" | "error" | "skipped";
+
+// 静态状态配置
+const STATUS_CONFIG: Record<NodeStatus, { bg: string; border: string; text: string; icon: React.ComponentType<{ className?: string }>; iconColor: string; animate?: boolean }> = {
+  pending: { bg: "bg-slate-100", border: "border-slate-200", text: "text-slate-400", icon: Circle, iconColor: "text-slate-300", animate: false },
+  running: { bg: "bg-blue-50", border: "border-blue-200", text: "text-blue-600", icon: Loader2, iconColor: "text-blue-500", animate: true },
+  completed: { bg: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-600", icon: CheckCircle2, iconColor: "text-emerald-500", animate: false },
+  error: { bg: "bg-red-50", border: "border-red-200", text: "text-red-600", icon: XCircle, iconColor: "text-red-500", animate: false },
+  skipped: { bg: "bg-slate-50", border: "border-slate-200", text: "text-slate-400", icon: Circle, iconColor: "text-slate-300", animate: false },
+};
+
+// 缓存命中配置
+const CACHE_HIT_CONFIG = {
+  thread_history: { icon: History, color: "purple", bg: "from-purple-50 to-purple-100/50" },
+  exact: { icon: HardDrive, color: "emerald", bg: "from-emerald-50 to-emerald-100/50" },
+  semantic: { icon: Zap, color: "blue", bg: "from-blue-50 to-blue-100/50" },
+};
+
+// 详情项组件
+function DetailItem({ label, value, highlight, className }: { 
+  label: string; 
+  value: string; 
+  highlight?: boolean;
+  className?: string;
+}) {
+  return (
+    <div className={className}>
+      <span className="text-xs text-slate-500 block mb-1">{label}</span>
+      <span className={cn(
+        "font-medium text-sm",
+        highlight ? "text-blue-600" : "text-slate-700"
+      )}>
+        {value || "-"}
+      </span>
+    </div>
+  );
+}
+
+// 节点详情内容
+const NodeDetailContent = React.memo(function NodeDetailContent({ node, data, copySQL, copiedSql }: { 
+  node: NodeConfig; 
+  data: any;
+  copySQL: (sql: string) => void;
+  copiedSql: boolean;
+}) {
+  // 意图解析详情
+  if (node.key === "intent" && data) {
+    return (
+      <div className="grid grid-cols-3 gap-4">
+        <DetailItem label="数据集" value={data.dataset} highlight />
+        <DetailItem label="查询模式" value={data.query_mode} highlight />
+        <DetailItem label="指标" value={data.metrics?.join(", ") || "默认指标"} />
+        {data.filters?.date_range && (
+          <DetailItem 
+            label="日期范围" 
+            value={`${data.filters.date_range[0]} ~ ${data.filters.date_range[1]}`} 
+            className="col-span-3"
+          />
+        )}
+      </div>
+    );
+  }
+
+  // Schema 映射详情 - 显示表和列信息
+  if (node.key === "schema_mapping" && data?.result) {
+    try {
+      const schemaData = JSON.parse(data.result);
+      if (schemaData.tables && Array.isArray(schemaData.tables) && schemaData.tables.length > 0) {
+        return (
+          <div className="space-y-4">
+            {schemaData.summary && (
+              <div className="text-sm font-medium text-slate-700 mb-3">
+                {schemaData.summary}
+              </div>
+            )}
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              {schemaData.tables.map((table: any, idx: number) => {
+                const tableName = table.name || table.table_name || `表${idx + 1}`;
+                const tableComment = table.comment || table.table_comment || "";
+                const columns = table.columns || [];
+                
+                return (
+                  <div key={idx} className="bg-white rounded-lg border border-slate-200 p-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Database className="h-4 w-4 text-blue-600 flex-shrink-0" />
+                      <span className="font-semibold text-sm text-slate-800">{tableName}</span>
+                      {tableComment && (
+                        <span className="text-xs text-slate-500">- {tableComment}</span>
+                      )}
+                    </div>
+                    {columns.length > 0 && (
+                      <div className="grid grid-cols-2 gap-2 mt-2 pl-6">
+                        {columns.slice(0, 20).map((col: any, colIdx: number) => {
+                          const colName = col.name || col.column_name || "";
+                          const colType = col.type || col.data_type || "";
+                          const colComment = col.comment || col.column_comment || "";
+                          
+                          return (
+                            <div key={colIdx} className="flex items-start gap-2 text-xs">
+                              <span className="text-slate-600 font-mono">{colName}</span>
+                              {colType && <span className="text-slate-400">({colType})</span>}
+                              {colComment && (
+                                <span className="text-slate-500 text-[10px] truncate max-w-[100px]" title={colComment}>
+                                  // {colComment}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {columns.length > 20 && (
+                          <div className="text-xs text-slate-400 col-span-2">
+                            ... 还有 {columns.length - 20} 个列
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      }
+      // 如果 tables 为空或格式不对，显示原始 JSON
+      return (
+        <div className="space-y-3">
+          <span className="text-xs text-slate-500">Schema 信息 (JSON)</span>
+          <pre className={cn(
+            "text-xs whitespace-pre-wrap break-all font-mono p-3 rounded-lg border",
+            "bg-white border-slate-200 text-slate-700",
+            "max-h-64 overflow-auto"
+          )}>
+            {JSON.stringify(schemaData, null, 2)}
+          </pre>
+        </div>
+      );
+    } catch (e) {
+      // JSON 解析失败，显示原始文本
+      return (
+        <div className="space-y-3">
+          <span className="text-xs text-slate-500">Schema 信息</span>
+          <pre className={cn(
+            "text-xs whitespace-pre-wrap break-all font-mono p-3 rounded-lg border",
+            "bg-white border-slate-200 text-slate-700",
+            "max-h-64 overflow-auto"
+          )}>
+            {data.result}
+          </pre>
+        </div>
+      );
+    }
+  }
+
+  // SQL步骤详情 - 检查是否为 SQL 类型的步骤
+  if (data?.result) {
+    const isSQL = node.key === "llm_parse" || node.key === "sql_fix" || node.key === "final_sql";
+    
+    // 尝试解析 JSON，如果失败则当作纯文本
+    let displayContent = data.result;
+    let isJSON = false;
+    
+    try {
+      const parsed = JSON.parse(data.result);
+      // 如果解析成功且是对象，格式化显示
+      if (typeof parsed === "object" && parsed !== null) {
+        displayContent = JSON.stringify(parsed, null, 2);
+        isJSON = true;
+      }
+    } catch {
+      // 不是 JSON，保持原样
+    }
+    
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-slate-500">
+            {isSQL ? "生成的SQL" : isJSON ? "处理结果 (JSON)" : "处理结果"}
+          </span>
+          {(isSQL || displayContent.length > 50) && (
+            <button
+              onClick={() => copySQL(data.result)}
+              className="flex items-center gap-1.5 px-2 py-1 text-xs text-slate-600 hover:text-slate-800 hover:bg-slate-200 rounded-md transition-colors"
+            >
+              {copiedSql ? (
+                <>
+                  <Check className="h-3 w-3 text-emerald-500" />
+                  <span className="text-emerald-600">已复制</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="h-3 w-3" />
+                  <span>复制</span>
+                </>
+              )}
+            </button>
+          )}
+        </div>
+        <pre className={cn(
+          "text-xs whitespace-pre-wrap break-all font-mono p-3 rounded-lg border",
+          "bg-white border-slate-200 text-slate-700",
+          "max-h-64 overflow-auto",
+          isSQL && "bg-slate-900 text-green-400 border-slate-700"  // SQL 使用深色主题
+        )}>
+          {displayContent}
+        </pre>
+      </div>
+    );
+  }
+
+  return (
+    <div className="text-sm text-slate-500">暂无详细数据</div>
+  );
+});
+
+// 流水线节点组件
+interface PipelineNodeProps {
+  node: NodeConfig;
+  status: NodeStatus;
+  data: any;
+  isExpanded: boolean;
+  onToggle: () => void;
+  copySQL: (sql: string) => void;
+  copiedSql: boolean;
+}
+
+const PipelineNode = React.memo(function PipelineNode({ node, status, data, isExpanded, onToggle, copySQL, copiedSql }: PipelineNodeProps) {
+  const Icon = node.icon;
+  const hasData = data && (
+    (node.key === "intent" && data) ||
+    (data.result || data.time_ms > 0)
+  );
+
+  const config = STATUS_CONFIG[status];
+  const StatusIcon = config.icon;
+
+  return (
+    <div className="mb-3">
+      <motion.button
+        onClick={onToggle}
+        disabled={!hasData}
+        className={cn(
+          "w-full flex items-center gap-3 p-3 rounded-xl border transition-all",
+          config.bg, config.border,
+          hasData && "hover:shadow-md cursor-pointer",
+          !hasData && "cursor-default opacity-75",
+          config.animate && "animate-pulse"
+        )}
+        whileHover={hasData ? { scale: 1.01 } : {}}
+        whileTap={hasData ? { scale: 0.99 } : {}}
+      >
+        {/* 状态图标 */}
+        <div className={cn(
+          "flex items-center justify-center w-10 h-10 rounded-lg",
+          status === "completed" ? "bg-emerald-100" :
+          status === "running" ? "bg-blue-100" :
+          status === "error" ? "bg-red-100" : "bg-slate-100"
+        )}>
+          <StatusIcon className={cn(
+            "h-5 w-5",
+            config.iconColor,
+            config.animate && "animate-spin"
+          )} />
+        </div>
+
+        {/* 节点信息 */}
+        <div className="flex-1 text-left">
+          <div className="flex items-center gap-2">
+            <Icon className={cn("h-4 w-4", config.text)} />
+            <span className={cn("font-medium text-sm", config.text)}>{node.label}</span>
+            {data?.time_ms > 0 && (
+              <span className="text-xs text-slate-400 ml-auto mr-2">{data.time_ms}ms</span>
+            )}
+          </div>
+          <p className="text-xs text-slate-500 mt-0.5">{node.description}</p>
+        </div>
+
+        {/* 展开箭头 */}
+        {hasData && (
+          <motion.div
+            animate={{ rotate: isExpanded ? 90 : 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <ChevronRight className="h-4 w-4 text-slate-400" />
+          </motion.div>
+        )}
+      </motion.button>
+
+      {/* 展开内容 */}
+      <AnimatePresence>
+        {isExpanded && hasData && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="mt-2 ml-6 mr-2 p-4 bg-slate-50 rounded-xl border border-slate-200">
+              <NodeDetailContent 
+                node={node} 
+                data={data} 
+                copySQL={copySQL}
+                copiedSql={copiedSql}
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+});
+
+// 数据图表
+const DataChart = React.memo(function DataChart({ data, columns, chartConfig }: { 
+  data: Record<string, any>[]; 
+  columns: string[];
+  chartConfig?: any;
+}) {
+  const xDataKey = chartConfig?.xDataKey || columns[0];
+  const yDataKeys = columns.filter(col => col !== xDataKey).slice(0, 3);
+  const ChartType = chartConfig?.type === "line" ? LineChart : BarChart;
+
+  return (
+    <ResponsiveContainer width="100%" height={280}>
+      <ChartType data={data} margin={CHART_MARGIN}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+        <XAxis 
+          dataKey={xDataKey} 
+          tick={{ fontSize: 11, fill: "#64748b" }} 
+          stroke="#cbd5e1" 
+          tickLine={{ stroke: "#cbd5e1" }}
+        />
+        <YAxis 
+          tick={{ fontSize: 11, fill: "#64748b" }} 
+          stroke="#cbd5e1"
+          tickLine={{ stroke: "#cbd5e1" }}
+        />
+        <Tooltip
+          contentStyle={{
+            backgroundColor: "#fff",
+            border: "1px solid #e2e8f0",
+            borderRadius: "8px",
+            fontSize: "12px",
+            boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
+          }}
+        />
+        <Legend 
+          wrapperStyle={{ fontSize: "12px", paddingTop: "10px" }} 
+        />
+        {yDataKeys.map((key, index) => (
+          chartConfig?.type === "line" ? (
+            <Line
+              key={key}
+              type="monotone"
+              dataKey={key}
+              stroke={CHART_COLORS[index % CHART_COLORS.length]}
+              strokeWidth={2}
+              dot={DOT_STYLE}
+              activeDot={ACTIVE_DOT_STYLE}
+            />
+          ) : (
+            <Bar
+              key={key}
+              dataKey={key}
+              fill={CHART_COLORS[index % CHART_COLORS.length]}
+              radius={[4, 4, 0, 0]}
+            />
+          )
+        ))}
+      </ChartType>
+    </ResponsiveContainer>
+  );
+});
+
+// 格式化单元格值
+function formatValue(value: any): string {
+  if (value === null || value === undefined) return "-";
+  if (typeof value === "number") {
+    return value.toLocaleString("zh-CN", { 
+      minimumFractionDigits: 0, 
+      maximumFractionDigits: 2 
+    });
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+// 数据表格
+const DataTable = React.memo(function DataTable({ data, columns }: { data: Record<string, any>[]; columns: string[] }) {
+  return (
+    <div className="overflow-auto max-h-80 rounded-lg border border-slate-200">
+      <table className="w-full text-sm">
+        <thead className="bg-gradient-to-b from-slate-50 to-slate-100 sticky top-0">
+          <tr>
+            {columns.map((col) => (
+              <th 
+                key={col} 
+                className="px-4 py-3 text-left font-semibold text-slate-600 whitespace-nowrap border-b border-slate-200"
+              >
+                {col}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {data.slice(0, 50).map((row, i) => (
+            <tr 
+              key={i} 
+              className={cn(
+                "transition-colors",
+                i % 2 === 0 ? "bg-white" : "bg-slate-50/50",
+                "hover:bg-blue-50/50"
+              )}
+            >
+              {columns.map((col) => (
+                <td 
+                  key={col} 
+                  className="px-4 py-2.5 text-slate-600 whitespace-nowrap"
+                >
+                  {formatValue(row[col])}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {data.length > 50 && (
+        <div className="text-center text-xs text-slate-500 py-2 bg-slate-50 border-t border-slate-200">
+          显示前 50 条，共 {data.length} 条数据
+        </div>
+      )}
+    </div>
+  );
+});
+
+// 数据查询结果组件
+const DataQueryResult = React.memo(function DataQueryResult({ 
+  dataQuery, 
+  viewMode, 
+  onViewModeChange 
+}: { 
+  dataQuery: QueryContext["dataQuery"]; 
+  viewMode: "chart" | "table";
+  onViewModeChange: (mode: "chart" | "table") => void;
+}) {
+  if (!dataQuery) return null;
+
+  const { columns, rows, row_count, chart_config } = dataQuery;
+  const hasData = rows && rows.length > 0;
+
+  // 转换数据格式 - 使用 useMemo 缓存
+  const tableData = useMemo(() => {
+    return rows?.map(row => {
+      if (Array.isArray(row)) {
+        const obj: Record<string, any> = {};
+        columns.forEach((col, i) => {
+          obj[col] = row[i];
+        });
+        return obj;
+      }
+      return row;
+    }) || [];
+  }, [rows, columns]);
+
+  return (
+    <div className="mt-4 rounded-xl border border-slate-200 bg-white overflow-hidden">
+      {/* 标题栏 */}
+      <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200">
+        <div className="flex items-center gap-2">
+          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+          <span className="font-medium text-sm text-slate-700">执行SQL查询</span>
+          <span className="text-xs text-slate-500 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">
+            {row_count || rows?.length || 0} 条记录
+          </span>
+        </div>
+        
+        {hasData && (
+          <div className="flex items-center gap-2 bg-white rounded-lg border border-slate-200 p-1">
+            <button
+              onClick={() => onViewModeChange("chart")}
+              className={cn(
+                "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors",
+                viewMode === "chart" 
+                  ? "bg-blue-100 text-blue-700" 
+                  : "text-slate-600 hover:bg-slate-100"
+              )}
+            >
+              <BarChart2 className="h-3.5 w-3.5" />
+              图表
+            </button>
+            <button
+              onClick={() => onViewModeChange("table")}
+              className={cn(
+                "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors",
+                viewMode === "table" 
+                  ? "bg-blue-100 text-blue-700" 
+                  : "text-slate-600 hover:bg-slate-100"
+              )}
+            >
+              <Table2 className="h-3.5 w-3.5" />
+              表格
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* 内容区域 */}
+      <div className="p-4">
+        {!hasData ? (
+          <div className="flex flex-col items-center justify-center py-8 text-slate-500">
+            <AlertCircle className="h-8 w-8 mb-2 text-slate-400" />
+            <span className="text-sm">查询结果为空</span>
+          </div>
+        ) : viewMode === "chart" ? (
+          <DataChart data={tableData} columns={columns} chartConfig={chart_config} />
+        ) : (
+          <DataTable data={tableData} columns={columns} />
+        )}
+      </div>
+    </div>
+  );
+});
+
+// 缓存命中横幅
+const CacheHitBanner = React.memo(function CacheHitBanner({ cacheHit }: { cacheHit: QueryContext["cacheHit"] }) {
+  if (!cacheHit) return null;
+
+  const c = CACHE_HIT_CONFIG[cacheHit.hit_type] || CACHE_HIT_CONFIG.semantic;
+  const Icon = c.icon;
+
+  return (
+    <div className={cn("flex items-center gap-3 px-5 py-3 bg-gradient-to-r border-b", c.bg)}>
+      <div className={cn("p-1.5 rounded-lg", `bg-${c.color}-100`)}>
+        <Icon className={cn("h-4 w-4", `text-${c.color}-600`)} />
+      </div>
+      <div className="flex-1">
+        <span className={cn("text-sm font-medium", `text-${c.color}-700`)}>
+          {CACHE_HIT_LABELS[cacheHit.hit_type]}
+        </span>
+        {cacheHit.similarity < 1 && (
+          <span className="text-xs text-slate-500 ml-2">
+            相似度: {(cacheHit.similarity * 100).toFixed(0)}%
+          </span>
+        )}
+      </div>
+      <span className="text-xs text-slate-500 flex items-center gap-1">
+        <Clock className="h-3 w-3" />
+        {cacheHit.time_ms}ms
+      </span>
+    </div>
+  );
+});
+
 interface QueryPipelineProps {
   queryContext: QueryContext;
   onSelectQuestion?: (question: string) => void;
 }
-
-type NodeStatus = "pending" | "running" | "completed" | "error" | "skipped";
 
 export function QueryPipeline({ queryContext, onSelectQuestion }: QueryPipelineProps) {
   // 默认展开，但允许用户折叠
@@ -127,7 +679,7 @@ export function QueryPipeline({ queryContext, onSelectQuestion }: QueryPipelineP
   const [viewMode, setViewMode] = useState<"chart" | "table">("table");
 
   // 使用解构避免依赖整个 queryContext
-  const { cacheHit, intentAnalysis, sqlSteps, dataQuery, similarQuestions } = queryContext;
+  const { cacheHit, intentAnalysis, sqlSteps, dataQuery } = queryContext;
 
   // 创建节点状态映射 - 使用 useMemo 缓存
   const nodeStatesMap = useMemo(() => {
@@ -309,14 +861,18 @@ export function QueryPipeline({ queryContext, onSelectQuestion }: QueryPipelineP
                 })}
               </div>
 
-              {/* SQL执行结果（仅显示表格） */}
+              {/* SQL执行结果（表格/图表） */}
               {dataQuery && (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.1 }}
                 >
-                  <DataQueryResultTable dataQuery={dataQuery} />
+                  <DataQueryResult 
+                    dataQuery={dataQuery} 
+                    viewMode={viewMode}
+                    onViewModeChange={setViewMode}
+                  />
                 </motion.div>
               )}
             </div>
@@ -325,675 +881,6 @@ export function QueryPipeline({ queryContext, onSelectQuestion }: QueryPipelineP
       </AnimatePresence>
     </div>
   );
-}
-
-// 缓存命中横幅
-function CacheHitBanner({ cacheHit }: { cacheHit: QueryContext["cacheHit"] }) {
-  if (!cacheHit) return null;
-
-  const config = {
-    thread_history: { icon: History, color: "purple", bg: "from-purple-50 to-purple-100/50" },
-    exact: { icon: HardDrive, color: "emerald", bg: "from-emerald-50 to-emerald-100/50" },
-    semantic: { icon: Zap, color: "blue", bg: "from-blue-50 to-blue-100/50" },
-  };
-
-  const c = config[cacheHit.hit_type] || config.semantic;
-  const Icon = c.icon;
-
-  return (
-    <div className={cn("flex items-center gap-3 px-5 py-3 bg-gradient-to-r border-b", c.bg)}>
-      <div className={cn("p-1.5 rounded-lg", `bg-${c.color}-100`)}>
-        <Icon className={cn("h-4 w-4", `text-${c.color}-600`)} />
-      </div>
-      <div className="flex-1">
-        <span className={cn("text-sm font-medium", `text-${c.color}-700`)}>
-          {CACHE_HIT_LABELS[cacheHit.hit_type]}
-        </span>
-        {cacheHit.similarity < 1 && (
-          <span className="text-xs text-slate-500 ml-2">
-            相似度: {(cacheHit.similarity * 100).toFixed(0)}%
-          </span>
-        )}
-      </div>
-      <span className="text-xs text-slate-500 flex items-center gap-1">
-        <Clock className="h-3 w-3" />
-        {cacheHit.time_ms}ms
-      </span>
-    </div>
-  );
-}
-
-// 流水线节点组件
-interface PipelineNodeProps {
-  node: NodeConfig;
-  status: NodeStatus;
-  data: any;
-  isExpanded: boolean;
-  onToggle: () => void;
-  copySQL: (sql: string) => void;
-  copiedSql: boolean;
-}
-
-function PipelineNode({ node, status, data, isExpanded, onToggle, copySQL, copiedSql }: PipelineNodeProps) {
-  const Icon = node.icon;
-  const hasData = data && (
-    (node.key === "intent" && data) ||
-    (data.result || data.time_ms > 0)
-  );
-
-  const statusConfig: Record<NodeStatus, { bg: string; border: string; text: string; icon: React.ComponentType<{ className?: string }>; iconColor: string; animate?: boolean }> = {
-    pending: { bg: "bg-slate-100", border: "border-slate-200", text: "text-slate-400", icon: Circle, iconColor: "text-slate-300", animate: false },
-    running: { bg: "bg-blue-50", border: "border-blue-200", text: "text-blue-600", icon: Loader2, iconColor: "text-blue-500", animate: true },
-    completed: { bg: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-600", icon: CheckCircle2, iconColor: "text-emerald-500", animate: false },
-    error: { bg: "bg-red-50", border: "border-red-200", text: "text-red-600", icon: XCircle, iconColor: "text-red-500", animate: false },
-    skipped: { bg: "bg-slate-50", border: "border-slate-200", text: "text-slate-400", icon: Circle, iconColor: "text-slate-300", animate: false },
-  };
-
-  const config = statusConfig[status];
-  const StatusIcon = config.icon;
-
-  return (
-    <div className="mb-3">
-      <motion.button
-        onClick={onToggle}
-        disabled={!hasData}
-        className={cn(
-          "w-full flex items-center gap-3 p-3 rounded-xl border transition-all",
-          config.bg, config.border,
-          hasData && "hover:shadow-md cursor-pointer",
-          !hasData && "cursor-default opacity-75",
-          config.animate && "animate-pulse"
-        )}
-        whileHover={hasData ? { scale: 1.01 } : {}}
-        whileTap={hasData ? { scale: 0.99 } : {}}
-      >
-        {/* 状态图标 */}
-        <div className={cn(
-          "flex items-center justify-center w-10 h-10 rounded-lg",
-          status === "completed" ? "bg-emerald-100" :
-          status === "running" ? "bg-blue-100" :
-          status === "error" ? "bg-red-100" : "bg-slate-100"
-        )}>
-          <StatusIcon className={cn(
-            "h-5 w-5",
-            config.iconColor,
-            config.animate && "animate-spin"
-          )} />
-        </div>
-
-        {/* 节点信息 */}
-        <div className="flex-1 text-left">
-          <div className="flex items-center gap-2">
-            <Icon className={cn("h-4 w-4", config.text)} />
-            <span className={cn("font-medium text-sm", config.text)}>{node.label}</span>
-            {data?.time_ms > 0 && (
-              <span className="text-xs text-slate-400 ml-auto mr-2">{data.time_ms}ms</span>
-            )}
-          </div>
-          <p className="text-xs text-slate-500 mt-0.5">{node.description}</p>
-        </div>
-
-        {/* 展开箭头 */}
-        {hasData && (
-          <motion.div
-            animate={{ rotate: isExpanded ? 90 : 0 }}
-            transition={{ duration: 0.2 }}
-          >
-            <ChevronRight className="h-4 w-4 text-slate-400" />
-          </motion.div>
-        )}
-      </motion.button>
-
-      {/* 展开内容 */}
-      <AnimatePresence>
-        {isExpanded && hasData && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="overflow-hidden"
-          >
-            <div className="mt-2 ml-6 mr-2 p-4 bg-slate-50 rounded-xl border border-slate-200">
-              <NodeDetailContent 
-                node={node} 
-                data={data} 
-                copySQL={copySQL}
-                copiedSql={copiedSql}
-              />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-// 节点详情内容
-function NodeDetailContent({ node, data, copySQL, copiedSql }: { 
-  node: NodeConfig; 
-  data: any;
-  copySQL: (sql: string) => void;
-  copiedSql: boolean;
-}) {
-  // 意图解析详情
-  if (node.key === "intent" && data) {
-    return (
-      <div className="grid grid-cols-3 gap-4">
-        <DetailItem label="数据集" value={data.dataset} highlight />
-        <DetailItem label="查询模式" value={data.query_mode} highlight />
-        <DetailItem label="指标" value={data.metrics?.join(", ") || "默认指标"} />
-        {data.filters?.date_range && (
-          <DetailItem 
-            label="日期范围" 
-            value={`${data.filters.date_range[0]} ~ ${data.filters.date_range[1]}`} 
-            className="col-span-3"
-          />
-        )}
-      </div>
-    );
-  }
-
-  // Schema 映射详情 - 显示表和列信息
-  if (node.key === "schema_mapping" && data?.result) {
-    try {
-      const schemaData = JSON.parse(data.result);
-      if (schemaData.tables && Array.isArray(schemaData.tables) && schemaData.tables.length > 0) {
-        return (
-          <div className="space-y-4">
-            {schemaData.summary && (
-              <div className="text-sm font-medium text-slate-700 mb-3">
-                {schemaData.summary}
-              </div>
-            )}
-            <div className="space-y-3 max-h-96 overflow-y-auto">
-              {schemaData.tables.map((table: any, idx: number) => {
-                const tableName = table.name || table.table_name || `表${idx + 1}`;
-                const tableComment = table.comment || table.table_comment || "";
-                const columns = table.columns || [];
-                
-                return (
-                  <div key={idx} className="bg-white rounded-lg border border-slate-200 p-3">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Database className="h-4 w-4 text-blue-600 flex-shrink-0" />
-                      <span className="font-semibold text-sm text-slate-800">{tableName}</span>
-                      {tableComment && (
-                        <span className="text-xs text-slate-500">- {tableComment}</span>
-                      )}
-                    </div>
-                    {columns.length > 0 && (
-                      <div className="grid grid-cols-2 gap-2 mt-2 pl-6">
-                        {columns.slice(0, 20).map((col: any, colIdx: number) => {
-                          const colName = col.name || col.column_name || "";
-                          const colType = col.type || col.data_type || "";
-                          const colComment = col.comment || col.column_comment || "";
-                          
-                          return (
-                            <div key={colIdx} className="flex items-start gap-2 text-xs">
-                              <span className="text-slate-600 font-mono">{colName}</span>
-                              {colType && <span className="text-slate-400">({colType})</span>}
-                              {colComment && (
-                                <span className="text-slate-500 text-[10px] truncate max-w-[100px]" title={colComment}>
-                                  // {colComment}
-                                </span>
-                              )}
-                            </div>
-                          );
-                        })}
-                        {columns.length > 20 && (
-                          <div className="text-xs text-slate-400 col-span-2">
-                            ... 还有 {columns.length - 20} 个列
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      }
-      // 如果 tables 为空或格式不对，显示原始 JSON
-      return (
-        <div className="space-y-3">
-          <span className="text-xs text-slate-500">Schema 信息 (JSON)</span>
-          <pre className={cn(
-            "text-xs whitespace-pre-wrap break-all font-mono p-3 rounded-lg border",
-            "bg-white border-slate-200 text-slate-700",
-            "max-h-64 overflow-auto"
-          )}>
-            {JSON.stringify(schemaData, null, 2)}
-          </pre>
-        </div>
-      );
-    } catch (e) {
-      // JSON 解析失败，显示原始文本
-      return (
-        <div className="space-y-3">
-          <span className="text-xs text-slate-500">Schema 信息</span>
-          <pre className={cn(
-            "text-xs whitespace-pre-wrap break-all font-mono p-3 rounded-lg border",
-            "bg-white border-slate-200 text-slate-700",
-            "max-h-64 overflow-auto"
-          )}>
-            {data.result}
-          </pre>
-        </div>
-      );
-    }
-  }
-
-  // SQL步骤详情 - 检查是否为 SQL 类型的步骤
-  if (data?.result) {
-    const isSQL = node.key === "llm_parse" || node.key === "sql_fix" || node.key === "final_sql";
-    
-    // 尝试解析 JSON，如果失败则当作纯文本
-    let displayContent = data.result;
-    let isJSON = false;
-    
-    try {
-      const parsed = JSON.parse(data.result);
-      // 如果解析成功且是对象，格式化显示
-      if (typeof parsed === "object" && parsed !== null) {
-        displayContent = JSON.stringify(parsed, null, 2);
-        isJSON = true;
-      }
-    } catch {
-      // 不是 JSON，保持原样
-    }
-    
-    return (
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-slate-500">
-            {isSQL ? "生成的SQL" : isJSON ? "处理结果 (JSON)" : "处理结果"}
-          </span>
-          {(isSQL || displayContent.length > 50) && (
-            <button
-              onClick={() => copySQL(data.result)}
-              className="flex items-center gap-1.5 px-2 py-1 text-xs text-slate-600 hover:text-slate-800 hover:bg-slate-200 rounded-md transition-colors"
-            >
-              {copiedSql ? (
-                <>
-                  <Check className="h-3 w-3 text-emerald-500" />
-                  <span className="text-emerald-600">已复制</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="h-3 w-3" />
-                  <span>复制</span>
-                </>
-              )}
-            </button>
-          )}
-        </div>
-        <pre className={cn(
-          "text-xs whitespace-pre-wrap break-all font-mono p-3 rounded-lg border",
-          "bg-white border-slate-200 text-slate-700",
-          "max-h-64 overflow-auto",
-          isSQL && "bg-slate-900 text-green-400 border-slate-700"  // SQL 使用深色主题
-        )}>
-          {displayContent}
-        </pre>
-      </div>
-    );
-  }
-
-  return (
-    <div className="text-sm text-slate-500">暂无详细数据</div>
-  );
-}
-
-// 详情项组件
-function DetailItem({ label, value, highlight, className }: { 
-  label: string; 
-  value: string; 
-  highlight?: boolean;
-  className?: string;
-}) {
-  return (
-    <div className={className}>
-      <span className="text-xs text-slate-500 block mb-1">{label}</span>
-      <span className={cn(
-        "font-medium text-sm",
-        highlight ? "text-blue-600" : "text-slate-700"
-      )}>
-        {value || "-"}
-      </span>
-    </div>
-  );
-}
-
-// 数据查询结果组件
-function DataQueryResult({ 
-  dataQuery, 
-  viewMode, 
-  onViewModeChange 
-}: { 
-  dataQuery: QueryContext["dataQuery"]; 
-  viewMode: "chart" | "table";
-  onViewModeChange: (mode: "chart" | "table") => void;
-}) {
-  if (!dataQuery) return null;
-
-  const { columns, rows, row_count, chart_config } = dataQuery;
-  const hasData = rows && rows.length > 0;
-
-  // 转换数据格式
-  const tableData = rows?.map(row => {
-    if (Array.isArray(row)) {
-      const obj: Record<string, any> = {};
-      columns.forEach((col, i) => {
-        obj[col] = row[i];
-      });
-      return obj;
-    }
-    return row;
-  }) || [];
-
-  return (
-    <div className="mt-4 rounded-xl border border-slate-200 bg-white overflow-hidden">
-      {/* 标题栏 */}
-      <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200">
-        <div className="flex items-center gap-2">
-          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-          <span className="font-medium text-sm text-slate-700">执行SQL查询</span>
-          <span className="text-xs text-slate-500 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">
-            {row_count || rows?.length || 0} 条记录
-          </span>
-        </div>
-        
-        {hasData && (
-          <div className="flex items-center gap-2 bg-white rounded-lg border border-slate-200 p-1">
-            <button
-              onClick={() => onViewModeChange("chart")}
-              className={cn(
-                "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors",
-                viewMode === "chart" 
-                  ? "bg-blue-100 text-blue-700" 
-                  : "text-slate-600 hover:bg-slate-100"
-              )}
-            >
-              <BarChart2 className="h-3.5 w-3.5" />
-              图表
-            </button>
-            <button
-              onClick={() => onViewModeChange("table")}
-              className={cn(
-                "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors",
-                viewMode === "table" 
-                  ? "bg-blue-100 text-blue-700" 
-                  : "text-slate-600 hover:bg-slate-100"
-              )}
-            >
-              <Table2 className="h-3.5 w-3.5" />
-              表格
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* 内容区域 */}
-      <div className="p-4">
-        {!hasData ? (
-          <div className="flex flex-col items-center justify-center py-8 text-slate-500">
-            <AlertCircle className="h-8 w-8 mb-2 text-slate-400" />
-            <span className="text-sm">查询结果为空</span>
-          </div>
-        ) : viewMode === "chart" ? (
-          <DataChart data={tableData} columns={columns} chartConfig={chart_config} />
-        ) : (
-          <DataTable data={tableData} columns={columns} />
-        )}
-      </div>
-    </div>
-  );
-}
-
-// 数据图表
-function DataChart({ data, columns, chartConfig }: { 
-  data: Record<string, any>[]; 
-  columns: string[];
-  chartConfig?: any;
-}) {
-  const xDataKey = chartConfig?.xDataKey || columns[0];
-  const yDataKeys = columns.filter(col => col !== xDataKey).slice(0, 3);
-  const ChartType = chartConfig?.type === "line" ? LineChart : BarChart;
-
-  return (
-    <ResponsiveContainer width="100%" height={280}>
-      <ChartType data={data} margin={{ top: 10, right: 30, left: 10, bottom: 10 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-        <XAxis 
-          dataKey={xDataKey} 
-          tick={{ fontSize: 11, fill: "#64748b" }} 
-          stroke="#cbd5e1" 
-          tickLine={{ stroke: "#cbd5e1" }}
-        />
-        <YAxis 
-          tick={{ fontSize: 11, fill: "#64748b" }} 
-          stroke="#cbd5e1"
-          tickLine={{ stroke: "#cbd5e1" }}
-        />
-        <Tooltip
-          contentStyle={{
-            backgroundColor: "#fff",
-            border: "1px solid #e2e8f0",
-            borderRadius: "8px",
-            fontSize: "12px",
-            boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
-          }}
-        />
-        <Legend 
-          wrapperStyle={{ fontSize: "12px", paddingTop: "10px" }} 
-        />
-        {yDataKeys.map((key, index) => (
-          chartConfig?.type === "line" ? (
-            <Line
-              key={key}
-              type="monotone"
-              dataKey={key}
-              stroke={CHART_COLORS[index % CHART_COLORS.length]}
-              strokeWidth={2}
-              dot={{ r: 4, fill: "#fff", strokeWidth: 2 }}
-              activeDot={{ r: 6 }}
-            />
-          ) : (
-            <Bar
-              key={key}
-              dataKey={key}
-              fill={CHART_COLORS[index % CHART_COLORS.length]}
-              radius={[4, 4, 0, 0]}
-            />
-          )
-        ))}
-      </ChartType>
-    </ResponsiveContainer>
-  );
-}
-
-// 数据表格
-function DataTable({ data, columns }: { data: Record<string, any>[]; columns: string[] }) {
-  return (
-    <div className="overflow-auto max-h-80 rounded-lg border border-slate-200">
-      <table className="w-full text-sm">
-        <thead className="bg-gradient-to-b from-slate-50 to-slate-100 sticky top-0">
-          <tr>
-            {columns.map((col) => (
-              <th 
-                key={col} 
-                className="px-4 py-3 text-left font-semibold text-slate-600 whitespace-nowrap border-b border-slate-200"
-              >
-                {col}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100">
-          {data.slice(0, 50).map((row, i) => (
-            <tr 
-              key={i} 
-              className={cn(
-                "transition-colors",
-                i % 2 === 0 ? "bg-white" : "bg-slate-50/50",
-                "hover:bg-blue-50/50"
-              )}
-            >
-              {columns.map((col) => (
-                <td 
-                  key={col} 
-                  className="px-4 py-2.5 text-slate-600 whitespace-nowrap"
-                >
-                  {formatValue(row[col])}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {data.length > 50 && (
-        <div className="text-center text-xs text-slate-500 py-2 bg-slate-50 border-t border-slate-200">
-          显示前 50 条，共 {data.length} 条数据
-        </div>
-      )}
-    </div>
-  );
-}
-
-// 相似问题推荐
-function SimilarQuestionsSection({ 
-  questions, 
-  onSelect 
-}: { 
-  questions: string[]; 
-  onSelect?: (q: string) => void;
-}) {
-  // 默认展开，显示推荐问题
-  const [isExpanded, setIsExpanded] = useState(true);
-
-  return (
-    <div className="mt-4 rounded-xl border border-blue-200 bg-gradient-to-br from-blue-50 via-indigo-50/30 to-white overflow-hidden shadow-sm">
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center gap-3 px-4 py-3.5 hover:bg-blue-100/30 transition-colors"
-      >
-        <div className="p-2 rounded-lg bg-gradient-to-br from-blue-100 to-indigo-100 shadow-sm">
-          <Lightbulb className="h-4 w-4 text-blue-600" />
-        </div>
-        <div className="flex flex-col items-start">
-          <span className="font-semibold text-sm text-blue-800">继续探索</span>
-          <span className="text-xs text-blue-500">猜你想问</span>
-        </div>
-        <span className="text-xs text-white px-2.5 py-1 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full font-medium shadow-sm">
-          {questions.length} 个推荐
-        </span>
-        <motion.div
-          animate={{ rotate: isExpanded ? 180 : 0 }}
-          transition={{ duration: 0.2 }}
-          className="ml-auto"
-        >
-          <ChevronDown className="h-4 w-4 text-blue-500" />
-        </motion.div>
-      </button>
-
-      <AnimatePresence>
-        {isExpanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-          >
-            <div className="px-4 pb-4 grid gap-2">
-              {questions.map((q, i) => (
-                <motion.button
-                  key={i}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: i * 0.05 }}
-                  onClick={() => onSelect?.(q)}
-                  className="group flex items-start gap-3 w-full text-left p-3.5 rounded-xl bg-white border border-blue-100 text-sm text-slate-700 hover:border-blue-300 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 hover:shadow-md hover:scale-[1.01] transition-all duration-200"
-                >
-                  <div className="p-1.5 rounded-lg bg-blue-50 group-hover:bg-blue-100 transition-colors flex-shrink-0">
-                    <MessageCircle className="h-3.5 w-3.5 text-blue-500 group-hover:text-blue-600" />
-                  </div>
-                  <span className="leading-relaxed group-hover:text-blue-800">{q}</span>
-                  <ArrowDown className="h-4 w-4 ml-auto flex-shrink-0 text-slate-300 group-hover:text-blue-500 rotate-[-90deg] transition-colors" />
-                </motion.button>
-              ))}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-// 简化版数据查询结果组件（仅表格）
-function DataQueryResultTable({ 
-  dataQuery
-}: { 
-  dataQuery: QueryContext["dataQuery"];
-}) {
-  if (!dataQuery) return null;
-
-  const { columns, rows, row_count } = dataQuery;
-  const hasData = rows && rows.length > 0;
-
-  // 转换数据格式
-  const tableData = rows?.map(row => {
-    if (Array.isArray(row)) {
-      const obj: Record<string, any> = {};
-      columns.forEach((col, i) => {
-        obj[col] = row[i];
-      });
-      return obj;
-    }
-    return row;
-  }) || [];
-
-  return (
-    <div className="mt-4 rounded-xl border border-slate-200 bg-white overflow-hidden">
-      {/* 标题栏 */}
-      <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200">
-        <div className="flex items-center gap-2">
-          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-          <span className="font-medium text-sm text-slate-700">查询结果</span>
-          <span className="text-xs text-slate-500 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">
-            {row_count || rows?.length || 0} 条记录
-          </span>
-        </div>
-      </div>
-
-      {/* 内容区域 */}
-      <div className="p-4">
-        {!hasData ? (
-          <div className="flex flex-col items-center justify-center py-8 text-slate-500">
-            <AlertCircle className="h-8 w-8 mb-2 text-slate-400" />
-            <span className="text-sm">查询结果为空</span>
-          </div>
-        ) : (
-          <DataTable data={tableData} columns={columns} />
-        )}
-      </div>
-    </div>
-  );
-}
-
-// 格式化单元格值
-function formatValue(value: any): string {
-  if (value === null || value === undefined) return "-";
-  if (typeof value === "number") {
-    return value.toLocaleString("zh-CN", { 
-      minimumFractionDigits: 0, 
-      maximumFractionDigits: 2 
-    });
-  }
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  }
-  return String(value);
 }
 
 export default QueryPipeline;

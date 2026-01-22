@@ -414,14 +414,30 @@ class SQLExecutorAgent:
                 else:
                     # 标准模式：进入数据分析阶段（由 DataAnalystAgent 处理）
                     next_stage = "analysis"
+                
+                return {
+                    "messages": messages,
+                    "execution_result": execution_result,
+                    "current_stage": next_stage
+                }
             else:
-                next_stage = "error_recovery"
-            
-            return {
-                "messages": messages,
-                "execution_result": execution_result,
-                "current_stage": next_stage
-            }
+                # ✅ 修复：SQL 执行失败时，必须添加 error_history
+                # 这样 error_recovery_agent 才能正确分析错误并递增 retry_count
+                error_msg = result.get("error", "SQL 执行失败")
+                logger.warning(f"SQL 执行失败（工具返回错误）: {error_msg[:100]}")
+                
+                return {
+                    "messages": messages,
+                    "execution_result": execution_result,
+                    "current_stage": "error_recovery",
+                    "error_history": state.get("error_history", []) + [{
+                        "stage": "sql_execution",
+                        "error": error_msg,
+                        "sql_query": sql_query,
+                        "retry_count": state.get("retry_count", 0),
+                        "timestamp": time.time()
+                    }]
+                }
             
         except Exception as e:
             logger.error(f"SQL 执行失败: {str(e)}")

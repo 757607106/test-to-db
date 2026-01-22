@@ -60,6 +60,17 @@ USER_FRIENDLY_MESSAGES = {
     }
 }
 
+# 错误类型到动作的映射 (用于获取用户友好消息)
+ERROR_TYPE_TO_ACTION = {
+    "sql_syntax_error": "regenerate_sql",
+    "syntax_error": "regenerate_sql",
+    "not_found_error": "verify_schema",
+    "connection_error": "check_connection",
+    "permission_error": "simplify_query",
+    "timeout_error": "optimize_query",
+    "unknown_error": "regenerate_sql"  # 未知错误也尝试重新生成
+}
+
 
 # ============================================================================
 # 错误分析工具
@@ -95,19 +106,8 @@ def analyze_error_pattern(error_history: str) -> str:
             error_msg = str(error.get("error", "")).lower()
             stage = error.get("stage", "unknown")
             
-            # 分类错误类型
-            if "syntax" in error_msg or "语法" in error_msg:
-                error_type = "syntax_error"
-            elif "connection" in error_msg or "连接" in error_msg:
-                error_type = "connection_error"
-            elif "permission" in error_msg or "权限" in error_msg:
-                error_type = "permission_error"
-            elif "timeout" in error_msg or "超时" in error_msg:
-                error_type = "timeout_error"
-            elif "not found" in error_msg or "找不到" in error_msg:
-                error_type = "not_found_error"
-            else:
-                error_type = "unknown_error"
+            # 分类错误类型 - 改进的错误识别逻辑
+            error_type = _classify_error_type(error_msg)
             
             error_types[error_type] = error_types.get(error_type, 0) + 1
             error_stages[stage] = error_stages.get(stage, 0) + 1
@@ -136,6 +136,92 @@ def analyze_error_pattern(error_history: str) -> str:
         }, ensure_ascii=False)
 
 
+def _classify_error_type(error_msg: str) -> str:
+    """
+    分类错误类型 - 改进的错误识别逻辑
+    
+    支持识别更多 SQL 相关错误类型:
+    - SQL 语法错误 (syntax error)
+    - 列/表不存在 (unknown column/table, not found)
+    - 连接错误 (connection error)
+    - 权限错误 (permission denied)
+    - 超时错误 (timeout)
+    - 子查询错误 (subquery error)
+    
+    Args:
+        error_msg: 小写的错误消息
+        
+    Returns:
+        str: 错误类型标识
+    """
+    # 1. SQL 语法和结构错误 - 最常见，优先检测
+    sql_syntax_patterns = [
+        "syntax", "语法",
+        "unknown column", "unknown table",  # MySQL 特有
+        "column .* does not exist",  # PostgreSQL
+        "table .* doesn't exist", "table .* not found",
+        "no such column", "no such table",  # SQLite
+        "invalid identifier",  # Oracle
+        "ambiguous column",  # 多表查询中的列名歧义
+        "subquery", "子查询",
+        "operationalerror", "1054",  # MySQL 错误码 1054 = Unknown column
+        "1146",  # MySQL 错误码 1146 = Table doesn't exist
+        "42s22", "42s02",  # SQL 状态码
+        "in 'where clause'", "in 'field list'", "in 'on clause'",  # MySQL 错误位置提示
+        "group by", "having",  # 聚合查询错误
+    ]
+    
+    for pattern in sql_syntax_patterns:
+        if pattern in error_msg:
+            return "sql_syntax_error"
+    
+    # 2. 资源不存在错误
+    not_found_patterns = [
+        "not found", "找不到", "不存在",
+        "does not exist", "doesn't exist",
+        "no data", "empty result"
+    ]
+    
+    for pattern in not_found_patterns:
+        if pattern in error_msg:
+            return "not_found_error"
+    
+    # 3. 连接错误
+    connection_patterns = [
+        "connection", "连接",
+        "refused", "timed out", "unreachable",
+        "host", "network", "socket"
+    ]
+    
+    for pattern in connection_patterns:
+        if pattern in error_msg:
+            return "connection_error"
+    
+    # 4. 权限错误
+    permission_patterns = [
+        "permission", "权限", "denied",
+        "access denied", "unauthorized",
+        "privilege", "forbidden"
+    ]
+    
+    for pattern in permission_patterns:
+        if pattern in error_msg:
+            return "permission_error"
+    
+    # 5. 超时错误
+    timeout_patterns = [
+        "timeout", "超时", "timed out",
+        "too long", "slow query"
+    ]
+    
+    for pattern in timeout_patterns:
+        if pattern in error_msg:
+            return "timeout_error"
+    
+    # 默认：未知错误
+    return "unknown_error"
+
+
 @tool
 def generate_recovery_strategy(
     error_analysis: str,
@@ -158,6 +244,20 @@ def generate_recovery_strategy(
         
         # 基于错误类型制定策略
         strategies = {
+            # SQL 语法/结构错误 - 可自动修复
+            "sql_syntax_error": {
+                "primary_action": "regenerate_sql",
+                "description": "SQL 语法或结构错误（列名/表名错误、子查询问题等），需要重新生成",
+                "auto_fixable": True,
+                "confidence": 0.85,
+                "steps": [
+                    "分析错误原因（列名、表名、子查询结构）",
+                    "重新检查 schema 中的正确列名和表名",
+                    "使用更简单的 SQL 结构避免子查询问题",
+                    "重新生成符合数据库约束的 SQL"
+                ]
+            },
+            # 兼容旧的 syntax_error 类型
             "syntax_error": {
                 "primary_action": "regenerate_sql",
                 "description": "SQL 语法错误，建议重新生成",
@@ -211,6 +311,18 @@ def generate_recovery_strategy(
                     "重新检索数据库 schema",
                     "验证表名和字段名",
                     "使用正确的值映射"
+                ]
+            },
+            # 未知错误 - 改为可尝试自动修复（首次）
+            "unknown_error": {
+                "primary_action": "regenerate_sql",
+                "description": "未知错误，尝试重新生成 SQL",
+                "auto_fixable": True,  # 改为 True，允许首次尝试自动修复
+                "confidence": 0.5,
+                "steps": [
+                    "分析错误信息",
+                    "简化查询逻辑",
+                    "重新生成 SQL"
                 ]
             }
         }
@@ -311,11 +423,13 @@ class ErrorRecoveryAgent:
         执行错误恢复
         
         修复 (2026-01-22): 改进错误消息，提供用户友好的反馈
+        修复 (2026-01-23): 将错误上下文传递给下一阶段，支持智能重试
         """
         try:
             error_history = state.get("error_history", [])
             retry_count = state.get("retry_count", 0)
             max_retries = state.get("max_retries", 3)
+            failed_sql = state.get("generated_sql", "")  # 获取失败的 SQL
             
             # 分析错误
             error_analysis = analyze_error_pattern.invoke({
@@ -330,32 +444,45 @@ class ErrorRecoveryAgent:
             
             # 解析策略
             strategy_data = json.loads(strategy)
+            error_analysis_data = json.loads(error_analysis)
             
             # 决定下一步
             if strategy_data.get("success"):
                 strategy_info = strategy_data.get("strategy", {})
-                primary_action = strategy_info.get("primary_action", "restart")
+                primary_action = strategy_info.get("primary_action", "regenerate_sql")
                 
                 if strategy_info.get("auto_fixable") and retry_count < max_retries:
                     # 可以自动修复，返回到适当的阶段重试
-                    if primary_action == "regenerate_sql":
+                    if primary_action in ["regenerate_sql", "optimize_query"]:
                         next_stage = "sql_generation"
                     elif primary_action == "verify_schema":
                         next_stage = "schema_analysis"
-                    elif primary_action == "optimize_query":
-                        next_stage = "sql_generation"
                     else:
-                        next_stage = "schema_analysis"
+                        next_stage = "sql_generation"  # 默认尝试重新生成 SQL
                     
                     # 获取用户友好的消息
                     user_message = self._get_user_friendly_message(primary_action, is_retrying=True)
                     
+                    # 提取最近的错误信息用于重试上下文
+                    latest_error = error_history[-1] if error_history else {}
+                    error_context = {
+                        "error_type": error_analysis_data.get("most_common_type", "unknown"),
+                        "error_message": latest_error.get("error", ""),
+                        "failed_sql": failed_sql,
+                        "recovery_action": primary_action,
+                        "recovery_steps": strategy_info.get("steps", []),
+                        "retry_count": retry_count + 1
+                    }
+                    
                     logger.info(f"错误恢复: {primary_action} -> {next_stage} (重试 {retry_count + 1}/{max_retries})")
+                    logger.info(f"错误类型: {error_context['error_type']}, 失败SQL长度: {len(failed_sql)}")
                     
                     return {
                         "messages": [AIMessage(content=user_message)],
                         "current_stage": next_stage,
-                        "retry_count": retry_count + 1
+                        "retry_count": retry_count + 1,
+                        "error_recovery_context": error_context,  # 传递错误上下文给下一阶段
+                        "generated_sql": None  # 清除失败的 SQL，强制重新生成
                     }
                 else:
                     # 无法自动修复或已达到重试限制
@@ -378,7 +505,24 @@ class ErrorRecoveryAgent:
                         }]
                     }
             else:
-                # 错误分析失败
+                # 错误分析失败，但仍尝试一次自动修复
+                if retry_count < max_retries:
+                    logger.warning(f"错误分析失败，但仍尝试重新生成 SQL (重试 {retry_count + 1}/{max_retries})")
+                    
+                    return {
+                        "messages": [AIMessage(content="正在重新尝试生成查询...")],
+                        "current_stage": "sql_generation",
+                        "retry_count": retry_count + 1,
+                        "error_recovery_context": {
+                            "error_type": "unknown",
+                            "error_message": str(error_history[-1].get("error", "") if error_history else ""),
+                            "failed_sql": failed_sql,
+                            "recovery_action": "regenerate_sql",
+                            "retry_count": retry_count + 1
+                        },
+                        "generated_sql": None
+                    }
+                
                 user_message = "抱歉，处理过程中遇到问题。请尝试重新描述您的查询需求。"
                 logger.error(f"错误分析失败: {strategy_data.get('error')}")
                 
@@ -389,6 +533,20 @@ class ErrorRecoveryAgent:
             
         except Exception as e:
             logger.error(f"错误恢复异常: {str(e)}")
+            
+            # 即使异常也尝试一次恢复
+            retry_count = state.get("retry_count", 0)
+            max_retries = state.get("max_retries", 3)
+            
+            if retry_count < max_retries:
+                logger.warning(f"错误恢复异常，但仍尝试重新生成 SQL (重试 {retry_count + 1}/{max_retries})")
+                return {
+                    "messages": [AIMessage(content="正在重新尝试生成查询...")],
+                    "current_stage": "sql_generation",
+                    "retry_count": retry_count + 1,
+                    "generated_sql": None
+                }
+            
             user_message = "抱歉，处理过程中遇到未知问题。请稍后再试，如问题持续请联系技术支持。"
             
             return {

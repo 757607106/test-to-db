@@ -32,7 +32,7 @@ from langgraph.types import StreamWriter
 from langchain_core.messages import AIMessage
 
 from app.core.state import SQLMessageState, detect_fast_mode
-from app.agents.agents.supervisor_agent import SupervisorAgent, create_intelligent_sql_supervisor
+from app.agents.agents.supervisor_subgraph import supervisor_subgraph_node, get_supervisor_subgraph
 from app.agents.nodes.thread_history_check_node import thread_history_check_node
 from app.agents.nodes.clarification_node import clarification_node
 from app.agents.nodes.cache_check_node import cache_check_node
@@ -188,10 +188,11 @@ class IntelligentSQLGraph:
         
         Args:
             active_agent_profiles: 活跃的代理配置文件列表
-            custom_analyst: 自定义分析专家
+            custom_analyst: 自定义分析专家（已废弃，保留参数兼容性）
             use_default_checkpointer: 是否使用默认 checkpointer（用于非 API Server 场景）
         """
-        self.supervisor_agent = create_intelligent_sql_supervisor(custom_analyst=custom_analyst)
+        # 使用 LangGraph 子图模式，不再需要 SupervisorAgent 实例
+        # 子图在 supervisor_subgraph.py 中定义
         self._use_default_checkpointer = use_default_checkpointer
         self._checkpointer = None
         
@@ -286,7 +287,15 @@ class IntelligentSQLGraph:
         graph.add_edge("clarification", "supervisor")
         
         # supervisor → question_recommendation (新增: 在完成后推荐问题)
-        graph.add_edge("supervisor", "question_recommendation")
+        # ✅ 使用条件边处理 supervisor 执行失败的情况
+        graph.add_conditional_edges(
+            "supervisor",
+            self._after_supervisor,
+            {
+                "success": "question_recommendation",
+                "error": END  # 如果失败且无法恢复，直接结束
+            }
+        )
         
         # question_recommendation → END
         graph.add_edge("question_recommendation", END)
@@ -634,9 +643,47 @@ class IntelligentSQLGraph:
             logger.info("缓存未命中，进入澄清节点")
             return "clarification"
     
+    def _after_supervisor(self, state: SQLMessageState) -> str:
+        """
+        判断 Supervisor 执行后的下一步
+        
+        检查执行结果，决定是否继续到问题推荐节点
+        
+        决策逻辑:
+        - 执行成功 (current_stage == "completed") -> 推荐问题
+        - 错误但已达到重试上限 -> 直接结束
+        - 其他情况 -> 推荐问题（但可能显示错误信息）
+        """
+        current_stage = state.get("current_stage", "completed")
+        retry_count = state.get("retry_count", 0)
+        max_retries = state.get("max_retries", 3)
+        error_history = state.get("error_history", [])
+        
+        # 检查是否有严重错误（无法恢复的错误）
+        if error_history:
+            last_error = error_history[-1] if error_history else {}
+            error_stage = last_error.get("stage", "")
+            
+            # 连接错误或权限错误通常无法自动恢复
+            error_msg = str(last_error.get("error", "")).lower()
+            if "connection" in error_msg or "permission" in error_msg or "denied" in error_msg:
+                logger.warning(f"检测到无法恢复的错误类型: {error_msg[:50]}")
+                return "error"
+        
+        # 检查是否达到重试上限且仍有错误
+        if retry_count >= max_retries and current_stage != "completed":
+            logger.warning(f"达到重试上限 ({retry_count}/{max_retries})，结束流程")
+            return "error"
+        
+        # 正常情况，继续到问题推荐
+        logger.info(f"Supervisor 执行完成，阶段: {current_stage}")
+        return "success"
+    
     async def _load_custom_agent_node(self, state: SQLMessageState) -> Dict[str, Any]:
         """
         加载自定义智能体节点
+        
+        注意：使用 LangGraph 子图模式后，自定义分析专家通过状态传递
         """
         # 从消息中提取 connection_id
         messages = state.get("messages", [])
@@ -648,32 +695,12 @@ class IntelligentSQLGraph:
             logger.info(f"从消息中提取到 connection_id={extracted_connection_id}")
             updates["connection_id"] = extracted_connection_id
         
-        # 从消息中提取 agent_id
+        # 从消息中提取 agent_id（保存到状态，供子图使用）
         agent_id = extract_agent_id_from_messages(messages)
         
         if agent_id:
-            logger.info(f"检测到 agent_id={agent_id}，开始加载自定义分析专家")
-            try:
-                from app.db.session import SessionLocal
-                from app.crud.crud_agent_profile import agent_profile as crud_agent_profile
-                from app.agents.agent_factory import create_custom_analyst_agent
-                
-                db = SessionLocal()
-                try:
-                    profile = crud_agent_profile.get(db=db, id=agent_id)
-                    
-                    if profile and not profile.is_system:
-                        custom_analyst = create_custom_analyst_agent(profile, db)
-                        self.supervisor_agent = create_intelligent_sql_supervisor(
-                            custom_analyst=custom_analyst
-                        )
-                        logger.info(f"成功加载自定义分析专家: {profile.name}")
-                    else:
-                        logger.warning(f"Agent {agent_id} 不存在或是系统 Agent")
-                finally:
-                    db.close()
-            except Exception as e:
-                logger.error(f"加载自定义 Agent 失败: {e}")
+            logger.info(f"检测到 agent_id={agent_id}，将传递给子图")
+            updates["agent_id"] = agent_id
         
         return updates if updates else {}
     
@@ -710,15 +737,13 @@ class IntelligentSQLGraph:
     
     async def _supervisor_node(self, state: SQLMessageState) -> Dict[str, Any]:
         """
-        Supervisor 节点
-        """
-        result = await self.supervisor_agent.supervise(state)
+        Supervisor 节点 - 使用 LangGraph 子图模式
         
-        if result.get("success"):
-            final_result = result.get("result", state)
-        else:
-            logger.error(f"Supervisor 执行失败: {result.get('error')}")
-            final_result = state
+        调用 supervisor_subgraph 处理完整的 SQL 生成流程：
+        schema_agent → sql_generator → sql_executor → data_analyst → chart_generator
+        """
+        # 使用新的子图处理
+        final_result = await supervisor_subgraph_node(state)
         
         # 存储结果到缓存
         await self._store_result_to_cache(state, final_result)
@@ -857,7 +882,20 @@ class IntelligentSQLGraph:
     @property
     def worker_agents(self):
         """获取工作代理列表"""
-        return self.supervisor_agent.worker_agents
+        # 使用子图模式后，返回静态的 Agent 列表
+        from app.agents.agents.schema_agent import schema_agent
+        from app.agents.agents.sql_generator_agent import sql_generator_agent
+        from app.agents.agents.sql_executor_agent import sql_executor_agent
+        from app.agents.agents.data_analyst_agent import data_analyst_agent
+        from app.agents.agents.chart_generator_agent import chart_generator_agent
+        
+        return [
+            schema_agent,
+            sql_generator_agent,
+            sql_executor_agent,
+            data_analyst_agent,
+            chart_generator_agent
+        ]
 
 
 # ============================================================================

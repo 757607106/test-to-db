@@ -166,6 +166,33 @@ SQL: {sample.get('sql', '')}
 相似度: {sample.get('similarity', 0):.2f}
 """
         
+        # 检查是否有错误恢复上下文（从状态中获取，如果有的话）
+        error_recovery_hint = ""
+        if state.get("error_recovery_context"):
+            error_ctx = state.get("error_recovery_context", {})
+            failed_sql = error_ctx.get("failed_sql", "")
+            error_message = error_ctx.get("error_message", "")
+            error_type = error_ctx.get("error_type", "")
+            recovery_steps = error_ctx.get("recovery_steps", [])
+            
+            if failed_sql or error_message:
+                error_recovery_hint = f"""
+⚠️ 重要提示：上一次生成的 SQL 执行失败，请避免相同错误！
+
+失败的 SQL:
+```sql
+{failed_sql}
+```
+
+错误信息: {error_message}
+错误类型: {error_type}
+
+修复建议:
+{chr(10).join(f"- {step}" for step in recovery_steps) if recovery_steps else "- 检查列名和表名是否正确" + chr(10) + "- 避免在子查询中引用外部别名" + chr(10) + "- 使用更简单的 SQL 结构"}
+
+请根据以上信息，生成一个修正后的 SQL 查询。
+"""
+        
         # 构建 SQL 生成提示
         prompt = f"""
 基于以下信息生成 SQL 查询：
@@ -174,6 +201,7 @@ SQL: {sample.get('sql', '')}
 
 {context}
 {sample_context}
+{error_recovery_hint}
 
 请生成一个准确、高效的 SQL 查询语句。要求：
 1. 只返回 SQL 语句，不要其他解释
@@ -181,6 +209,8 @@ SQL: {sample.get('sql', '')}
 3. 使用适当的连接和过滤条件
 4. 限制结果数量（除非用户明确要求全部数据）
 5. 使用正确的值映射
+6. 【重要】避免在子查询的 WHERE 子句中引用外部查询的列别名
+7. 【重要】如果需要关联子查询，确保正确使用表别名
 """
         
         llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
@@ -409,6 +439,15 @@ class SQLGeneratorAgent:
             writer = None
         
         try:
+            # ✅ 检查错误恢复上下文（如果是重试）
+            error_recovery_context = state.get("error_recovery_context")
+            retry_count = state.get("retry_count", 0)
+            
+            if error_recovery_context:
+                logger.info(f"检测到错误恢复上下文，这是第 {retry_count} 次重试")
+                logger.info(f"错误类型: {error_recovery_context.get('error_type')}")
+                logger.info(f"失败SQL: {error_recovery_context.get('failed_sql', '')[:100]}...")
+            
             # ✅ 检查缓存模板和增强查询
             cached_sql_template = state.get("cached_sql_template")
             enriched_query = state.get("enriched_query")
@@ -520,12 +559,14 @@ class SQLGeneratorAgent:
                 )
             else:
                 # 调用同步工具生成 SQL（样本已经异步获取好了）
+                # 将错误恢复上下文也传递给工具
                 result_json = generate_sql_query.invoke({
                     "user_query": user_query,
                     "schema_info": schema_info_json,
                     "state": {
                         "connection_id": connection_id,
-                        "skip_sample_retrieval": skip_sample
+                        "skip_sample_retrieval": skip_sample,
+                        "error_recovery_context": error_recovery_context  # 传递错误恢复上下文
                     },
                     "value_mappings": value_mappings_json,
                     "sample_qa_pairs": sample_qa_pairs_json,
@@ -610,7 +651,9 @@ class SQLGeneratorAgent:
                     "samples_count": len(sample_qa_pairs),
                     "samples_used": result.get("samples_used", 0)
                 },
-                "current_stage": "sql_execution"
+                "current_stage": "sql_execution",
+                # ✅ 清除错误恢复上下文，避免后续一直触发智能决策
+                "error_recovery_context": None
             }
             
         except Exception as e:

@@ -119,6 +119,9 @@ class SQLMessageState(TypedDict, total=False):
     error_history: List[Dict[str, Any]]
     route_decision: Literal["general_chat", "data_query"]
     
+    # 错误恢复上下文（传递给 sql_generator 用于生成修复后的 SQL）
+    error_recovery_context: Optional[Dict[str, Any]]
+    
     # Agent 相关
     agent_id: Optional[int]
     agent_ids: Optional[List[int]]
@@ -206,6 +209,7 @@ def create_initial_state(
         retry_count=0,
         max_retries=3,
         error_history=[],
+        error_recovery_context=None,  # 错误恢复上下文
         route_decision="data_query",
         agent_messages={},
         thread_id=thread_id,
