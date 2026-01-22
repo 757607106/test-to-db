@@ -27,8 +27,8 @@ import {
   extractClarificationData 
 } from "./clarification-interrupt";
 import { useArtifact } from "../artifact";
-// 智能查询界面组件
-import { QueryProcessCard } from "./QueryProcessCard";
+// 智能查询界面组件 - 使用新的统一流水线组件
+import { QueryPipeline } from "./QueryPipeline";
 
 function CustomComponent({
   message,
@@ -210,9 +210,9 @@ export function AssistantMessage({
   return (
     <div className="group mr-auto flex w-full items-start gap-2">
       <div className="flex w-full flex-col gap-3">
-        {/* 统一的智能查询卡片 - 只在最后一条消息显示 */}
+        {/* 统一的智能查询流水线 - 只在最后一条消息显示 */}
         {isLastMessage && hasQueryProcess && (
-          <QueryProcessCard 
+          <QueryPipeline 
             queryContext={queryContext}
             onSelectQuestion={(question) => {
               console.log("Selected question:", question);
@@ -272,35 +272,51 @@ export function AssistantMessage({
 }
 
 // 执行阶段映射
-const STAGE_LABELS: Record<string, string> = {
-  clarification: "理解问题中...",
-  cache_check: "检查缓存...",
-  cache_hit: "命中缓存",
-  schema_analysis: "分析数据库结构...",
-  sample_retrieval: "检索相似查询...",
-  sql_generation: "生成 SQL 查询...",
-  sql_validation: "验证 SQL...",
-  sql_execution: "执行查询...",
-  analysis: "分析结果...",
-  chart_generation: "生成图表...",
-  error_recovery: "处理错误...",
-  completed: "完成",
+const STAGE_LABELS: Record<string, { label: string; icon: string }> = {
+  clarification: { label: "理解问题中", icon: "🧠" },
+  cache_check: { label: "检查缓存", icon: "⚡" },
+  cache_hit: { label: "命中缓存", icon: "✨" },
+  schema_analysis: { label: "分析数据库结构", icon: "🗄️" },
+  sample_retrieval: { label: "检索相似查询", icon: "🔍" },
+  sql_generation: { label: "生成 SQL 查询", icon: "✏️" },
+  sql_validation: { label: "验证 SQL", icon: "🔧" },
+  sql_execution: { label: "执行查询", icon: "▶️" },
+  analysis: { label: "分析结果", icon: "📊" },
+  chart_generation: { label: "生成图表", icon: "📈" },
+  error_recovery: { label: "处理错误", icon: "🔄" },
+  completed: { label: "完成", icon: "✅" },
 };
 
 export function AssistantMessageLoading() {
-  const { values } = useStreamContext();
+  const { values, queryContext } = useStreamContext();
   const currentStage = (values as any)?.current_stage as string | undefined;
-  const stageLabel = currentStage ? STAGE_LABELS[currentStage] || "处理中..." : "思考中...";
+  const stageInfo = currentStage ? STAGE_LABELS[currentStage] : null;
+  
+  // 根据 queryContext 判断当前执行阶段
+  const runningStep = queryContext?.sqlSteps?.find(s => s.status === "running");
+  const stepLabels: Record<string, string> = {
+    schema_mapping: "正在获取数据库模式信息",
+    few_shot: "正在检索相似查询示例",
+    llm_parse: "正在生成 SQL 查询",
+    sql_fix: "正在优化修正 SQL",
+    final_sql: "正在执行 SQL 查询",
+  };
+  
+  const displayLabel = runningStep 
+    ? stepLabels[runningStep.step] || "处理中..."
+    : stageInfo?.label 
+    ? `${stageInfo.label}...` 
+    : "思考中...";
 
   return (
     <div className="mr-auto flex items-start gap-2">
-      <div className="bg-muted flex h-auto items-center gap-2 rounded-2xl px-4 py-2">
+      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 flex h-auto items-center gap-3 rounded-xl px-4 py-2.5 shadow-sm">
         <div className="flex items-center gap-1">
-          <div className="bg-blue-500 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_infinite] rounded-full"></div>
-          <div className="bg-blue-500 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_0.5s_infinite] rounded-full"></div>
-          <div className="bg-blue-500 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_1s_infinite] rounded-full"></div>
+          <div className="bg-blue-500 h-2 w-2 animate-[pulse_1.5s_ease-in-out_infinite] rounded-full shadow-sm shadow-blue-300"></div>
+          <div className="bg-blue-500 h-2 w-2 animate-[pulse_1.5s_ease-in-out_0.3s_infinite] rounded-full shadow-sm shadow-blue-300"></div>
+          <div className="bg-blue-500 h-2 w-2 animate-[pulse_1.5s_ease-in-out_0.6s_infinite] rounded-full shadow-sm shadow-blue-300"></div>
         </div>
-        <span className="text-sm text-muted-foreground">{stageLabel}</span>
+        <span className="text-sm font-medium text-blue-700">{displayLabel}</span>
       </div>
     </div>
   );
