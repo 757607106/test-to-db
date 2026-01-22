@@ -1,5 +1,5 @@
 """
-SQL 生成代理 (优化版本)
+SQL 生成代理 
 
 遵循 LangGraph 官方最佳实践:
 1. 使用 InjectedState 注入状态参数
@@ -479,6 +479,18 @@ class SQLGeneratorAgent:
             connection_id = state.get("connection_id")
             skip_sample = state.get("skip_sample_retrieval", False)
             
+            # ✅ 获取数据库类型（根据实际连接动态获取）
+            db_type = "mysql"  # 默认值
+            if connection_id:
+                try:
+                    from app.services.db_service import get_db_connection_by_id
+                    connection = get_db_connection_by_id(connection_id)
+                    if connection and connection.db_type:
+                        db_type = connection.db_type.lower()
+                        logger.info(f"✓ 检测到数据库类型: {db_type}")
+                except Exception as e:
+                    logger.warning(f"获取数据库类型失败，使用默认值 mysql: {e}")
+            
             if not schema_info:
                 raise ValueError("缺少 schema 信息，请先执行 schema_agent")
             
@@ -555,7 +567,8 @@ class SQLGeneratorAgent:
                     cached_sql_template=cached_sql_template,
                     schema_info=schema_info.get("tables", {}),
                     value_mappings=schema_info.get("value_mappings", {}),
-                    sample_qa_pairs=sample_qa_pairs
+                    sample_qa_pairs=sample_qa_pairs,
+                    db_type=db_type  # ✅ 传递数据库类型
                 )
             else:
                 # 调用同步工具生成 SQL（样本已经异步获取好了）
@@ -570,7 +583,7 @@ class SQLGeneratorAgent:
                     },
                     "value_mappings": value_mappings_json,
                     "sample_qa_pairs": sample_qa_pairs_json,
-                    "db_type": "mysql"
+                    "db_type": db_type  # ✅ 动态数据库类型
                 })
             
             # 发送 llm_parse 步骤完成事件
@@ -618,7 +631,7 @@ class SQLGeneratorAgent:
                     "name": "generate_sql_query",
                     "args": {
                         "user_query": user_query,
-                        "db_type": "mysql"
+                        "db_type": db_type  # ✅ 动态数据库类型
                     },
                     "id": tool_call_id,
                     "type": "tool_call"
@@ -772,7 +785,7 @@ class SQLGeneratorAgent:
                 "state": {},
                 "value_mappings": json.dumps(value_mappings, ensure_ascii=False) if value_mappings else None,
                 "sample_qa_pairs": json.dumps(sample_qa_pairs, ensure_ascii=False) if sample_qa_pairs else None,
-                "db_type": "mysql"
+                "db_type": db_type  # ✅ 使用传入的数据库类型
             })
     
     def _extract_sql_from_result(self, result: Dict[str, Any]) -> str:
