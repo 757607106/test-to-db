@@ -236,6 +236,9 @@ export function Thread() {
       // 这里不返回，只是提示，仍然允许发送（使用默认分析模式）
     }
     
+    // 重置查询上下文，避免显示旧数据导致闪烁
+    stream.resetQueryContext();
+    
     setFirstTokenReceived(false);
 
     const newHumanMessage: Message = {

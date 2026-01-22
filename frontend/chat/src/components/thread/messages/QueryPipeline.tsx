@@ -110,22 +110,6 @@ const PIPELINE_NODES: NodeConfig[] = [
     dataKey: "sql_step",
     stepKey: "final_sql",
   },
-  {
-    key: "data_analysis",
-    label: "数据分析",
-    icon: Lightbulb,
-    description: "分析查询结果，生成数据洞察",
-    dataKey: "sql_step",
-    stepKey: "data_analysis",
-  },
-  {
-    key: "chart_generation",
-    label: "图表生成",
-    icon: BarChart2,
-    description: "根据数据生成可视化图表",
-    dataKey: "sql_step",
-    stepKey: "chart_generation",
-  },
 ];
 
 interface QueryPipelineProps {
@@ -142,34 +126,55 @@ export function QueryPipeline({ queryContext, onSelectQuestion }: QueryPipelineP
   const [copiedSql, setCopiedSql] = useState(false);
   const [viewMode, setViewMode] = useState<"chart" | "table">("table");
 
+  // 使用解构避免依赖整个 queryContext
   const { cacheHit, intentAnalysis, sqlSteps, dataQuery, similarQuestions } = queryContext;
+
+  // 创建节点状态映射 - 使用 useMemo 缓存
+  const nodeStatesMap = useMemo(() => {
+    const map = new Map<string, NodeStatus>();
+    
+    // 意图解析状态
+    map.set("intent", intentAnalysis ? "completed" : "pending");
+    
+    // SQL 步骤状态
+    sqlSteps.forEach(step => {
+      const node = PIPELINE_NODES.find(n => n.stepKey === step.step);
+      if (node) {
+        map.set(node.key, step.status as NodeStatus);
+      }
+    });
+    
+    return map;
+  }, [intentAnalysis, sqlSteps]);
+
+  // 创建节点数据映射 - 使用 useMemo 缓存
+  const nodeDataMap = useMemo(() => {
+    const map = new Map<string, any>();
+    
+    // 意图解析数据
+    if (intentAnalysis) {
+      map.set("intent", intentAnalysis);
+    }
+    
+    // SQL 步骤数据
+    sqlSteps.forEach(step => {
+      const node = PIPELINE_NODES.find(n => n.stepKey === step.step);
+      if (node) {
+        map.set(node.key, step);
+      }
+    });
+    
+    return map;
+  }, [intentAnalysis, sqlSteps]);
 
   // 获取节点状态
   const getNodeStatus = (node: NodeConfig): NodeStatus => {
-    if (node.dataKey === "intentAnalysis") {
-      return intentAnalysis ? "completed" : "pending";
-    }
-    
-    if (node.dataKey === "sql_step" && node.stepKey) {
-      const step = sqlSteps.find(s => s.step === node.stepKey);
-      if (!step) return "pending";
-      return step.status as NodeStatus;
-    }
-    
-    return "pending";
+    return nodeStatesMap.get(node.key) || "pending";
   };
 
   // 获取节点数据
   const getNodeData = (node: NodeConfig): any => {
-    if (node.dataKey === "intentAnalysis") {
-      return intentAnalysis;
-    }
-    
-    if (node.dataKey === "sql_step" && node.stepKey) {
-      return sqlSteps.find(s => s.step === node.stepKey);
-    }
-    
-    return null;
+    return nodeDataMap.get(node.key) || null;
   };
 
   // 计算总耗时
@@ -179,10 +184,14 @@ export function QueryPipeline({ queryContext, onSelectQuestion }: QueryPipelineP
     return time;
   }, [intentAnalysis, sqlSteps]);
 
-  // 检查整体状态
-  const hasRunningStep = sqlSteps.some(s => s.status === "running");
-  const hasError = sqlSteps.some(s => s.status === "error");
-  const isCompleted = sqlSteps.some(s => s.step === "final_sql" && s.status === "completed");
+  // 检查整体状态 - 使用 useMemo 缓存
+  const { hasRunningStep, hasError, isCompleted } = useMemo(() => {
+    return {
+      hasRunningStep: sqlSteps.some(s => s.status === "running"),
+      hasError: sqlSteps.some(s => s.status === "error"),
+      isCompleted: sqlSteps.some(s => s.step === "final_sql" && s.status === "completed"),
+    };
+  }, [sqlSteps]);
 
   // 切换节点展开状态
   const toggleNode = (key: string) => {

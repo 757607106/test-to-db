@@ -5,6 +5,7 @@ import React, {
   useState,
   useEffect,
   useCallback,
+  useRef,
 } from "react";
 import { useStream, type UseStream } from "@langchain/langgraph-sdk/react";
 import { type Message } from "@langchain/langgraph-sdk";
@@ -107,9 +108,14 @@ const StreamSession = ({
   // 查询上下文状态 - 用于存储流式事件数据
   const [queryContext, setQueryContext] = useState<QueryContext>(createEmptyQueryContext());
   
+  // 同步跟踪已处理的 SQL 步骤，避免状态更新异步导致的重复添加
+  const processedStepsRef = useRef<Set<string>>(new Set());
+  
   // 重置查询上下文
   const resetQueryContext = useCallback(() => {
     setQueryContext(createEmptyQueryContext());
+    // 清空已处理步骤记录
+    processedStepsRef.current.clear();
   }, []);
   
   const streamValue = useTypedStream({
@@ -134,7 +140,7 @@ const StreamSession = ({
         
         switch (streamEvent.type) {
           case "cache_hit":
-            // 缓存命中事件 - 新增
+            // 缓存命中事件
             setQueryContext(prev => ({
               ...prev,
               cacheHit: streamEvent
@@ -149,6 +155,17 @@ const StreamSession = ({
             break;
             
           case "sql_step":
+            // 使用同步去重标记防止重复处理
+            const stepSignature = `${streamEvent.step}-${streamEvent.status}-${streamEvent.time_ms || 0}`;
+            
+            // 对所有状态进行去重检查
+            if (processedStepsRef.current.has(stepSignature)) {
+              return; // 跳过重复事件
+            }
+            
+            // 立即标记为已处理（在状态更新前）
+            processedStepsRef.current.add(stepSignature);
+            
             setQueryContext(prev => {
               // 更新或添加步骤
               const existingIndex = prev.sqlSteps.findIndex(
@@ -156,6 +173,16 @@ const StreamSession = ({
               );
               
               if (existingIndex >= 0) {
+                // 检查是否真的有变化，避免不必要的更新
+                const existing = prev.sqlSteps[existingIndex];
+                if (
+                  existing.status === streamEvent.status &&
+                  existing.result === streamEvent.result &&
+                  existing.time_ms === streamEvent.time_ms
+                ) {
+                  return prev; // 没有变化，返回原状态
+                }
+                
                 // 更新现有步骤
                 const newSteps = [...prev.sqlSteps];
                 newSteps[existingIndex] = streamEvent;

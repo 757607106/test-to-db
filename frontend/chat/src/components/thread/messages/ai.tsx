@@ -6,6 +6,7 @@
  * 
  * @see https://github.com/langchain-ai/agent-chat-ui
  */
+import { useMemo } from "react";
 import { parsePartialJson } from "@langchain/core/output_parsers";
 import { useStreamContext } from "@/providers/Stream";
 import { AIMessage, Checkpoint, Message, ToolMessage } from "@langchain/langgraph-sdk";
@@ -30,6 +31,7 @@ import { useArtifact } from "../artifact";
 // 智能查询界面组件 - 使用新的统一流水线组件
 import { QueryPipeline } from "./QueryPipeline";
 import { DataChartDisplay } from "./DataChartDisplay";
+import { DataAnalysisDisplay } from "./DataAnalysisDisplay";
 import { RecommendedQuestionsDisplay } from "./RecommendedQuestionsDisplay";
 
 function CustomComponent({
@@ -160,11 +162,13 @@ export function AssistantMessage({
   const messages = Array.isArray(thread.messages) ? thread.messages : [];
   
   // 检查是否有智能查询流程数据（用于隐藏原始工具调用显示）
-  const hasQueryProcess = Boolean(
-    queryContext?.intentAnalysis || 
-    queryContext?.sqlSteps?.length || 
-    queryContext?.dataQuery
-  );
+  const hasQueryProcess = useMemo(() => {
+    return Boolean(
+      queryContext?.intentAnalysis || 
+      queryContext?.sqlSteps?.length || 
+      queryContext?.dataQuery
+    );
+  }, [queryContext?.intentAnalysis, queryContext?.sqlSteps?.length, queryContext?.dataQuery]);
   
   // 基础判断
   const isLastMessage = messages.length > 0 && messages[messages.length - 1]?.id === message?.id;
@@ -223,16 +227,23 @@ export function AssistantMessage({
           />
         )}
 
-        {/* 文本内容 */}
+        {/* 数据可视化图表 - 优先展示在文本之前 */}
+        {isLastMessage && queryContext?.dataQuery?.chart_config && (
+          <DataChartDisplay dataQuery={queryContext.dataQuery} />
+        )}
+
+        {/* 文本内容（包含回答、数据洞察、建议） - 在图表之后 */}
         {contentString.length > 0 && (
           <div className="py-1">
             <MarkdownText>{contentString}</MarkdownText>
           </div>
         )}
 
-        {/* 数据可视化图表 - 在回答后单独展示 */}
-        {isLastMessage && queryContext?.dataQuery?.chart_config && (
-          <DataChartDisplay dataQuery={queryContext.dataQuery} />
+        {/* 数据分析组件 - 用于显示单独的分析步骤（如果有） */}
+        {isLastMessage && queryContext?.sqlSteps && (
+          <DataAnalysisDisplay 
+            analysisStep={queryContext.sqlSteps.find(s => s.step === "data_analysis")}
+          />
         )}
 
         {/* 推荐问题 - 在回答后展示 */}
@@ -317,26 +328,8 @@ const STAGE_LABELS: Record<string, { label: string; icon: string }> = {
 };
 
 export function AssistantMessageLoading() {
-  const { values, queryContext } = useStreamContext();
-  const currentStage = (values as any)?.current_stage as string | undefined;
-  const stageInfo = currentStage ? STAGE_LABELS[currentStage] : null;
-  
-  // 根据 queryContext 判断当前执行阶段
-  const runningStep = queryContext?.sqlSteps?.find(s => s.status === "running");
-  const stepLabels: Record<string, string> = {
-    schema_mapping: "正在获取数据库模式信息",
-    few_shot: "正在检索相似查询示例",
-    llm_parse: "正在生成 SQL 查询",
-    sql_fix: "正在优化修正 SQL",
-    final_sql: "正在执行 SQL 查询",
-  };
-  
-  const displayLabel = runningStep 
-    ? stepLabels[runningStep.step] || "处理中..."
-    : stageInfo?.label 
-    ? `${stageInfo.label}...` 
-    : "思考中...";
-
+  // 简化加载提示：只显示简单的思考动画，不显示具体步骤
+  // 这样可以减少因状态变化导致的闪烁
   return (
     <div className="mr-auto flex items-start gap-2">
       <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 flex h-auto items-center gap-3 rounded-xl px-4 py-2.5 shadow-sm">
@@ -345,7 +338,7 @@ export function AssistantMessageLoading() {
           <div className="bg-blue-500 h-2 w-2 animate-[pulse_1.5s_ease-in-out_0.3s_infinite] rounded-full shadow-sm shadow-blue-300"></div>
           <div className="bg-blue-500 h-2 w-2 animate-[pulse_1.5s_ease-in-out_0.6s_infinite] rounded-full shadow-sm shadow-blue-300"></div>
         </div>
-        <span className="text-sm font-medium text-blue-700">{displayLabel}</span>
+        <span className="text-sm font-medium text-blue-700">思考中...</span>
       </div>
     </div>
   );
