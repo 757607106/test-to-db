@@ -228,27 +228,29 @@ async def cache_check_node(state: SQLMessageState) -> Dict[str, Any]:
                 try:
                     from app.agents.agents.sql_executor_agent import execute_sql_query
                     
-                    exec_result = execute_sql_query.invoke({
+                    exec_result_str = execute_sql_query.invoke({
                         "sql_query": clean_sql,  # 使用清理后的 SQL
                         "connection_id": connection_id,
                         "timeout": 30
                     })
                     
-                    # ✅ ToolResponse 是 Pydantic 模型，使用属性访问而不是 .get()
-                    if exec_result.status == "success":
+                    # ✅ execute_sql_query 返回的是 JSON 字符串，需要解析
+                    exec_result = json.loads(exec_result_str) if isinstance(exec_result_str, str) else exec_result_str
+                    
+                    if exec_result.get("success"):
                         # 构建执行结果
                         execution_result = SQLExecutionResult(
                             success=True,
-                            data=exec_result.data,
+                            data=exec_result.get("data"),
                             error=None,
-                            execution_time=exec_result.metadata.get("execution_time", 0) if exec_result.metadata else 0,
-                            rows_affected=exec_result.metadata.get("rows_affected", 0) if exec_result.metadata else 0
+                            execution_time=exec_result.get("execution_time", 0),
+                            rows_affected=exec_result.get("data", {}).get("row_count", 0) if isinstance(exec_result.get("data"), dict) else 0
                         )
                         
                         # 构建缓存命中响应
                         cache_hit.result = {
                             "success": True,
-                            "data": exec_result.data
+                            "data": exec_result.get("data")
                         }
                         response_content = format_cached_response(cache_hit, connection_id)
                         ai_message = AIMessage(content=response_content)
@@ -263,7 +265,7 @@ async def cache_check_node(state: SQLMessageState) -> Dict[str, Any]:
                         }
                     else:
                         # SQL 执行失败，重新开始完整流程（数据库schema可能已变更）
-                        logger.warning(f"缓存 SQL 执行失败: {exec_result.error}")
+                        logger.warning(f"缓存 SQL 执行失败: {exec_result.get('error')}")
                         logger.info("缓存SQL可能已过时，将重新分析数据库schema并生成新的SQL")
                         
                         # ✅ 清理并验证消息历史，移除不完整的tool_calls
