@@ -216,10 +216,19 @@ class SchemaAnalysisAgent:
 **输出格式**: 只返回工具调用结果，包含表结构和值映射信息"""
     
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
-        """处理 Schema 分析任务 - 返回标准工具调用格式"""
+        """
+        处理 Schema 分析任务 - 返回标准工具调用格式
+        
+        性能优化 (2026-01-22):
+        - 使用异步并行版本 retrieve_relevant_schema_async
+        - 批量获取列和关系
+        - 预期提升: 20s -> 8-12s
+        """
         import time
         from langgraph.config import get_stream_writer
         from app.schemas.stream_events import create_sql_step_event
+        from app.services.text2sql_utils import retrieve_relevant_schema_async, get_value_mappings
+        from app.db.session import SessionLocal
         
         try:
             # 获取 stream writer
@@ -238,54 +247,58 @@ class SchemaAnalysisAgent:
                     time_ms=0
                 ))
             
-            # 获取用户查询
+            # 获取用户查询（优先使用 enriched_query）
             messages = state.get("messages", [])
-            user_query = None
-            for msg in messages:
-                if hasattr(msg, 'type') and msg.type == 'human':
-                    user_query = msg.content
-                    if isinstance(user_query, list):
-                        user_query = user_query[0].get("text", "") if user_query else ""
-                    break
+            user_query = state.get("enriched_query")  # 优先使用增强后的查询
+            
+            if not user_query:
+                for msg in messages:
+                    if hasattr(msg, 'type') and msg.type == 'human':
+                        user_query = msg.content
+                        if isinstance(user_query, list):
+                            user_query = user_query[0].get("text", "") if user_query else ""
+                        break
             
             if not user_query:
                 raise ValueError("无法获取用户查询")
             
             connection_id = state.get("connection_id")
             
-            # 直接调用工具获取 schema（不通过 ReAct Agent，减少 LLM 调用）
-            logger.info(f"直接获取 schema 信息, connection_id={connection_id}")
+            # ✅ 使用异步并行版本获取 schema（性能优化）
+            logger.info(f"异步并行获取 schema 信息, connection_id={connection_id}")
             
-            schema_result_json = retrieve_database_schema.invoke({
-                "query": user_query,
-                "state": {"connection_id": connection_id}
-            })
-            
-            # 解析 schema 结果
-            schema_result = json.loads(schema_result_json)
-            
-            if not schema_result.get("success"):
-                raise ValueError(f"Schema 获取失败: {schema_result.get('error')}")
-            
-            # 提取 schema 信息
-            schema_context = schema_result.get("schema_context", {})
-            value_mappings = schema_result.get("value_mappings", {})
+            db = SessionLocal()
+            try:
+                # 使用异步并行版本
+                schema_context = await retrieve_relevant_schema_async(
+                    db=db,
+                    connection_id=connection_id,
+                    query=user_query
+                )
+                
+                # 获取值映射
+                value_mappings = get_value_mappings(db, schema_context)
+            finally:
+                db.close()
             
             # 计算耗时并发送完成事件
             elapsed_ms = int((time.time() - step_start_time) * 1000)
+            tables_list = schema_context.get("tables", [])
+            columns_list = schema_context.get("columns", [])
+            
             if writer:
                 writer(create_sql_step_event(
                     step="schema_mapping",
                     status="completed",
-                    result=f"获取到 {len(schema_context)} 个相关表",
+                    result=f"获取到 {len(tables_list)} 个相关表, {len(columns_list)} 个列",
                     time_ms=elapsed_ms
                 ))
             
-            logger.info(f"Schema 获取成功: {len(schema_context)} 个表")
+            logger.info(f"Schema 获取成功 (并行优化): {len(tables_list)} 个表, {len(columns_list)} 个列 [{elapsed_ms}ms]")
             
             # 构建 schema_info 存储到状态
             schema_info = {
-                "tables": schema_context,
+                "tables": schema_context,  # 完整的 schema 上下文
                 "value_mappings": value_mappings,
                 "connection_id": connection_id
             }
@@ -311,15 +324,18 @@ class SchemaAnalysisAgent:
             )
             
             # ToolMessage 包含工具执行结果
+            table_names = [t.get("name", "") for t in tables_list]
             tool_result = {
                 "status": "success",
                 "data": {
-                    "table_count": len(schema_context),
-                    "tables": list(schema_context.keys()),
+                    "table_count": len(tables_list),
+                    "column_count": len(columns_list),
+                    "tables": table_names,
                     "has_value_mappings": bool(value_mappings)
                 },
                 "metadata": {
-                    "connection_id": connection_id
+                    "connection_id": connection_id,
+                    "elapsed_ms": elapsed_ms
                 }
             }
             

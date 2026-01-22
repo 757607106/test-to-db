@@ -50,6 +50,10 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
     - 未命中: 正常澄清流程
     - 精确命中: 不会进入此节点 (已在cache_check_node结束)
     
+    性能优化 (2026-01-22):
+    - 如果已有澄清回复，跳过 LLM 检测直接处理回复
+    - 避免 interrupt 恢复后重复调用 LLM
+    
     Args:
         state: 当前SQL消息状态
         
@@ -62,6 +66,12 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
             - cached_sql_template: 缓存的SQL模板 (语义命中时保留)
     """
     logger.info("=== 澄清节点 (LangGraph标准模式) ===")
+    
+    # ✅ 性能优化: 检查是否已经有澄清回复（从 interrupt 恢复）
+    # 如果已经确认过澄清，直接跳过，避免重复 LLM 调用
+    if state.get("clarification_confirmed", False):
+        logger.info("✓ 澄清已确认，跳过重复检测")
+        return {"current_stage": "schema_analysis"}
     
     # 检查缓存命中类型
     cache_hit_type = state.get("cache_hit_type")
@@ -197,7 +207,8 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
         "clarification_responses": parsed_answers,
         "enriched_query": enriched_query,
         "original_query": user_query,
-        "current_stage": "schema_analysis"
+        "current_stage": "schema_analysis",
+        "clarification_confirmed": True  # ✅ 标记澄清已完成，避免重复检测
     }
     
     # 如果是语义命中，保留SQL模板供sql_generator_agent使用

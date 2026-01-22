@@ -92,29 +92,49 @@ class SupervisorAgent:
             logger.warning(f"⚠ Supervisor 结构化输出不可用: {e}")
             self.router_llm = None
     
+    # ✅ 性能优化: 类级别缓存默认 Worker Agents
+    _cached_default_workers: List[Any] = None
+    
     def _create_worker_agents(self) -> List[Any]:
-        """创建工作代理"""
-        from app.agents.agents.schema_agent import schema_agent
-        from app.agents.agents.sql_generator_agent import sql_generator_agent
-        from app.agents.agents.sql_executor_agent import sql_executor_agent
-        from app.agents.agents.error_recovery_agent import error_recovery_agent
-        from app.agents.agents.chart_generator_agent import chart_generator_agent
+        """
+        创建工作代理
         
-        agents = [
-            schema_agent,
-            sql_generator_agent,
-            sql_executor_agent,
-            error_recovery_agent,
-        ]
-        
-        # 添加图表生成代理
+        性能优化: 缓存默认 Worker Agents，避免重复导入和创建
+        """
+        # 如果有自定义分析专家，需要创建新列表
         if self.custom_analyst:
+            from app.agents.agents.schema_agent import schema_agent
+            from app.agents.agents.sql_generator_agent import sql_generator_agent
+            from app.agents.agents.sql_executor_agent import sql_executor_agent
+            from app.agents.agents.error_recovery_agent import error_recovery_agent
+            
             logger.info("使用自定义分析专家")
-            agents.append(self.custom_analyst)
-        else:
-            agents.append(chart_generator_agent)
+            return [
+                schema_agent,
+                sql_generator_agent,
+                sql_executor_agent,
+                error_recovery_agent,
+                self.custom_analyst
+            ]
         
-        return agents
+        # ✅ 返回缓存的默认 Worker Agents
+        if SupervisorAgent._cached_default_workers is None:
+            from app.agents.agents.schema_agent import schema_agent
+            from app.agents.agents.sql_generator_agent import sql_generator_agent
+            from app.agents.agents.sql_executor_agent import sql_executor_agent
+            from app.agents.agents.error_recovery_agent import error_recovery_agent
+            from app.agents.agents.chart_generator_agent import chart_generator_agent
+            
+            SupervisorAgent._cached_default_workers = [
+                schema_agent,
+                sql_generator_agent,
+                sql_executor_agent,
+                error_recovery_agent,
+                chart_generator_agent
+            ]
+            logger.info("✓ 默认 Worker Agents 已缓存")
+        
+        return SupervisorAgent._cached_default_workers
     
     def _get_agent_by_name(self, name: str):
         """根据名称获取 Agent"""
@@ -493,8 +513,12 @@ class SupervisorAgent:
 
 
 # ============================================================================
-# 工厂函数
+# 工厂函数 (带缓存优化)
 # ============================================================================
+
+# ✅ 性能优化: 缓存默认 Supervisor 实例
+_default_supervisor: Optional[SupervisorAgent] = None
+
 
 def create_supervisor_agent(worker_agents: List[Any] = None, custom_analyst=None) -> SupervisorAgent:
     """创建监督代理实例"""
@@ -502,8 +526,26 @@ def create_supervisor_agent(worker_agents: List[Any] = None, custom_analyst=None
 
 
 def create_intelligent_sql_supervisor(custom_analyst=None) -> SupervisorAgent:
-    """创建智能 SQL 监督代理"""
-    return SupervisorAgent(custom_analyst=custom_analyst)
+    """
+    创建智能 SQL 监督代理
+    
+    性能优化: 如果没有自定义分析专家，返回缓存的默认实例
+    """
+    global _default_supervisor
+    
+    # 如果有自定义分析专家，创建新实例
+    if custom_analyst is not None:
+        logger.info("创建带自定义分析专家的 Supervisor 实例")
+        return SupervisorAgent(custom_analyst=custom_analyst)
+    
+    # 返回缓存的默认实例
+    if _default_supervisor is None:
+        logger.info("首次创建默认 Supervisor 实例（将被缓存）")
+        _default_supervisor = SupervisorAgent()
+    else:
+        logger.debug("✓ 使用缓存的默认 Supervisor 实例")
+    
+    return _default_supervisor
 
 
 # ============================================================================

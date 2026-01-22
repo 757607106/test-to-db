@@ -32,4 +32,27 @@ class CRUDSchemaColumn(CRUDBase[SchemaColumn, SchemaColumnCreate, SchemaColumnUp
             .first()
         )
 
+    def get_by_table_ids(
+        self, db: Session, *, table_ids: List[int], limit: int = 1000
+    ) -> List[SchemaColumn]:
+        """
+        批量获取多个表的列（性能优化）
+        
+        Args:
+            db: 数据库会话
+            table_ids: 表ID列表
+            limit: 最大返回数量
+            
+        Returns:
+            所有匹配表的列列表
+        """
+        if not table_ids:
+            return []
+        return (
+            db.query(SchemaColumn)
+            .filter(SchemaColumn.table_id.in_(table_ids))
+            .limit(limit)
+            .all()
+        )
+
 schema_column = CRUDSchemaColumn(SchemaColumn)

@@ -49,4 +49,33 @@ class CRUDSchemaRelationship(CRUDBase[SchemaRelationship, SchemaRelationshipCrea
             .first()
         )
 
+    def get_by_table_ids(
+        self, db: Session, *, table_ids: List[int], limit: int = 500
+    ) -> List[SchemaRelationship]:
+        """
+        批量获取涉及指定表的关系（性能优化）
+        
+        Args:
+            db: 数据库会话
+            table_ids: 表ID列表
+            limit: 最大返回数量
+            
+        Returns:
+            涉及指定表的所有关系
+        """
+        if not table_ids:
+            return []
+        from sqlalchemy import or_
+        return (
+            db.query(SchemaRelationship)
+            .filter(
+                or_(
+                    SchemaRelationship.source_table_id.in_(table_ids),
+                    SchemaRelationship.target_table_id.in_(table_ids)
+                )
+            )
+            .limit(limit)
+            .all()
+        )
+
 schema_relationship = CRUDSchemaRelationship(SchemaRelationship)

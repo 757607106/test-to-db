@@ -443,7 +443,13 @@ class SQLGeneratorAgent:
             if not schema_info:
                 raise ValueError("缺少 schema 信息，请先执行 schema_agent")
             
-            logger.info(f"使用 schema 信息生成 SQL, tables={list(schema_info.get('tables', {}).keys())}")
+            # 提取表名列表用于日志
+            tables_data = schema_info.get("tables", {})
+            if isinstance(tables_data, dict) and "tables" in tables_data:
+                table_names = [t.get("name", "") for t in tables_data.get("tables", [])]
+            else:
+                table_names = list(tables_data.keys()) if isinstance(tables_data, dict) else []
+            logger.info(f"使用 schema 信息生成 SQL, tables={table_names[:5]}{'...' if len(table_names) > 5 else ''}")
             
             # ✅ Few-shot 样本检索步骤
             sample_qa_pairs = []
