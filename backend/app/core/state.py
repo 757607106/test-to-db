@@ -85,6 +85,9 @@ class SQLMessageState(TypedDict, total=False):
     # 数据库连接 ID (由用户选择的数据库动态传入)
     connection_id: Optional[int]
     
+    # 前端传递的上下文信息 (包含 connectionId 等)
+    context: Optional[Dict[str, Any]]
+    
     # 当前处理阶段
     current_stage: Literal[
         "clarification",      # 澄清阶段
@@ -171,9 +174,24 @@ class SQLMessageState(TypedDict, total=False):
     clarification_questions: List[Dict[str, Any]]
     clarification_responses: Optional[List[Dict[str, Any]]]
     clarification_confirmed: bool
+    clarification_skipped: bool  # 用户是否跳过了澄清
     original_query: Optional[str]
     enriched_query: Optional[str]
     conversation_id: Optional[str]
+    
+    # ==========================================
+    # 表过滤字段 (澄清点B)
+    # ==========================================
+    filtered_tables: Optional[List[Dict[str, Any]]]  # 过滤后的表列表
+    table_filter_confirmed: bool  # 表过滤是否已确认
+    
+    # ==========================================
+    # Schema 澄清字段 (澄清点C)
+    # ==========================================
+    schema_clarification_confirmed: bool  # Schema 澄清是否已确认
+    schema_clarification_round: int  # Schema 澄清轮次
+    schema_clarification_history: List[Dict[str, Any]]  # Schema 澄清历史
+    schema_analysis_result: Optional[Dict[str, Any]]  # Schema 分析结果
     
     # ==========================================
     # 分析与可视化字段
@@ -231,6 +249,11 @@ def create_initial_state(
         max_clarification_rounds=2,
         clarification_questions=[],
         clarification_confirmed=False,
+        clarification_skipped=False,  # 用户跳过澄清标记
+        table_filter_confirmed=False,  # 表过滤确认状态
+        schema_clarification_confirmed=False,  # Schema 澄清确认状态
+        schema_clarification_round=0,  # Schema 澄清轮次
+        schema_clarification_history=[],  # Schema 澄清历史
         needs_analysis=False,
     )
 
@@ -243,13 +266,25 @@ def extract_connection_id(state: SQLMessageState) -> Optional[int]:
     """
     从状态中提取数据库连接 ID
     
-    优先从 state 直接获取，如果没有则从消息中提取
+    统一读取逻辑（优先级从高到低）：
+    1. state.connection_id - 直接存储的值
+    2. state.context.connectionId - 前端通过 context 传递的值
+    3. message.additional_kwargs.connection_id - 消息中携带的值
+    
+    修复 (2026-01-23): 统一前端两种传递方式的读取逻辑
     """
-    # 优先使用 state 中的值
+    # 1. 优先使用 state 中直接存储的值
     if state.get("connection_id"):
         return state["connection_id"]
     
-    # 从消息中提取
+    # 2. 检查 context 中的 connectionId (前端通过 context 传递)
+    context = state.get("context")
+    if context and isinstance(context, dict):
+        context_conn_id = context.get("connectionId")
+        if context_conn_id:
+            return context_conn_id
+    
+    # 3. 从消息的 additional_kwargs 中提取
     messages = state.get("messages", [])
     for message in reversed(messages):
         if hasattr(message, 'type') and message.type == 'human':

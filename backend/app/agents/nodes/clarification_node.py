@@ -89,7 +89,8 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
         return {"current_stage": "schema_analysis"}
     
     user_query = None
-    for msg in messages:
+    # ✅ 修复：取最后一条 human 消息
+    for msg in reversed(messages):
         if hasattr(msg, 'type') and msg.type == 'human':
             user_query = msg.content
             break
@@ -180,13 +181,26 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
     # 执行到这里说明用户已经回复了
     logger.info(f"收到用户澄清回复: {user_response}")
     
-    # 7. 解析用户回复
-    parsed_answers = parse_user_clarification_response(
-        user_response, 
-        formatted_questions
-    )
+    # 7. 检查是否用户跳过了澄清
+    # 修复 (2026-01-23): 处理用户点击"跳过"的情况
+    is_skipped = False
+    if isinstance(user_response, dict) and user_response.get("skipped"):
+        is_skipped = True
+        logger.info("用户跳过了澄清，使用原始查询继续")
+    elif isinstance(user_response, list) and len(user_response) == 0:
+        # 兼容旧的空数组格式
+        is_skipped = True
+        logger.info("用户跳过了澄清（空数组），使用原始查询继续")
     
-    # 8. 整合用户回复到查询
+    # 8. 解析用户回复
+    parsed_answers = []
+    if not is_skipped:
+        parsed_answers = parse_user_clarification_response(
+            user_response, 
+            formatted_questions
+        )
+    
+    # 9. 整合用户回复到查询
     if parsed_answers:
         try:
             enrich_result = enrich_query_with_clarification(
@@ -202,13 +216,14 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
     
     logger.info(f"增强后查询: {enriched_query[:100]}...")
     
-    # ✅ 9. 返回状态更新 (LangGraph标准 - 只返回需要更新的字段)
+    # ✅ 10. 返回状态更新 (LangGraph标准 - 只返回需要更新的字段)
     result = {
         "clarification_responses": parsed_answers,
         "enriched_query": enriched_query,
         "original_query": user_query,
         "current_stage": "schema_analysis",
-        "clarification_confirmed": True  # ✅ 标记澄清已完成，避免重复检测
+        "clarification_confirmed": True,  # ✅ 标记澄清已完成，避免重复检测
+        "clarification_skipped": is_skipped  # ✅ 标记是否跳过
     }
     
     # 如果是语义命中，保留SQL模板供sql_generator_agent使用

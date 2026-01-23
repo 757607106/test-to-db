@@ -37,6 +37,7 @@ from app.agents.nodes.thread_history_check_node import thread_history_check_node
 from app.agents.nodes.clarification_node import clarification_node
 from app.agents.nodes.cache_check_node import cache_check_node
 from app.agents.nodes.question_recommendation_node import question_recommendation_node
+from app.agents.nodes.table_filter_clarification_node import table_filter_clarification_node
 from app.models.agent_profile import AgentProfile
 
 logger = logging.getLogger(__name__)
@@ -90,69 +91,124 @@ def extract_agent_id_from_messages(messages) -> Optional[int]:
 
 
 # ============================================================================
-# 意图识别辅助函数
+# 意图识别辅助函数 (LLM 版本)
 # ============================================================================
 
-def _detect_intent(query: str) -> Literal["data_query", "general_chat"]:
+# LLM 意图识别 + 问题改写提示词
+INTENT_ANALYSIS_PROMPT = """你是一个专业的数据查询意图分析专家。请分析用户的输入，完成以下任务：
+
+**用户输入**: {query}
+
+**任务1: 意图分类**
+判断用户意图属于哪一类：
+- "data_query": 数据查询（需要查询数据库，如：统计、查询、分析、对比、排名等）
+- "general_chat": 闲聊（打招呼、感谢、询问助手功能等，不涉及数据查询）
+
+**任务2: 问题改写** (仅当意图为 data_query 时)
+将用户的口语化表达改写为更清晰、规范的数据查询描述：
+- 保持原意不变
+- 补充省略的主语或宾语
+- 将模糊表达具体化（如果可以推断）
+- 如果原查询已经很清晰，保持原样
+
+**任务3: 早期澄清检测** (仅当意图为 data_query 时)
+检测查询是否存在以下明显模糊性，需要提前澄清：
+- 时间范围完全不明确（如"最近"但不知道指多久）
+- 关键业务对象不明确（如"大客户"的标准）
+- 数量范围不明确（如"前几名"的具体数量）
+
+**注意**：只有当模糊性会严重影响查询时才需要澄清，一般性的查询可以先执行。
+
+请返回 JSON 格式：
+{{
+    "intent": "data_query" | "general_chat",
+    "rewritten_query": "改写后的查询（仅data_query时有值，否则为null）",
+    "needs_early_clarification": true | false,
+    "clarification_reason": "需要澄清的原因（如不需要则为null）",
+    "clarification_questions": [
+        {{
+            "id": "q1",
+            "question": "澄清问题",
+            "type": "choice",
+            "options": ["选项1", "选项2", "选项3"]
+        }}
+    ]
+}}
+
+只返回JSON，不要其他内容。"""
+
+
+async def detect_intent_with_llm(query: str) -> Dict[str, Any]:
     """
-    检测用户查询的意图类型
+    使用 LLM 进行意图识别 + 问题改写
+    
+    优势：
+    - 语义理解能力强，能处理复杂表达
+    - 同时完成意图识别和问题改写，减少 LLM 调用次数
+    - 可以检测早期澄清需求
     
     Args:
-        query: 用户查询文本
+        query: 用户原始查询
         
     Returns:
-        "data_query" - 数据查询意图（需要走完整 SQL 流程）
-        "general_chat" - 闲聊意图（直接回复）
+        Dict 包含:
+        - intent: "data_query" | "general_chat"
+        - rewritten_query: 改写后的查询
+        - needs_early_clarification: 是否需要早期澄清
+        - clarification_questions: 澄清问题列表
     """
-    query_lower = query.lower().strip()
+    import json
+    from langchain_core.messages import HumanMessage
+    from app.core.llms import get_default_model
     
-    # 数据查询关键词（中文）
-    data_query_keywords_cn = [
-        "查询", "查看", "统计", "计算", "显示", "列出", "获取", "搜索", "筛选",
-        "多少", "有哪些", "什么是", "求", "汇总", "分析", "对比", "排名", "排序",
-        "top", "前", "最大", "最小", "平均", "总", "销售", "订单", "库存", "用户",
-        "客户", "产品", "商品", "数据", "表", "字段", "记录", "条目"
-    ]
-    
-    # 闲聊关键词
-    chat_keywords = [
-        "你好", "hello", "hi", "嗨", "在吗", "在么", "谢谢", "感谢", "thanks",
-        "你是谁", "你叫什么", "介绍一下", "帮助", "help", "怎么用", "使用说明",
-        "再见", "bye", "晚安", "早安", "早上好", "下午好", "晚上好"
-    ]
-    
-    # SQL 相关关键词
-    sql_keywords = [
-        "select", "from", "where", "join", "group by", "order by", "having",
-        "count", "sum", "avg", "max", "min", "limit", "distinct"
-    ]
-    
-    # 检查是否包含 SQL 关键词
-    if any(kw in query_lower for kw in sql_keywords):
-        return "data_query"
-    
-    # 检查是否明确是闲聊
-    if any(kw in query_lower for kw in chat_keywords):
-        # 再次确认不是数据查询
-        if not any(kw in query_lower for kw in data_query_keywords_cn):
-            return "general_chat"
-    
-    # 检查是否包含数据查询关键词
-    if any(kw in query_lower for kw in data_query_keywords_cn):
-        return "data_query"
-    
-    # 检查是否是问句格式（通常是数据查询）
-    question_patterns = [
-        r'(有多少|共有多少|一共有多少)',
-        r'(哪些|哪个|什么)',
-        r'\?$|？$',
-        r'(是多少|是什么)',
-    ]
-    if any(re.search(p, query) for p in question_patterns):
-        return "data_query"
-    
-    # 默认为数据查询（保守策略）
-    return "data_query"
+    try:
+        llm = get_default_model()
+        prompt = INTENT_ANALYSIS_PROMPT.format(query=query)
+        
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        content = response.content.strip()
+        
+        # 清理 markdown 标记
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.startswith("```"):
+            content = content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+        
+        result = json.loads(content)
+        
+        # 安全处理可能为 None 的 rewritten_query
+        rewritten_query = result.get('rewritten_query') or ''
+        logger.info(f"LLM 意图识别结果: intent={result.get('intent')}, rewritten={rewritten_query[:50]}")
+        
+        return {
+            "intent": result.get("intent", "data_query"),
+            "rewritten_query": result.get("rewritten_query"),
+            "needs_early_clarification": result.get("needs_early_clarification", False),
+            "clarification_reason": result.get("clarification_reason"),
+            "clarification_questions": result.get("clarification_questions", [])
+        }
+        
+    except json.JSONDecodeError as e:
+        logger.warning(f"LLM 意图识别 JSON 解析失败: {e}")
+        # 降级处理：默认为数据查询
+        return {
+            "intent": "data_query",
+            "rewritten_query": query,
+            "needs_early_clarification": False,
+            "clarification_questions": []
+        }
+    except Exception as e:
+        logger.error(f"LLM 意图识别失败: {e}", exc_info=True)
+        # 降级处理：默认为数据查询
+        return {
+            "intent": "data_query",
+            "rewritten_query": query,
+            "needs_early_clarification": False,
+            "clarification_questions": []
+        }
 
 
 # ============================================================================
@@ -237,6 +293,8 @@ class IntelligentSQLGraph:
         graph.add_node("thread_history_check", thread_history_check_node)
         graph.add_node("cache_check", cache_check_node)
         graph.add_node("clarification", clarification_node)
+        # 表过滤澄清节点 (澄清点B)
+        graph.add_node("table_filter_clarification", table_filter_clarification_node)
         graph.add_node("supervisor", self._supervisor_node)
         # 问题推荐节点 (在 supervisor 之后执行)
         graph.add_node("question_recommendation", question_recommendation_node)
@@ -283,8 +341,11 @@ class IntelligentSQLGraph:
             }
         )
         
-        # clarification → supervisor
-        graph.add_edge("clarification", "supervisor")
+        # clarification → table_filter_clarification (澄清点B)
+        graph.add_edge("clarification", "table_filter_clarification")
+        
+        # table_filter_clarification → supervisor
+        graph.add_edge("table_filter_clarification", "supervisor")
         
         # supervisor → question_recommendation (新增: 在完成后推荐问题)
         # ✅ 使用条件边处理 supervisor 执行失败的情况
@@ -405,9 +466,12 @@ class IntelligentSQLGraph:
     
     async def _intent_router_node(self, state: SQLMessageState, writer: StreamWriter) -> Dict[str, Any]:
         """
-        意图路由节点 - 检测用户查询意图并设置路由决策
+        意图路由节点 - 使用 LLM 进行意图识别 + 问题改写
         
-        遵循 LangGraph 官方规范：使用 StreamWriter 参数注入
+        功能：
+        1. 使用 LLM 识别用户意图（数据查询 vs 闲聊）
+        2. 同时完成问题改写，生成更清晰的查询描述
+        3. 检测早期澄清需求，避免后续步骤浪费
         
         Args:
             state: 当前状态
@@ -415,16 +479,21 @@ class IntelligentSQLGraph:
         
         返回:
             route_decision: "data_query" | "general_chat"
+            enriched_query: 改写后的查询（用于后续处理）
+            needs_clarification: 是否需要早期澄清
+            clarification_questions: 澄清问题列表
         """
         import time
         from app.schemas.stream_events import create_intent_analysis_event
+        from langgraph.types import interrupt
         
         start_time = time.time()
         
         messages = state.get("messages", [])
         user_query = None
         
-        for msg in messages:
+        # ✅ 取最后一条 human 消息
+        for msg in reversed(messages):
             if hasattr(msg, 'type') and msg.type == 'human':
                 user_query = msg.content
                 if isinstance(user_query, list):
@@ -435,12 +504,22 @@ class IntelligentSQLGraph:
             logger.warning("无法提取用户查询，默认为数据查询")
             return {"route_decision": "data_query"}
         
-        # 检测意图
-        intent = _detect_intent(user_query)
-        logger.info(f"=== 意图识别: {intent} ===")
-        logger.info(f"  查询: {user_query[:50]}...")
+        # ✅ 使用 LLM 进行意图识别 + 问题改写
+        intent_result = await detect_intent_with_llm(user_query)
         
-        # 如果是数据查询，发送意图解析流式事件（使用注入的 StreamWriter）
+        intent = intent_result.get("intent", "data_query")
+        rewritten_query = intent_result.get("rewritten_query") or user_query
+        needs_early_clarification = intent_result.get("needs_early_clarification", False)
+        clarification_questions = intent_result.get("clarification_questions", [])
+        clarification_reason = intent_result.get("clarification_reason")
+        
+        logger.info(f"=== LLM 意图识别 ===")
+        logger.info(f"  原始查询: {user_query[:50]}...")
+        logger.info(f"  意图: {intent}")
+        logger.info(f"  改写后: {rewritten_query[:50]}...")
+        logger.info(f"  需要早期澄清: {needs_early_clarification}")
+        
+        # 如果是数据查询，发送意图解析流式事件
         if intent == "data_query":
             elapsed_ms = int((time.time() - start_time) * 1000)
             
@@ -461,17 +540,56 @@ class IntelligentSQLGraph:
                 except Exception:
                     pass
             
-            # 发送意图解析事件（使用注入的 writer）
+            # 发送意图解析事件
             writer(create_intent_analysis_event(
                 dataset=dataset_name,
-                query_mode=self._detect_query_mode(user_query),
-                metrics=self._extract_metrics(user_query),
-                filters=self._extract_filters(user_query),
+                query_mode=self._detect_query_mode(rewritten_query),
+                metrics=self._extract_metrics(rewritten_query),
+                filters=self._extract_filters(rewritten_query),
                 time_ms=elapsed_ms
             ))
             logger.info(f"✓ 已发送意图解析流式事件")
+            
+            # ✅ 检查是否需要早期澄清
+            if needs_early_clarification and clarification_questions:
+                logger.info(f"触发早期澄清，{len(clarification_questions)} 个问题")
+                
+                # 使用 interrupt 暂停执行，等待用户澄清
+                from app.agents.agents.clarification_agent import format_clarification_questions
+                formatted_questions = format_clarification_questions(clarification_questions)
+                
+                user_response = interrupt({
+                    "type": "clarification_request",
+                    "stage": "intent_analysis",
+                    "questions": formatted_questions,
+                    "reason": clarification_reason or "查询存在模糊性，需要澄清",
+                    "original_query": user_query
+                })
+                
+                # 用户回复后继续
+                logger.info(f"收到早期澄清回复: {user_response}")
+                
+                # 解析用户回复并更新改写后的查询
+                from app.agents.agents.clarification_agent import (
+                    parse_user_clarification_response,
+                    _enrich_query_with_clarification_impl as enrich_query_with_clarification
+                )
+                
+                parsed_answers = parse_user_clarification_response(user_response, formatted_questions)
+                if parsed_answers:
+                    enrich_result = enrich_query_with_clarification(
+                        original_query=rewritten_query,
+                        clarification_responses=parsed_answers
+                    )
+                    rewritten_query = enrich_result.get("enriched_query", rewritten_query)
+                    logger.info(f"早期澄清后查询: {rewritten_query[:50]}...")
         
-        return {"route_decision": intent}
+        return {
+            "route_decision": intent,
+            "original_query": user_query,
+            "enriched_query": rewritten_query,  # 改写后的查询，供后续节点使用
+            "clarification_confirmed": needs_early_clarification and bool(clarification_questions)  # 标记早期澄清已完成
+        }
     
     def _route_by_intent(self, state: SQLMessageState) -> str:
         """
@@ -490,7 +608,8 @@ class IntelligentSQLGraph:
         messages = state.get("messages", [])
         user_query = None
         
-        for msg in messages:
+        # ✅ 取最后一条 human 消息
+        for msg in reversed(messages):
             if hasattr(msg, 'type') and msg.type == 'human':
                 user_query = msg.content
                 if isinstance(user_query, list):
@@ -684,20 +803,23 @@ class IntelligentSQLGraph:
         加载自定义智能体节点
         
         功能:
-        1. 从消息中提取 connection_id 和 agent_id
+        1. 从消息和 context 中提取 connection_id 和 agent_id
         2. 将 agent_id 存储到 state 供子图使用（不存储 Agent 实例，避免序列化问题）
         
         注意：Agent 实例包含 LLM 对象（HTTP 客户端、线程锁等），无法被 pickle 序列化
         因此只存储 agent_id，在 supervisor_subgraph 中按需动态创建 Agent
-        """
-        # 从消息中提取 connection_id
-        messages = state.get("messages", [])
-        extracted_connection_id = extract_connection_id_from_messages(messages)
         
+        修复 (2026-01-23): 统一从 context 和 additional_kwargs 两种方式读取 connection_id
+        """
+        messages = state.get("messages", [])
         updates = {}
         
+        # 使用统一的 extract_connection_id 函数 (已支持 context 和 additional_kwargs)
+        from app.core.state import extract_connection_id
+        extracted_connection_id = extract_connection_id(state)
+        
         if extracted_connection_id and extracted_connection_id != state.get("connection_id"):
-            logger.info(f"从消息中提取到 connection_id={extracted_connection_id}")
+            logger.info(f"从消息/context中提取到 connection_id={extracted_connection_id}")
             updates["connection_id"] = extracted_connection_id
         
         # 从消息中提取 agent_id（只存储 ID，不存储 Agent 实例）
@@ -716,7 +838,8 @@ class IntelligentSQLGraph:
         messages = state.get("messages", [])
         user_query = None
         
-        for msg in messages:
+        # ✅ 修复：取最后一条 human 消息
+        for msg in reversed(messages):
             if hasattr(msg, 'type') and msg.type == 'human':
                 user_query = msg.content
                 if isinstance(user_query, list):

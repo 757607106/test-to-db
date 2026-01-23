@@ -8,7 +8,7 @@ Supervisor 子图 - 使用 LangGraph 原生模式
 4. 简洁的错误恢复机制
 
 架构:
-    START → schema_agent → sql_generator → sql_executor
+    START → schema_agent → schema_clarification → sql_generator → sql_executor
           → [error_handler → sql_generator] (失败时重试)
           → data_analyst → chart_generator → END
 
@@ -187,6 +187,28 @@ async def schema_agent_node(state: SQLMessageState) -> Dict[str, Any]:
                 "timestamp": time.time()
             }]
         }
+
+
+async def schema_clarification_node_wrapper(state: SQLMessageState) -> Dict[str, Any]:
+    """
+    Schema 澄清节点包装器 - 澄清点C
+    
+    在 schema_agent 后执行，检测字段、关系、指标等歧义
+    """
+    from app.agents.nodes.schema_clarification_node import schema_clarification_node
+    
+    logger.info("=== 执行 schema_clarification (澄清点C) ===")
+    start_time = time.time()
+    
+    try:
+        result = await schema_clarification_node(state)
+        elapsed = time.time() - start_time
+        logger.info(f"schema_clarification 完成，耗时 {elapsed:.2f}s")
+        return result
+    except Exception as e:
+        logger.error(f"schema_clarification 执行失败: {e}")
+        # 澄清失败不影响主流程，继续到 SQL 生成
+        return {"current_stage": "sql_generation"}
 
 
 async def sql_generator_node(state: SQLMessageState) -> Dict[str, Any]:
@@ -447,7 +469,7 @@ async def error_handler_node(state: SQLMessageState) -> Dict[str, Any]:
 # 路由函数
 # ============================================================================
 
-def route_after_schema(state: SQLMessageState) -> Literal["sql_generator", "error_handler"]:
+def route_after_schema(state: SQLMessageState) -> Literal["schema_clarification", "error_handler"]:
     """
     Schema 分析后的路由
     """
@@ -457,7 +479,21 @@ def route_after_schema(state: SQLMessageState) -> Literal["sql_generator", "erro
         logger.info("[路由] schema_agent → error_handler (错误)")
         return "error_handler"
     
-    logger.info("[路由] schema_agent → sql_generator (成功)")
+    logger.info("[路由] schema_agent → schema_clarification (澄清点C)")
+    return "schema_clarification"
+
+
+def route_after_schema_clarification(state: SQLMessageState) -> Literal["sql_generator", "error_handler"]:
+    """
+    Schema 澄清后的路由
+    """
+    current_stage = state.get("current_stage", "")
+    
+    if current_stage == "error_recovery":
+        logger.info("[路由] schema_clarification → error_handler (错误)")
+        return "error_handler"
+    
+    logger.info("[路由] schema_clarification → sql_generator (成功)")
     return "sql_generator"
 
 
@@ -546,7 +582,7 @@ def create_supervisor_subgraph() -> CompiledStateGraph:
     创建 Supervisor 子图
     
     图结构:
-        START → schema_agent → sql_generator → sql_executor
+        START → schema_agent → schema_clarification → sql_generator → sql_executor
               → data_analyst → chart_generator → END
               
         错误处理:
@@ -562,6 +598,7 @@ def create_supervisor_subgraph() -> CompiledStateGraph:
     
     # ============== 添加节点 ==============
     graph.add_node("schema_agent", schema_agent_node)
+    graph.add_node("schema_clarification", schema_clarification_node_wrapper)
     graph.add_node("sql_generator", sql_generator_node)
     graph.add_node("sql_executor", sql_executor_node)
     graph.add_node("data_analyst", data_analyst_node)
@@ -572,9 +609,20 @@ def create_supervisor_subgraph() -> CompiledStateGraph:
     graph.set_entry_point("schema_agent")
     
     # ============== 定义条件边 ==============
+    # schema_agent → schema_clarification (澄清点C)
     graph.add_conditional_edges(
         "schema_agent",
         route_after_schema,
+        {
+            "schema_clarification": "schema_clarification",
+            "error_handler": "error_handler"
+        }
+    )
+    
+    # schema_clarification → sql_generator
+    graph.add_conditional_edges(
+        "schema_clarification",
+        route_after_schema_clarification,
         {
             "sql_generator": "sql_generator",
             "error_handler": "error_handler"

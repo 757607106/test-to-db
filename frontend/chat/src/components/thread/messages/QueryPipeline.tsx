@@ -548,75 +548,44 @@ const DataTable = React.memo(function DataTable({ data, columns }: { data: Recor
   );
 });
 
-// 数据查询结果组件
+// 数据查询结果组件 - 只显示表格
 const DataQueryResult = React.memo(function DataQueryResult({ 
   dataQuery, 
-  viewMode, 
-  onViewModeChange 
 }: { 
   dataQuery: QueryContext["dataQuery"]; 
-  viewMode: "chart" | "table";
-  onViewModeChange: (mode: "chart" | "table") => void;
 }) {
-  if (!dataQuery) return null;
-
-  const { columns, rows, row_count, chart_config } = dataQuery;
-  const hasData = rows && rows.length > 0;
-
-  // 转换数据格式 - 使用 useMemo 缓存
+  // 转换数据格式 - 使用 useMemo 缓存（必须在 early return 之前调用）
   const tableData = useMemo(() => {
-    return rows?.map(row => {
+    if (!dataQuery?.rows) return [];
+    return dataQuery.rows.map(row => {
       if (Array.isArray(row)) {
         const obj: Record<string, any> = {};
-        columns.forEach((col, i) => {
+        dataQuery.columns.forEach((col, i) => {
           obj[col] = row[i];
         });
         return obj;
       }
       return row;
-    }) || [];
-  }, [rows, columns]);
+    });
+  }, [dataQuery?.rows, dataQuery?.columns]);
+
+  // Early return 放在所有 hooks 调用之后
+  if (!dataQuery) return null;
+
+  const { columns, rows, row_count } = dataQuery;
+  const hasData = rows && rows.length > 0;
 
   return (
-    <div className="mt-4 rounded-xl border border-slate-200 bg-white overflow-hidden">
+    <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
       {/* 标题栏 */}
-      <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200">
+      <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-slate-200">
         <div className="flex items-center gap-2">
-          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-          <span className="font-medium text-sm text-slate-700">执行SQL查询</span>
-          <span className="text-xs text-slate-500 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">
+          <Table2 className="h-4 w-4 text-blue-600" />
+          <span className="font-medium text-sm text-slate-700">查询结果</span>
+          <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">
             {row_count || rows?.length || 0} 条记录
           </span>
         </div>
-        
-        {hasData && (
-          <div className="flex items-center gap-2 bg-white rounded-lg border border-slate-200 p-1">
-            <button
-              onClick={() => onViewModeChange("chart")}
-              className={cn(
-                "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors",
-                viewMode === "chart" 
-                  ? "bg-blue-100 text-blue-700" 
-                  : "text-slate-600 hover:bg-slate-100"
-              )}
-            >
-              <BarChart2 className="h-3.5 w-3.5" />
-              图表
-            </button>
-            <button
-              onClick={() => onViewModeChange("table")}
-              className={cn(
-                "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors",
-                viewMode === "table" 
-                  ? "bg-blue-100 text-blue-700" 
-                  : "text-slate-600 hover:bg-slate-100"
-              )}
-            >
-              <Table2 className="h-3.5 w-3.5" />
-              表格
-            </button>
-          </div>
-        )}
       </div>
 
       {/* 内容区域 */}
@@ -626,11 +595,94 @@ const DataQueryResult = React.memo(function DataQueryResult({
             <AlertCircle className="h-8 w-8 mb-2 text-slate-400" />
             <span className="text-sm">查询结果为空</span>
           </div>
-        ) : viewMode === "chart" ? (
-          <DataChart data={tableData} columns={columns} chartConfig={chart_config} />
         ) : (
           <DataTable data={tableData} columns={columns} />
         )}
+      </div>
+    </div>
+  );
+});
+
+// 智能图表组件 - 独立显示
+const SmartChart = React.memo(function SmartChart({ 
+  dataQuery 
+}: { 
+  dataQuery: QueryContext["dataQuery"]; 
+}) {
+  // 转换数据格式
+  const tableData = useMemo(() => {
+    if (!dataQuery?.rows) return [];
+    return dataQuery.rows.map(row => {
+      if (Array.isArray(row)) {
+        const obj: Record<string, any> = {};
+        dataQuery.columns.forEach((col, i) => {
+          obj[col] = row[i];
+        });
+        return obj;
+      }
+      return row;
+    });
+  }, [dataQuery?.rows, dataQuery?.columns]);
+
+  if (!dataQuery || !dataQuery.rows || dataQuery.rows.length === 0) return null;
+  
+  const { columns, chart_config } = dataQuery;
+  
+  // 如果没有 chart_config，不显示图表
+  if (!chart_config) return null;
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+      {/* 标题栏 */}
+      <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-emerald-50 to-teal-50 border-b border-slate-200">
+        <div className="flex items-center gap-2">
+          <BarChart2 className="h-4 w-4 text-emerald-600" />
+          <span className="font-medium text-sm text-slate-700">数据可视化</span>
+          <span className="text-xs px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">
+            {chart_config.type === "line" ? "折线图" : chart_config.type === "bar" ? "柱状图" : "图表"}
+          </span>
+        </div>
+      </div>
+
+      {/* 图表内容 */}
+      <div className="p-4">
+        <DataChart data={tableData} columns={columns} chartConfig={chart_config} />
+      </div>
+    </div>
+  );
+});
+
+// 推荐问题组件
+const SimilarQuestions = React.memo(function SimilarQuestions({ 
+  questions,
+  onSelectQuestion 
+}: { 
+  questions: string[];
+  onSelectQuestion?: (question: string) => void;
+}) {
+  if (!questions || questions.length === 0) return null;
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+      {/* 标题栏 */}
+      <div className="flex items-center gap-2 px-4 py-3 bg-gradient-to-r from-purple-50 to-pink-50 border-b border-slate-200">
+        <Sparkles className="h-4 w-4 text-purple-600" />
+        <span className="font-medium text-sm text-slate-700">您可能还想问</span>
+      </div>
+
+      {/* 问题列表 */}
+      <div className="p-4 space-y-2">
+        {questions.map((question, index) => (
+          <button
+            key={index}
+            onClick={() => onSelectQuestion?.(question)}
+            className="w-full text-left px-4 py-2.5 rounded-lg bg-slate-50 hover:bg-purple-50 border border-slate-200 hover:border-purple-200 transition-colors group"
+          >
+            <span className="text-sm text-slate-700 group-hover:text-purple-700">
+              {question}
+            </span>
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -676,10 +728,9 @@ export function QueryPipeline({ queryContext, onSelectQuestion }: QueryPipelineP
   const [isContainerExpanded, setIsContainerExpanded] = useState(true);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [copiedSql, setCopiedSql] = useState(false);
-  const [viewMode, setViewMode] = useState<"chart" | "table">("table");
 
   // 使用解构避免依赖整个 queryContext
-  const { cacheHit, intentAnalysis, sqlSteps, dataQuery } = queryContext;
+  const { cacheHit, intentAnalysis, sqlSteps, dataQuery, similarQuestions } = queryContext;
 
   // 创建节点状态映射 - 使用 useMemo 缓存
   const nodeStatesMap = useMemo(() => {
@@ -771,114 +822,138 @@ export function QueryPipeline({ queryContext, onSelectQuestion }: QueryPipelineP
   }
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-gradient-to-b from-white to-slate-50/50 shadow-sm overflow-hidden transition-all duration-300">
-      {/* 头部 - 总体状态 (可点击折叠) */}
-      <button 
-        onClick={() => setIsContainerExpanded(!isContainerExpanded)}
-        className="w-full flex items-center justify-between px-5 py-4 bg-gradient-to-r from-slate-50 to-white border-b border-slate-100 hover:bg-slate-50/80 transition-colors"
-      >
-        <div className="flex items-center gap-3">
-          <div className={cn(
-            "flex items-center justify-center w-10 h-10 rounded-xl transition-colors duration-300",
-            hasError ? "bg-red-100" : hasRunningStep ? "bg-blue-100" : isCompleted ? "bg-emerald-100" : "bg-slate-100"
-          )}>
-            {hasRunningStep ? (
-              <Loader2 className="h-5 w-5 text-blue-600 animate-spin" />
-            ) : hasError ? (
-              <XCircle className="h-5 w-5 text-red-600" />
-            ) : isCompleted ? (
-              <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-            ) : (
-              <Circle className="h-5 w-5 text-slate-400" />
-            )}
-          </div>
-          <div className="text-left">
-            <h3 className="font-semibold text-slate-800">智能查询</h3>
-            <p className="text-xs text-slate-500 flex items-center gap-2">
-              {hasRunningStep ? "正在处理中..." : hasError ? "执行出错" : isCompleted ? "查询完成" : "等待执行"}
-            </p>
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-3">
-          {totalTime > 0 && (
-            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 rounded-lg">
-              <Clock className="h-3.5 w-3.5 text-slate-500" />
-              <span className="text-sm font-medium text-slate-600">{totalTime}ms</span>
-            </div>
-          )}
-          <motion.div
-            animate={{ rotate: isContainerExpanded ? 180 : 0 }}
-            transition={{ duration: 0.2 }}
-          >
-            <ChevronDown className="h-5 w-5 text-slate-400" />
-          </motion.div>
-        </div>
-      </button>
-
-      {/* 缓存命中提示 - 即使折叠也显示，除非完全没命中 */}
-      {cacheHit && isContainerExpanded && (
-        <CacheHitBanner cacheHit={cacheHit} />
-      )}
-
-      {/* 执行流水线内容区域 */}
-      <AnimatePresence>
-        {isContainerExpanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.3, ease: "easeInOut" }}
-            className="overflow-hidden"
-          >
-            <div className="p-5">
-              <div className="space-y-0">
-                {PIPELINE_NODES.map((node, index) => {
-                  const status = getNodeStatus(node);
-                  const nodeData = getNodeData(node);
-                  const isExpanded = expandedNodes.has(node.key);
-                  const isLast = index === PIPELINE_NODES.length - 1;
-
-                  return (
-                    <div key={node.key} className="relative">
-                      {/* 连接线 */}
-                      {!isLast && (
-                        <div className="absolute left-5 top-12 w-0.5 h-6 bg-gradient-to-b from-slate-200 to-slate-100" />
-                      )}
-                      
-                      {/* 节点卡片 */}
-                      <PipelineNode
-                        node={node}
-                        status={status}
-                        data={nodeData}
-                        isExpanded={isExpanded}
-                        onToggle={() => toggleNode(node.key)}
-                        copySQL={copySQL}
-                        copiedSql={copiedSql}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* SQL执行结果（表格/图表） */}
-              {dataQuery && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.1 }}
-                >
-                  <DataQueryResult 
-                    dataQuery={dataQuery} 
-                    viewMode={viewMode}
-                    onViewModeChange={setViewMode}
-                  />
-                </motion.div>
+    <div className="space-y-4">
+      {/* 工具执行链路面板 */}
+      <div className="rounded-xl border border-slate-200 bg-gradient-to-b from-white to-slate-50/50 shadow-sm overflow-hidden transition-all duration-300">
+        {/* 头部 - 总体状态 (可点击折叠) */}
+        <button 
+          onClick={() => setIsContainerExpanded(!isContainerExpanded)}
+          className="w-full flex items-center justify-between px-5 py-4 bg-gradient-to-r from-slate-50 to-white border-b border-slate-100 hover:bg-slate-50/80 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <div className={cn(
+              "flex items-center justify-center w-10 h-10 rounded-xl transition-colors duration-300",
+              hasError ? "bg-red-100" : hasRunningStep ? "bg-blue-100" : isCompleted ? "bg-emerald-100" : "bg-slate-100"
+            )}>
+              {hasRunningStep ? (
+                <Loader2 className="h-5 w-5 text-blue-600 animate-spin" />
+              ) : hasError ? (
+                <XCircle className="h-5 w-5 text-red-600" />
+              ) : isCompleted ? (
+                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+              ) : (
+                <Circle className="h-5 w-5 text-slate-400" />
               )}
             </div>
-          </motion.div>
+            <div className="text-left">
+              <h3 className="font-semibold text-slate-800">智能查询</h3>
+              <p className="text-xs text-slate-500 flex items-center gap-2">
+                {hasRunningStep ? "正在处理中..." : hasError ? "执行出错" : isCompleted ? "查询完成" : "等待执行"}
+              </p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-3">
+            {totalTime > 0 && (
+              <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 rounded-lg">
+                <Clock className="h-3.5 w-3.5 text-slate-500" />
+                <span className="text-sm font-medium text-slate-600">{totalTime}ms</span>
+              </div>
+            )}
+            <motion.div
+              animate={{ rotate: isContainerExpanded ? 180 : 0 }}
+              transition={{ duration: 0.2 }}
+            >
+              <ChevronDown className="h-5 w-5 text-slate-400" />
+            </motion.div>
+          </div>
+        </button>
+
+        {/* 缓存命中提示 */}
+        {cacheHit && isContainerExpanded && (
+          <CacheHitBanner cacheHit={cacheHit} />
         )}
-      </AnimatePresence>
+
+        {/* 执行流水线内容区域 */}
+        <AnimatePresence>
+          {isContainerExpanded && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.3, ease: "easeInOut" }}
+              className="overflow-hidden"
+            >
+              <div className="p-5">
+                <div className="space-y-0">
+                  {PIPELINE_NODES.map((node, index) => {
+                    const status = getNodeStatus(node);
+                    const nodeData = getNodeData(node);
+                    const isExpanded = expandedNodes.has(node.key);
+                    const isLast = index === PIPELINE_NODES.length - 1;
+
+                    return (
+                      <div key={node.key} className="relative">
+                        {/* 连接线 */}
+                        {!isLast && (
+                          <div className="absolute left-5 top-12 w-0.5 h-6 bg-gradient-to-b from-slate-200 to-slate-100" />
+                        )}
+                        
+                        {/* 节点卡片 */}
+                        <PipelineNode
+                          node={node}
+                          status={status}
+                          data={nodeData}
+                          isExpanded={isExpanded}
+                          onToggle={() => toggleNode(node.key)}
+                          copySQL={copySQL}
+                          copiedSql={copiedSql}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* 数据表格 - 独立显示在工具链路之外 */}
+      {dataQuery && dataQuery.rows && dataQuery.rows.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+        >
+          <DataQueryResult dataQuery={dataQuery} />
+        </motion.div>
+      )}
+
+      {/* 智能图表 - 独立显示（如果有 chart_config） */}
+      {dataQuery && dataQuery.chart_config && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+        >
+          <SmartChart dataQuery={dataQuery} />
+        </motion.div>
+      )}
+
+      {/* 推荐问题 - 在最后显示 */}
+      {similarQuestions && similarQuestions.questions && similarQuestions.questions.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+        >
+          <SimilarQuestions 
+            questions={similarQuestions.questions} 
+            onSelectQuestion={onSelectQuestion}
+          />
+        </motion.div>
+      )}
     </div>
   );
 }

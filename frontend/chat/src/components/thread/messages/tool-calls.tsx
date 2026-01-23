@@ -93,7 +93,9 @@ export function ToolCalls({
 /**
  * 工具调用卡片 - 显示调用中状态
  */
-function ToolCallCard({ toolCall }: { toolCall: AIMessage["tool_calls"][0] }) {
+type ToolCallType = NonNullable<AIMessage["tool_calls"]>[number];
+
+function ToolCallCard({ toolCall }: { toolCall: ToolCallType }) {
   const [isExpanded, setIsExpanded] = useState(true);
   const args = toolCall.args as Record<string, any>;
   const hasArgs = Object.keys(args).length > 0;

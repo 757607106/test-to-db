@@ -104,10 +104,17 @@ export function ClarificationInterruptView({
   };
 
   const handleSkip = () => {
+    // 修复 (2026-01-23): 发送明确的跳过信号，而不是空数组
     stream.submit(
       {},
       {
-        command: { resume: [] },
+        command: { 
+          resume: { 
+            skipped: true,
+            session_id: interrupt.session_id,
+            original_query: interrupt.original_query 
+          } 
+        },
         streamMode: ["values", "messages"],
         streamSubgraphs: true,
       } as any
@@ -303,6 +310,8 @@ export function ClarificationInterruptView({
 /**
  * 从 interrupt 对象中提取澄清数据
  * 支持多种包装格式
+ * 
+ * 修复 (2026-01-23): 增加对嵌套 interrupt 格式的支持
  */
 export function extractClarificationData(
   interrupt: unknown
@@ -316,7 +325,7 @@ export function extractClarificationData(
     (obj.type === "clarification" || obj.type === "clarification_request") &&
     Array.isArray(obj.questions)
   ) {
-    return obj as ClarificationInterruptData;
+    return obj as unknown as ClarificationInterruptData;
   }
   
   // 包装在 value 中的格式
@@ -326,23 +335,37 @@ export function extractClarificationData(
       (valueObj.type === "clarification" || valueObj.type === "clarification_request") &&
       Array.isArray(valueObj.questions)
     ) {
-      return valueObj as ClarificationInterruptData;
+      return valueObj as unknown as ClarificationInterruptData;
     }
+  }
+  
+  // 嵌套 interrupt 格式 (LangGraph 某些版本可能使用)
+  if (obj.interrupt && typeof obj.interrupt === "object") {
+    return extractClarificationData(obj.interrupt);
   }
   
   // 数组格式 (取第一个元素)
   if (Array.isArray(interrupt) && interrupt.length > 0) {
     const first = interrupt[0];
     if (first && typeof first === "object") {
+      // 直接检查数组元素
+      const firstObj = first as Record<string, unknown>;
+      if (
+        (firstObj.type === "clarification" || firstObj.type === "clarification_request") &&
+        Array.isArray(firstObj.questions)
+      ) {
+        return firstObj as unknown as ClarificationInterruptData;
+      }
+      
       // 检查数组元素的 value 属性
-      const firstValue = (first as Record<string, unknown>).value;
+      const firstValue = firstObj.value;
       if (firstValue && typeof firstValue === "object") {
         const valueObj = firstValue as Record<string, unknown>;
         if (
           (valueObj.type === "clarification" || valueObj.type === "clarification_request") &&
           Array.isArray(valueObj.questions)
         ) {
-          return valueObj as ClarificationInterruptData;
+          return valueObj as unknown as ClarificationInterruptData;
         }
       }
     }

@@ -111,6 +111,51 @@ const StreamSession = ({
   // 同步跟踪已处理的 SQL 步骤，避免状态更新异步导致的重复添加
   const processedStepsRef = useRef<Set<string>>(new Set());
   
+  // localStorage key 生成函数
+  // 修复 (2026-01-23): 使用更具体的前缀避免与其他应用冲突
+  const STORAGE_PREFIX = "chat-to-db:queryContext:";
+  const getStorageKey = (tid: string) => `${STORAGE_PREFIX}${tid}`;
+  
+  // 保存 queryContext 到 localStorage
+  const saveQueryContextToStorage = useCallback((tid: string | null, ctx: QueryContext) => {
+    if (!tid) return;
+    
+    // 只有在有实际数据时才保存
+    const hasData = ctx.sqlSteps.length > 0 || ctx.dataQuery || ctx.intentAnalysis || ctx.cacheHit;
+    if (hasData) {
+      try {
+        localStorage.setItem(getStorageKey(tid), JSON.stringify(ctx));
+      } catch (e) {
+        console.warn("Failed to save queryContext to localStorage:", e);
+      }
+    }
+  }, []);
+  
+  // 从 localStorage 恢复 queryContext
+  const loadQueryContextFromStorage = useCallback((tid: string | null): QueryContext | null => {
+    if (!tid) return null;
+    
+    try {
+      const stored = localStorage.getItem(getStorageKey(tid));
+      if (stored) {
+        return JSON.parse(stored) as QueryContext;
+      }
+    } catch (e) {
+      console.warn("Failed to load queryContext from localStorage:", e);
+    }
+    return null;
+  }, []);
+  
+  // 清除 localStorage 中的 queryContext
+  const clearQueryContextFromStorage = useCallback((tid: string | null) => {
+    if (!tid) return;
+    try {
+      localStorage.removeItem(getStorageKey(tid));
+    } catch (e) {
+      console.warn("Failed to clear queryContext from localStorage:", e);
+    }
+  }, []);
+  
   // 重置查询上下文
   const resetQueryContext = useCallback(() => {
     setQueryContext(createEmptyQueryContext());
@@ -118,12 +163,32 @@ const StreamSession = ({
     processedStepsRef.current.clear();
   }, []);
   
+  // 页面加载时，尝试从 localStorage 恢复 queryContext
+  useEffect(() => {
+    if (threadId) {
+      const stored = loadQueryContextFromStorage(threadId);
+      if (stored) {
+        setQueryContext(stored);
+        // 恢复已处理步骤的签名，避免后续重复处理
+        stored.sqlSteps.forEach(step => {
+          const signature = `${step.step}-${step.status}-${step.time_ms || 0}`;
+          processedStepsRef.current.add(signature);
+        });
+      }
+    }
+  }, [threadId, loadQueryContextFromStorage]);
+  
+  // 当 queryContext 更新时，保存到 localStorage
+  useEffect(() => {
+    saveQueryContextToStorage(threadId, queryContext);
+  }, [queryContext, threadId, saveQueryContextToStorage]);
+  
   const streamValue = useTypedStream({
     apiUrl,
     apiKey: apiKey ?? undefined,
     assistantId,
     threadId: threadId ?? null,
-    fetchStateHistory: true,
+    fetchStateHistory: true,  // 恢复历史消息，custom 事件通过 localStorage 恢复
     onCustomEvent: (event, options) => {
       // 处理 UI 消息
       if (isUIMessage(event) || isRemoveUIMessage(event)) {
@@ -153,9 +218,11 @@ const StreamSession = ({
             }));
             break;
             
-          case "sql_step":
-            // 使用同步去重标记防止重复处理
-            const stepSignature = `${streamEvent.step}-${streamEvent.status}-${streamEvent.time_ms || 0}`;
+          case "sql_step": {
+            // 使用更完整的签名进行去重，包含结果内容的前缀
+            // 修复 (2026-01-23): 改进签名生成，避免不同结果的事件被错误跳过
+            const resultPrefix = streamEvent.result ? streamEvent.result.substring(0, 50) : '';
+            const stepSignature = `${streamEvent.step}-${streamEvent.status}-${resultPrefix}-${streamEvent.time_ms || 0}`;
             
             // 对所有状态进行去重检查
             if (processedStepsRef.current.has(stepSignature)) {
@@ -192,6 +259,7 @@ const StreamSession = ({
               }
             });
             break;
+          }
             
           case "data_query":
             setQueryContext(prev => ({
@@ -211,7 +279,7 @@ const StreamSession = ({
     },
     onThreadId: (id) => {
       setThreadId(id);
-      // 新对话时重置查询上下文
+      // 新对话时重置查询上下文（新 threadId 意味着新对话）
       resetQueryContext();
       // Refetch threads list when thread ID changes.
       // Wait for some seconds before fetching so we're able to get the new thread that was created.

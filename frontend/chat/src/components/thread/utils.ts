@@ -75,8 +75,8 @@ export function hasSubstantialContent(message: Message): boolean {
   // AI 消息：有文本内容或工具调用
   if (message.type === "ai") {
     const content = getContentString(message.content);
-    const hasToolCalls = "tool_calls" in message && message.tool_calls && message.tool_calls.length > 0;
-    return content.length > 0 || hasToolCalls;
+    const hasToolCalls = "tool_calls" in message && Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+    return content.length > 0 || Boolean(hasToolCalls);
   }
   
   // 工具消息：始终有内容
