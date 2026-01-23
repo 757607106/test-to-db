@@ -20,7 +20,7 @@ import { MessageContentComplex } from "@langchain/core/messages";
 import { Fragment } from "react/jsx-runtime";
 import { isAgentInboxInterruptSchema } from "@/lib/agent-inbox-interrupt";
 import { ThreadView } from "../agent-inbox";
-import { useQueryState, parseAsBoolean } from "nuqs";
+import { useQueryState, parseAsBoolean, parseAsInteger } from "nuqs";
 import { GenericInterruptView } from "./generic-interrupt";
 import { 
   ClarificationInterruptView, 
@@ -156,6 +156,15 @@ export function AssistantMessage({
     "hideToolCalls",
     parseAsBoolean.withDefault(false),
   );
+  
+  // 从 URL 参数获取 connectionId（与 index.tsx 保持一致）
+  const [connectionId] = useQueryState(
+    "connectionId",
+    parseAsInteger.withDefault(0),
+  );
+  
+  // 从 URL 参数获取 threadId
+  const [threadId] = useQueryState("threadId");
 
   const thread = useStreamContext();
   const { queryContext } = thread;
@@ -169,9 +178,7 @@ export function AssistantMessage({
     "analyze_user_query"
   ];
   
-  // 检查当前消息是否包含智能查询相关的工具调用（用于刷新后也能隐藏工具调用）
-  // 对 AI 消息：检查 tool_calls
-  // 对工具结果消息：检查 name 字段
+  // 检查当前消息是否包含智能查询相关的工具调用
   const isSmartQueryToolCall = useMemo(() => {
     if (!message) return false;
     
@@ -189,120 +196,143 @@ export function AssistantMessage({
     return false;
   }, [message]);
   
-  // 检查整个对话中是否有智能查询工具调用（用于决定是否显示 QueryPipeline）
-  const hasSmartQueryInThread = useMemo(() => {
-    const result = messages.some(m => {
-      if (m.type === "ai" && "tool_calls" in m) {
-        const toolCalls = (m as AIMessage).tool_calls || [];
-        return toolCalls.some(tc => SMART_QUERY_TOOLS.includes(tc.name || ""));
-      }
-      return false;
-    });
-    return result;
-  }, [messages, message?.id]);
-  
-  // 从历史消息中重建查询上下文（刷新后使用）
-  const rebuiltQueryContext = useMemo(() => {
-    // 如果已有实时流数据，不需要重建
-    if (queryContext?.intentAnalysis || queryContext?.sqlSteps?.length || queryContext?.dataQuery) {
-      return null;
-    }
-    
-    // 如果对话中没有智能查询，不需要重建
-    if (!hasSmartQueryInThread) {
-      return null;
-    }
-    
-    // 从工具结果消息中提取数据
-    const toolResults: Record<string, string> = {};
-    messages.forEach(m => {
-      if (m.type === "tool" && "name" in m && "content" in m) {
-        const toolMsg = m as ToolMessage;
-        if (SMART_QUERY_TOOLS.includes(toolMsg.name || "")) {
-          const contentStr = typeof toolMsg.content === "string" 
-            ? toolMsg.content 
-            : JSON.stringify(toolMsg.content);
-          toolResults[toolMsg.name || ""] = contentStr;
-        }
-      }
-    });
-    
-    // 尝试解析 execute_sql_query 的结果来重建 dataQuery
-    let dataQuery = null;
-    if (toolResults["execute_sql_query"]) {
-      try {
-        const result = JSON.parse(toolResults["execute_sql_query"]);
-        if (result.columns && result.rows) {
-          dataQuery = {
-            columns: result.columns,
-            rows: result.rows,
-            row_count: result.row_count || result.rows?.length || 0,
-            chart_config: result.chart_config,
-          };
-        }
-      } catch {
-        // 解析失败，忽略
-      }
-    }
-    
-    // 构建简化的历史 sqlSteps
-    const sqlSteps = [];
-    if (toolResults["retrieve_database_schema"]) {
-      sqlSteps.push({
-        step: "schema_mapping",
-        status: "completed" as const,
-        result: toolResults["retrieve_database_schema"],
-        time_ms: 0,
-      });
-    }
-    if (toolResults["generate_sql_query"]) {
-      sqlSteps.push({
-        step: "llm_parse",
-        status: "completed" as const,
-        result: toolResults["generate_sql_query"],
-        time_ms: 0,
-      });
-    }
-    if (toolResults["execute_sql_query"]) {
-      sqlSteps.push({
-        step: "final_sql",
-        status: "completed" as const,
-        result: "历史查询结果",
-        time_ms: 0,
-      });
-    }
-    
-    // 如果没有提取到任何数据，返回 null
-    if (sqlSteps.length === 0 && !dataQuery) {
-      return null;
-    }
-    
-    return {
-      intentAnalysis: toolResults["analyze_user_query"] ? {
-        intent_type: "data_query",
-        original_query: "",
-        parsed_intent: toolResults["analyze_user_query"],
-      } : { intent_type: "data_query", original_query: "", parsed_intent: "历史查询" },
-      sqlSteps,
-      dataQuery,
-    };
-  }, [queryContext, hasSmartQueryInThread, messages]);
-  
-  // 最终使用的查询上下文：优先实时数据，其次历史重建
-  const effectiveQueryContext = queryContext?.intentAnalysis || queryContext?.sqlSteps?.length || queryContext?.dataQuery
-    ? queryContext
-    : rebuiltQueryContext;
-  
-  // 检查是否有智能查询流程数据（用于隐藏原始工具调用显示）
-  // 优先使用 queryContext（实时流），其次检查工具调用类型（刷新后）
-  const hasQueryProcess = useMemo(() => {
-    const hasStreamData = Boolean(
+  // 检查是否有实时流数据
+  const hasStreamData = useMemo(() => {
+    return Boolean(
       queryContext?.intentAnalysis || 
       queryContext?.sqlSteps?.length || 
       queryContext?.dataQuery
     );
-    return hasStreamData || isSmartQueryToolCall;
-  }, [queryContext?.intentAnalysis, queryContext?.sqlSteps?.length, queryContext?.dataQuery, isSmartQueryToolCall]);
+  }, [queryContext?.intentAnalysis, queryContext?.sqlSteps?.length, queryContext?.dataQuery]);
+  
+  // 从历史消息中重建查询上下文（刷新后使用，保持与实时流格式一致）
+  const rebuiltQueryContext = useMemo(() => {
+    // 如果已有实时流数据，不需要重建
+    if (hasStreamData) return null;
+    
+    // 从工具结果消息中提取数据
+    const toolResults: Record<string, any> = {};
+    messages.forEach(m => {
+      if (m.type === "tool" && "name" in m && "content" in m) {
+        const toolMsg = m as ToolMessage;
+        if (SMART_QUERY_TOOLS.includes(toolMsg.name || "")) {
+          try {
+            const content = typeof toolMsg.content === "string" 
+              ? JSON.parse(toolMsg.content) 
+              : toolMsg.content;
+            toolResults[toolMsg.name || ""] = content;
+          } catch {
+            toolResults[toolMsg.name || ""] = toolMsg.content;
+          }
+        }
+      }
+    });
+    
+    // 如果没有工具结果，返回 null
+    if (Object.keys(toolResults).length === 0) return null;
+    
+    // 构建 sqlSteps - 与实时流格式保持一致
+    const sqlSteps: any[] = [];
+    
+    // Schema 映射步骤 - 从 ToolMessage.content.data 格式读取
+    if (toolResults["retrieve_database_schema"]) {
+      const schemaResult = toolResults["retrieve_database_schema"];
+      // ToolMessage 返回格式: { status, data: { table_count, column_count, tables: string[] }, metadata }
+      const data = schemaResult.data || schemaResult;
+      const tableCount = data.table_count || data.tables?.length || 0;
+      const columnCount = data.column_count || 0;
+      const tableNames = data.tables || [];
+      
+      // 构建与实时流一致的 result 格式
+      const schemaDetail = {
+        summary: `获取到 ${tableCount} 个相关表, ${columnCount} 个列`,
+        tables: tableNames.map((item: any) => ({
+          name: typeof item === "string" ? item : (item.name || item.table_name || ""),
+          comment: typeof item === "object" ? (item.comment || "") : "",
+          columns: typeof item === "object" ? (item.columns || []) : []
+        }))
+      };
+      
+      sqlSteps.push({
+        type: "sql_step",
+        step: "schema_mapping",
+        status: "completed",
+        result: JSON.stringify(schemaDetail),
+        time_ms: schemaResult.metadata?.elapsed_ms || 0,
+      });
+    }
+    
+    // SQL 生成步骤
+    if (toolResults["generate_sql_query"]) {
+      const sqlResult = toolResults["generate_sql_query"];
+      // ToolMessage 返回格式: { status, data: { sql, explanation }, metadata }
+      const data = sqlResult.data || sqlResult;
+      const sql = data.sql || data.query || data.sql_query || (typeof sqlResult === "string" ? sqlResult : JSON.stringify(sqlResult));
+      
+      sqlSteps.push({
+        type: "sql_step",
+        step: "llm_parse",
+        status: "completed",
+        result: sql,
+        time_ms: sqlResult.metadata?.elapsed_ms || 0,
+      });
+    }
+    
+    // SQL 执行步骤
+    if (toolResults["execute_sql_query"]) {
+      const execResult = toolResults["execute_sql_query"];
+      // ToolMessage 返回格式: { status, data: { columns, rows, row_count }, metadata }
+      const data = execResult.data || execResult;
+      const rowCount = data.row_count || data.rows?.length || 0;
+      
+      sqlSteps.push({
+        type: "sql_step",
+        step: "final_sql",
+        status: "completed",
+        result: `查询成功，返回 ${rowCount} 条记录`,
+        time_ms: execResult.metadata?.elapsed_ms || 0,
+      });
+    }
+    
+    // 构建 dataQuery
+    let dataQuery = null;
+    if (toolResults["execute_sql_query"]) {
+      const execResult = toolResults["execute_sql_query"];
+      const data = execResult.data || execResult;
+      if (data.columns && data.rows) {
+        dataQuery = {
+          type: "data_query",
+          columns: data.columns,
+          rows: data.rows,
+          row_count: data.row_count || data.rows?.length || 0,
+          chart_config: data.chart_config,
+        };
+      }
+    }
+    
+    // 如果没有任何数据，返回 null
+    if (sqlSteps.length === 0 && !dataQuery) return null;
+    
+    return {
+      intentAnalysis: {
+        type: "intent_analysis",
+        intent_type: "data_query",
+        original_query: "",
+        parsed_intent: "历史查询",
+      },
+      sqlSteps,
+      dataQuery,
+    };
+  }, [hasStreamData, messages]);
+  
+  // 最终使用的查询上下文：优先实时数据，其次历史重建
+  const effectiveQueryContext = hasStreamData ? queryContext : rebuiltQueryContext;
+  
+  // 是否有查询流程数据（实时或重建）
+  const hasQueryProcess = Boolean(effectiveQueryContext);
+  
+  // 始终隐藏智能查询工具调用（用 QueryPipeline 统一替代显示）
+  const shouldHideSmartQueryTools = isSmartQueryToolCall;
   
   // 基础判断
   const isLastMessage = messages.length > 0 && messages[messages.length - 1]?.id === message?.id;
@@ -326,7 +356,7 @@ export function AssistantMessage({
   const hasAnthropicToolCalls = anthropicStreamedToolCalls && anthropicStreamedToolCalls.length > 0;
 
   // 如果隐藏工具调用且是工具结果，或者有智能查询流程且是工具结果，不渲染
-  if (isToolResult && (hideToolCalls || hasQueryProcess)) {
+  if (isToolResult && (hideToolCalls || shouldHideSmartQueryTools)) {
     return null;
   }
 
@@ -350,16 +380,15 @@ export function AssistantMessage({
   return (
     <div className="group mr-auto flex w-full items-start gap-2">
       <div className="flex w-full flex-col gap-3">
-        {/* 统一的智能查询流水线 - 只在最后一条消息显示 */}
-        {/* 条件：isLastMessage && (有流数据 || 整个对话中有智能查询工具调用) */}
-        {isLastMessage && (hasQueryProcess || hasSmartQueryInThread) && (
+        {/* 统一的智能查询流水线 - 实时流和刷新后都显示 */}
+        {isLastMessage && hasQueryProcess && effectiveQueryContext && (
           <QueryPipeline 
-            queryContext={effectiveQueryContext}
+            queryContext={effectiveQueryContext as any}
             onSelectQuestion={(question) => {
-              // 发送推荐的问题
+              // 发送推荐的问题 - 使用 type 而非 role 以符合 LangGraph 消息格式
               thread.submit({
                 messages: [{
-                  role: "human",
+                  type: "human",
                   content: question,
                 }]
               });
@@ -369,7 +398,7 @@ export function AssistantMessage({
 
         {/* 数据可视化图表 - 优先展示在文本之前 */}
         {isLastMessage && effectiveQueryContext?.dataQuery?.chart_config && (
-          <DataChartDisplay dataQuery={effectiveQueryContext.dataQuery} />
+          <DataChartDisplay dataQuery={effectiveQueryContext.dataQuery as any} />
         )}
 
         {/* 文本内容（包含回答、数据洞察、建议） - 在图表之后 */}
@@ -380,21 +409,21 @@ export function AssistantMessage({
         )}
 
         {/* 数据分析组件 - 用于显示单独的分析步骤（如果有） */}
-        {isLastMessage && queryContext?.sqlSteps && (
+        {isLastMessage && effectiveQueryContext?.sqlSteps && (
           <DataAnalysisDisplay 
-            analysisStep={queryContext.sqlSteps.find(s => s.step === "data_analysis")}
+            analysisStep={(effectiveQueryContext.sqlSteps as any[]).find((s: any) => s.step === "data_analysis")}
           />
         )}
 
         {/* 推荐问题 - 在回答后展示 */}
-        {isLastMessage && queryContext?.similarQuestions?.questions && queryContext.similarQuestions.questions.length > 0 && (
+        {isLastMessage && (effectiveQueryContext as any)?.similarQuestions?.questions && (effectiveQueryContext as any).similarQuestions.questions.length > 0 && (
           <RecommendedQuestionsDisplay 
-            questions={queryContext.similarQuestions.questions}
+            questions={(effectiveQueryContext as any).similarQuestions.questions}
             onSelect={(question) => {
-              // 发送推荐的问题
+              // 发送推荐的问题 - 使用 type 而非 role 以符合 LangGraph 消息格式
               thread.submit({
                 messages: [{
-                  role: "human",
+                  type: "human",
                   content: question,
                 }]
               });
@@ -403,7 +432,7 @@ export function AssistantMessage({
         )}
 
         {/* 工具调用显示 - 当有智能查询流程时隐藏 */}
-        {!hideToolCalls && !hasQueryProcess && (hasToolCalls || hasAnthropicToolCalls) && (
+        {!hideToolCalls && !shouldHideSmartQueryTools && (hasToolCalls || hasAnthropicToolCalls) && (
           <ToolCalls 
             toolCalls={hasToolCalls ? (message as AIMessage).tool_calls : anthropicStreamedToolCalls} 
           />
@@ -440,12 +469,13 @@ export function AssistantMessage({
             isAiMessage={true}
             handleRegenerate={() => handleRegenerate(parentCheckpoint)}
             feedbackContext={
-              hasQueryProcess && queryContext?.dataQuery
+              hasQueryProcess && effectiveQueryContext?.dataQuery && connectionId
                 ? {
                     question: contentString,
-                    sql: queryContext.dataQuery.columns ? "SQL executed" : "",
-                    connectionId: thread.values?.connection_id,
-                    threadId: thread.threadId,
+                    // 从 sqlSteps 中提取实际的 SQL
+                    sql: (effectiveQueryContext.sqlSteps as any[])?.find((s: any) => s.step === "llm_parse" || s.step === "final_sql")?.result || "",
+                    connectionId: connectionId,
+                    threadId: threadId || undefined,
                   }
                 : undefined
             }
@@ -457,8 +487,30 @@ export function AssistantMessage({
 }
 
 export function AssistantMessageLoading() {
-  // 简化加载提示：只显示简单的思考动画，不显示具体步骤
-  // 这样可以减少因状态变化导致的闪烁
+  const { queryContext } = useStreamContext();
+  
+  // 检查是否有实时流数据
+  const hasQueryProcess = Boolean(
+    queryContext?.intentAnalysis || 
+    queryContext?.sqlSteps?.length || 
+    queryContext?.dataQuery
+  );
+  
+  // 如果有查询流程数据，显示 QueryPipeline
+  if (hasQueryProcess && queryContext) {
+    return (
+      <div className="mr-auto flex w-full items-start gap-2">
+        <div className="flex w-full flex-col gap-3">
+          <QueryPipeline 
+            queryContext={queryContext}
+            onSelectQuestion={() => {}}
+          />
+        </div>
+      </div>
+    );
+  }
+  
+  // 没有查询流程数据，显示简单的加载动画
   return (
     <div className="mr-auto flex items-start gap-2">
       <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 flex h-auto items-center gap-3 rounded-xl px-4 py-2.5 shadow-sm">

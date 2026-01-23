@@ -25,7 +25,8 @@ const api = axios.create({
 });
 
 // 数据库连接相关API
-export const getConnections = () => api.get<DBConnection[]>('/connections');
+// 注意: 统一使用尾部斜杠以匹配 FastAPI 默认行为
+export const getConnections = () => api.get<DBConnection[]>('/connections/');
 
 // 智能体配置类型定义
 export interface AgentProfile {
