@@ -38,11 +38,41 @@ export interface IntentAnalysisEvent {
 
 /**
  * SQL生成步骤事件 - 展示SQL生成的各个步骤
+ * 
+ * 与后端 Hub-and-Spoke 架构节点对齐:
+ * - schema_agent: Schema 分析
+ * - clarification: 需求澄清 (支持 interrupt)
+ * - sql_generator: SQL 生成
+ * - sql_executor: SQL 执行
+ * - data_analyst: 数据分析
+ * - chart_generator: 图表生成
+ * - error_recovery: 错误恢复
+ * - general_chat: 闲聊处理
+ * 
+ * 兼容旧版节点名称:
+ * - schema_mapping, few_shot, llm_parse, sql_fix, final_sql, data_analysis, chart_generation
  */
 export interface SQLStepEvent {
   type: "sql_step";
-  step: "schema_mapping" | "few_shot" | "llm_parse" | "sql_fix" | "final_sql" | "data_analysis" | "chart_generation";
-  status: "pending" | "running" | "completed" | "error";
+  step: 
+    // 新版 Hub-and-Spoke 节点
+    | "schema_agent"
+    | "clarification"
+    | "sql_generator"
+    | "sql_executor"
+    | "data_analyst"
+    | "chart_generator"
+    | "error_recovery"
+    | "general_chat"
+    // 兼容旧版节点名称
+    | "schema_mapping"
+    | "few_shot"
+    | "llm_parse"
+    | "sql_fix"
+    | "final_sql"
+    | "data_analysis"
+    | "chart_generation";
+  status: "pending" | "running" | "completed" | "error" | "skipped";
   result?: string;       // 步骤结果
   time_ms: number;       // 耗时(毫秒)
 }
@@ -133,9 +163,19 @@ export const CACHE_HIT_LABELS: Record<string, string> = {
 };
 
 /**
- * SQL步骤标签映射
+ * SQL步骤标签映射 - 包含新旧节点名称
  */
 export const SQL_STEP_LABELS: Record<string, string> = {
+  // 新版 Hub-and-Spoke 节点
+  schema_agent: "Schema 分析",
+  clarification: "需求澄清",
+  sql_generator: "SQL 生成",
+  sql_executor: "SQL 执行",
+  data_analyst: "数据分析",
+  chart_generator: "图表生成",
+  error_recovery: "错误恢复",
+  general_chat: "闲聊处理",
+  // 兼容旧版节点名称
   schema_mapping: "Schema映射",
   few_shot: "Few-shot示例",
   llm_parse: "LLM解析S2SQL",

@@ -12,7 +12,6 @@ import { HumanMessage } from "./messages/human";
 import {
   DO_NOT_RENDER_ID_PREFIX,
   ensureToolCallsHaveResponses,
-  isPlaceholderMessage,
 } from "@/lib/ensure-tool-responses";
 import { LangGraphLogoSVG } from "../icons/langgraph";
 import { TooltipIconButton } from "./tooltip-icon-button";
@@ -49,7 +48,6 @@ import {
 } from "./artifact";
 import { DatabaseConnectionSelector } from "@/components/database-connection-selector";
 import { AgentSelector } from "@/components/ui/agent-selector";
-import QueryPipeline from "./messages/QueryPipeline";
 
 function StickyToBottomContent(props: {
   content: ReactNode;
@@ -156,8 +154,8 @@ export function Thread() {
   // 官方实现：直接使用 stream.messages，不做复杂的去重处理
   const messages = stream.messages;
   const isLoading = stream.isLoading;
-  // 查询上下文 - 用于独立渲染 QueryPipeline
-  const { queryContext } = stream;
+  // 查询上下文 - 用于独立渲染 QueryPipeline (由 ai.tsx 使用)
+  const { queryContext: _queryContext } = stream;
 
   const lastError = useRef<string | undefined>(undefined);
 
@@ -268,10 +266,13 @@ export function Thread() {
     stream.submit(
       {
         messages: [...toolMessages, newHumanMessage],
+        // 直接传递 connection_id 和 agent_id 到 state 根级别
+        connection_id: selectedConnectionId || undefined,
+        agent_id: selectedAgentId || undefined,
         context: Object.keys(context).length > 0 ? context : undefined,
       } as any,
       {
-        streamMode: ["values", "messages", "custom"],  // ✅ 支持实时工具调用和自定义事件（QueryPipeline）
+        streamMode: ["values"],  // 只使用 values 模式，避免内部 LLM 调用的 JSON 响应泄漏
         streamSubgraphs: true,
         streamResumable: true,
         optimisticValues: (prev: StateType) => ({
@@ -298,7 +299,7 @@ export function Thread() {
     setFirstTokenReceived(false);
     stream.submit(undefined, {
       checkpoint: parentCheckpoint,
-      streamMode: ["values", "messages", "custom"],  // ✅ 支持实时工具调用和自定义事件
+      streamMode: ["values"],  // 只使用 values 模式
       streamSubgraphs: true,
       streamResumable: true,
     } as any);
@@ -453,59 +454,25 @@ export function Thread() {
               contentClassName="pt-8 pb-16  max-w-3xl mx-auto flex flex-col gap-4 w-full"
               content={
                 <>
-                  {/* 消息渲染 - 遵循 LangGraph SDK 标准 */}
-                  {(() => {
-                    const filteredMessages = messages.filter((m) => !isPlaceholderMessage(m));
-                    const hasQueryContext = queryContext && (queryContext.sqlSteps.length > 0 || queryContext.dataQuery || queryContext.intentAnalysis);
-                    
-                    // 找到最后一条有内容的 AI 消息的索引（用于在其之前插入 QueryPipeline）
-                    // 正确顺序: 用户消息 -> QueryPipeline(工具+图表) -> AI消息 -> 推荐问题
-                    let lastAIMessageIndex = -1;
-                    for (let i = filteredMessages.length - 1; i >= 0; i--) {
-                      if (filteredMessages[i].type === "ai") {
-                        const content = filteredMessages[i].content;
-                        const contentStr = typeof content === "string" ? content : 
-                          (Array.isArray(content) ? content.map((c: any) => c.text || "").join("") : "");
-                        if (contentStr.trim().length > 0) {
-                          lastAIMessageIndex = i;
-                          break;
-                        }
-                      }
-                    }
-                    
-                    return filteredMessages.map((message, index) => {
-                      const elements: React.ReactNode[] = [];
-                      
-                      // 在最后一条有内容的 AI 消息之前插入 QueryPipeline
-                      if (hasQueryContext && index === lastAIMessageIndex) {
-                        elements.push(
-                          <QueryPipeline key="query-pipeline" queryContext={queryContext} />
-                        );
-                      }
-                      
-                      // 渲染消息本身
-                      if (message.type === "human") {
-                        elements.push(
-                          <HumanMessage
-                            key={message.id || `human-${index}`}
-                            message={message}
-                            isLoading={isLoading}
-                          />
-                        );
-                      } else {
-                        elements.push(
-                          <AssistantMessage
-                            key={message.id || `assistant-${index}`}
-                            message={message}
-                            isLoading={isLoading}
-                            handleRegenerate={handleRegenerate}
-                          />
-                        );
-                      }
-                      
-                      return elements;
-                    });
-                  })()}
+                  {messages
+                    .filter((m) => !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX))
+                    .map((message, index) =>
+                      message.type === "human" ? (
+                        <HumanMessage
+                          key={message.id || `${message.type}-${index}`}
+                          message={message}
+                          isLoading={isLoading}
+                        />
+                      ) : (
+                        <AssistantMessage
+                          key={message.id || `${message.type}-${index}`}
+                          message={message}
+                          isLoading={isLoading}
+                          handleRegenerate={handleRegenerate}
+                          connectionId={selectedConnectionId || undefined}
+                        />
+                      ),
+                    )}
                   {/* Special rendering case where there are no AI/tool messages, but there is an interrupt.
                     We need to render it outside of the messages list, since there are no messages to render */}
                   {hasNoAIOrToolMessages && !!stream.interrupt && (
@@ -514,19 +481,11 @@ export function Thread() {
                       message={undefined}
                       isLoading={isLoading}
                       handleRegenerate={handleRegenerate}
+                      connectionId={selectedConnectionId || undefined}
                     />
                   )}
                   {isLoading && !firstTokenReceived && (
                     <AssistantMessageLoading />
-                  )}
-                  
-                  {/* 如果没有 AI 消息但有 queryContext，单独显示 QueryPipeline */}
-                  {queryContext && (queryContext.sqlSteps.length > 0 || queryContext.dataQuery || queryContext.intentAnalysis) && 
-                   !messages.filter((m) => !isPlaceholderMessage(m)).some(m => m.type === "ai" && 
-                     (typeof m.content === "string" ? m.content : 
-                      (Array.isArray(m.content) ? m.content.map((c: any) => c.text || "").join("") : "")).trim().length > 0
-                   ) && (
-                    <QueryPipeline queryContext={queryContext} />
                   )}
                 </>
               }

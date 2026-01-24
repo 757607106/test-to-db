@@ -6,7 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
-import { FC, memo, useState } from "react";
+import { FC, memo, useState, useEffect, useRef } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { SyntaxHighlighter } from "@/components/thread/syntax-highlighter";
 
@@ -14,6 +14,56 @@ import { TooltipIconButton } from "@/components/thread/tooltip-icon-button";
 import { cn } from "@/lib/utils";
 
 import "katex/dist/katex.min.css";
+
+// 打字机效果 Hook
+const useTypewriter = (text: string, speed: number = 5) => {
+  const [displayedText, setDisplayedText] = useState("");
+  const [isTyping, setIsTyping] = useState(false);
+  
+  // 引用保持最新的 text，避免 effect 闭包问题
+  const textRef = useRef(text);
+  const displayedRef = useRef("");
+  
+  useEffect(() => {
+    textRef.current = text;
+    setIsTyping(true);
+    
+    // 如果文本缩短了（比如重置），直接重置
+    if (text.length < displayedRef.current.length) {
+      displayedRef.current = text;
+      setDisplayedText(text);
+      return;
+    }
+    
+    // 如果已经显示完了，不需要定时器
+    if (displayedRef.current.length === text.length) {
+      setIsTyping(false);
+      return;
+    }
+
+    const timer = setInterval(() => {
+      const current = displayedRef.current;
+      const target = textRef.current;
+      
+      if (current.length < target.length) {
+        // 每次增加的字符数，根据剩余长度动态调整，避免长文本卡顿
+        const remaining = target.length - current.length;
+        const step = Math.max(1, Math.ceil(remaining / 20)); // 动态步长
+        
+        const next = target.slice(0, current.length + step);
+        displayedRef.current = next;
+        setDisplayedText(next);
+      } else {
+        setIsTyping(false);
+        clearInterval(timer);
+      }
+    }, speed);
+
+    return () => clearInterval(timer);
+  }, [text, speed]);
+
+  return { displayedText, isTyping };
+};
 
 interface CodeHeaderProps {
   language?: string;
@@ -260,17 +310,35 @@ const defaultComponents: any = {
 };
 
 const MarkdownTextImpl: FC<{ children: string }> = ({ children }) => {
+  // 如果内容是 JSON，则不使用打字机效果，直接渲染
+  // 简单的 JSON 检测：以 { 或 [ 开头，以 } 或 ] 结尾
+  const isJson = (children.trim().startsWith('{') && children.trim().endsWith('}')) || 
+                 (children.trim().startsWith('[') && children.trim().endsWith(']'));
+  
+  // 如果是 JSON，或者内容很短（可能是加载中），或者内容很长（历史消息），可以考虑跳过打字机
+  // 这里主要解决 JSON 逐字显示的问题
+  const shouldSkipTypewriter = isJson;
+
+  const { displayedText, isTyping } = useTypewriter(children, 10);
+  
+  const textToRender = shouldSkipTypewriter ? children : displayedText;
+  const showCursor = !shouldSkipTypewriter && isTyping;
+  
   return (
-    <div className="markdown-content">
+    <div className="markdown-content relative">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
         components={defaultComponents}
       >
-        {children}
+        {textToRender}
       </ReactMarkdown>
+      {showCursor && (
+         <span className="inline-block w-2 h-4 bg-blue-500 animate-pulse ml-1 align-middle" />
+      )}
     </div>
   );
 };
 
 export const MarkdownText = memo(MarkdownTextImpl);
+

@@ -521,10 +521,10 @@ def should_skip_clarification(query: str) -> bool:
     # 1. 短查询的特殊处理
     # ============================================
     if query_len < 8:
-        # 非常短的查询，检查是否是明确的简单命令
-        simple_commands = ['查询', '统计', '显示', '列出', '获取']
-        if any(query.startswith(cmd) for cmd in simple_commands):
-            # 如 "查询用户" - 太短且模糊，需要澄清
+        # 非常短的查询，检查是否是数据查询意图
+        query_intent_words = ['查询', '统计', '显示', '列出', '获取', '查一下', '查看', '找', '搜', '数据']
+        if any(word in query for word in query_intent_words):
+            # 如 "查一下数据" - 太短且模糊，需要澄清
             return False
         # 如 "你好" - 可能是闲聊，跳过澄清
         return True

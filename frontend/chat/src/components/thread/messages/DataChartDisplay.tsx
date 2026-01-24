@@ -3,13 +3,12 @@
  * 
  * 智能匹配合适的图表类型，支持最多5种图表
  */
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   BarChart2,
   LineChart as LineChartIcon,
   PieChart as PieChartIcon,
-  Table2,
   ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -29,6 +28,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import type { QueryContext } from "@/types/stream-events";
+import { transformQueryData } from "../utils";
 
 // 图表颜色配置
 const CHART_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
@@ -41,24 +41,18 @@ export function DataChartDisplay({ dataQuery }: DataChartDisplayProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const [selectedChartIndex, setSelectedChartIndex] = useState(0);
 
+  // 使用统一的数据转换函数 - 必须在所有 early return 之前调用
+  const tableData = useMemo(() => {
+    if (!dataQuery?.columns || !dataQuery?.rows) return [];
+    return transformQueryData(dataQuery.columns, dataQuery.rows);
+  }, [dataQuery?.columns, dataQuery?.rows]);
+
   if (!dataQuery || !dataQuery.chart_config) return null;
 
   const { columns, rows, chart_config } = dataQuery;
   const hasData = rows && rows.length > 0;
 
   if (!hasData) return null;
-
-  // 转换数据格式
-  const tableData = rows.map(row => {
-    if (Array.isArray(row)) {
-      const obj: Record<string, any> = {};
-      columns.forEach((col, i) => {
-        obj[col] = row[i];
-      });
-      return obj;
-    }
-    return row;
-  });
 
   // 生成多个图表配置（最多5个）
   const chartConfigs = generateChartConfigs(tableData, columns, chart_config);
@@ -67,26 +61,24 @@ export function DataChartDisplay({ dataQuery }: DataChartDisplayProps) {
   if (chartConfigs.length === 0) return null;
 
   return (
-    <div className="mt-4 rounded-xl border border-blue-200 bg-gradient-to-b from-blue-50/50 to-white overflow-hidden shadow-sm">
+    <div className="mt-4 rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-blue-50/50 transition-colors"
+        className="w-full flex items-center justify-between px-4 py-3 bg-gradient-to-r from-emerald-50 to-teal-50 border-b border-slate-200 hover:bg-emerald-50/80 transition-colors"
       >
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-gradient-to-br from-blue-100 to-indigo-100 shadow-sm">
-            <BarChart2 className="h-4 w-4 text-blue-600" />
-          </div>
-          <div className="flex flex-col items-start">
-            <span className="font-semibold text-sm text-blue-800">数据可视化</span>
-            <span className="text-xs text-blue-500">{chartConfigs.length} 个图表</span>
-          </div>
+        <div className="flex items-center gap-2">
+          <BarChart2 className="h-4 w-4 text-emerald-600" />
+          <span className="font-medium text-sm text-slate-700">数据可视化</span>
+          <span className="text-xs px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">
+            {chartConfigs.length} 个图表
+          </span>
         </div>
 
         <motion.div
           animate={{ rotate: isExpanded ? 180 : 0 }}
           transition={{ duration: 0.2 }}
         >
-          <ChevronDown className="h-4 w-4 text-blue-500" />
+          <ChevronDown className="h-4 w-4 text-slate-400" />
         </motion.div>
       </button>
 
@@ -109,8 +101,8 @@ export function DataChartDisplay({ dataQuery }: DataChartDisplayProps) {
                       className={cn(
                         "flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all whitespace-nowrap",
                         selectedChartIndex === index
-                          ? "bg-blue-600 text-white shadow-md"
-                          : "bg-white text-slate-600 border border-slate-200 hover:border-blue-300 hover:bg-blue-50"
+                          ? "bg-emerald-600 text-white shadow-md"
+                          : "bg-white text-slate-600 border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50"
                       )}
                     >
                       {getChartIcon(config.type)}
@@ -226,7 +218,6 @@ function ChartRenderer({ data, config }: { data: Record<string, any>[]; config?:
   }
 
   const ChartComponent = config.type === "line" ? LineChart : BarChart;
-  const DataComponent = config.type === "line" ? Line : Bar;
 
   return (
     <ResponsiveContainer width="100%" height={320}>

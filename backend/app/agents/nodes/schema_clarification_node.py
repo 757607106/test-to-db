@@ -207,7 +207,8 @@ async def analyze_schema_clarification(
     )
     
     try:
-        response = await llm.ainvoke(prompt)
+        from langchain_core.messages import HumanMessage
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
         content = response.content
         
         # 提取 JSON
@@ -270,6 +271,14 @@ def process_user_clarification_response(
     
     # 提取用户选择
     answers = user_response.get("answers", {})
+    
+    # 将列表格式转换为字典格式 (兼容前端提交的结构化数据)
+    if isinstance(answers, list):
+        answers_dict = {}
+        for item in answers:
+            if isinstance(item, dict) and "question_id" in item and "answer" in item:
+                answers_dict[item["question_id"]] = item["answer"]
+        answers = answers_dict
     
     for amb in ambiguities:
         amb_type = amb.get("type", "")

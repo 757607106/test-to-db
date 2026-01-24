@@ -1,58 +1,56 @@
 """
-智能 SQL 代理图 - Hub-and-Spoke 架构版本
+Hub-and-Spoke 图结构实现
 
 遵循 LangGraph 官方 Supervisor 模式:
-1. Supervisor 作为中心枢纽
-2. 所有 Worker Agent 向 Supervisor 报告
-3. Supervisor 统一决策和汇总
-
-架构说明:
-- 使用 LangGraph 的 StateGraph 管理整体流程
-- Supervisor 是唯一入口和决策中心
-- Worker Agents: schema_agent, sql_generator, sql_executor, data_analyst, chart_generator
-- 支持澄清机制 (interrupt)
-- 支持三级缓存
+- Supervisor 是唯一入口和中心
+- 所有 Worker Agent 执行完都返回 Supervisor  
+- Supervisor 统一路由和汇总
 
 图结构:
-    START → supervisor → [Worker Agents] → supervisor → ... → FINISH
-    
-重构历史:
-- 2026-01-24: 从 Pipeline 架构重构为 Hub-and-Spoke 架构
+                    ┌────────────────────────────┐
+                    │        SUPERVISOR          │
+                    │     (中心枢纽节点)          │
+                    └────────────┬───────────────┘
+                                 │
+         ┌───────────┬───────────┼───────────┬───────────┐
+         │           │           │           │           │
+         ▼           ▼           ▼           ▼           ▼
+    ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐
+    │ schema  │ │ sql_gen │ │executor │ │ analyst │ │  chart  │
+    │  agent  │ │  agent  │ │  agent  │ │  agent  │ │  agent  │
+    └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘
+         │           │           │           │           │
+         └───────────┴───────────┴───────────┴───────────┘
+                                 │
+                                 ▼
+                         (返回 Supervisor)
 """
-from typing import Dict, Any, List, Optional, Literal
+
+from typing import Dict, Any, Literal
 import logging
 import time
 
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.types import interrupt
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 
 from app.core.state import SQLMessageState
-from app.models.agent_profile import AgentProfile
+from .true_supervisor import get_supervisor, TrueSupervisor
 
 logger = logging.getLogger(__name__)
 
-# 全局默认 checkpointer
-_default_checkpointer = None
-
-
-def _get_default_checkpointer():
-    """获取默认的内存 checkpointer"""
-    global _default_checkpointer
-    if _default_checkpointer is None:
-        _default_checkpointer = InMemorySaver()
-        logger.info("✓ 初始化默认内存 Checkpointer")
-    return _default_checkpointer
-
 
 # ============================================================================
-# Worker Agent 节点
+# Worker Agent 节点包装器
 # ============================================================================
 
 async def schema_agent_node(state: SQLMessageState) -> Dict[str, Any]:
-    """Schema Agent 节点"""
+    """
+    Schema Agent 节点
+    
+    执行完成后更新 current_stage，供 Supervisor 决策
+    """
     logger.info("[Worker] schema_agent 开始执行")
     start_time = time.time()
     
@@ -63,7 +61,10 @@ async def schema_agent_node(state: SQLMessageState) -> Dict[str, Any]:
         elapsed = time.time() - start_time
         logger.info(f"[Worker] schema_agent 完成, 耗时 {elapsed:.2f}s")
         
+        # 更新阶段供 Supervisor 决策
         result["current_stage"] = "schema_done"
+        result["agent_response"] = f"已获取数据库结构信息"
+        
         return result
         
     except Exception as e:
@@ -91,13 +92,14 @@ async def sql_generator_node(state: SQLMessageState) -> Dict[str, Any]:
         logger.info(f"[Worker] sql_generator 完成, 耗时 {elapsed:.2f}s")
         
         result["current_stage"] = "sql_generated"
+        result["agent_response"] = f"已生成 SQL: {result.get('generated_sql', '')[:50]}..."
+        
         return result
         
     except Exception as e:
         logger.error(f"[Worker] sql_generator 失败: {e}")
         return {
             "current_stage": "error_recovery",
-            "retry_count": state.get("retry_count", 0) + 1,
             "error_history": state.get("error_history", []) + [{
                 "stage": "sql_generation",
                 "error": str(e),
@@ -123,6 +125,7 @@ async def sql_executor_node(state: SQLMessageState) -> Dict[str, Any]:
         if exec_result:
             success = getattr(exec_result, 'success', True) if hasattr(exec_result, 'success') else exec_result.get('success', True)
             if not success:
+                # 执行失败，增加重试计数
                 retry_count = state.get("retry_count", 0) + 1
                 result["current_stage"] = "error_recovery"
                 result["retry_count"] = retry_count
@@ -132,16 +135,20 @@ async def sql_executor_node(state: SQLMessageState) -> Dict[str, Any]:
                     "error": error_msg,
                     "timestamp": time.time()
                 }]
+                logger.info(f"[Worker] sql_executor 执行失败, retry_count={retry_count}")
                 return result
         
         result["current_stage"] = "execution_done"
+        result["agent_response"] = "SQL 执行成功"
+        
         return result
         
     except Exception as e:
         logger.error(f"[Worker] sql_executor 失败: {e}")
+        retry_count = state.get("retry_count", 0) + 1
         return {
             "current_stage": "error_recovery",
-            "retry_count": state.get("retry_count", 0) + 1,
+            "retry_count": retry_count,
             "error_history": state.get("error_history", []) + [{
                 "stage": "sql_execution",
                 "error": str(e),
@@ -156,6 +163,7 @@ async def data_analyst_node(state: SQLMessageState) -> Dict[str, Any]:
     start_time = time.time()
     
     try:
+        # 检查是否有自定义 agent
         agent_id = state.get("agent_id")
         if agent_id:
             from app.agents.agents.supervisor_subgraph import _load_custom_agent_by_id
@@ -170,28 +178,23 @@ async def data_analyst_node(state: SQLMessageState) -> Dict[str, Any]:
             result = await data_analyst_agent.process(state)
         
         elapsed = time.time() - start_time
-        elapsed_ms = int(elapsed * 1000)
         logger.info(f"[Worker] data_analyst 完成, 耗时 {elapsed:.2f}s")
         
         result["current_stage"] = "analysis_done"
-        
-        # 将分析结果打包为 sql_step 事件格式，便于前端显示
-        analyst_insights = result.get("analyst_insights", {})
-        analysis_content = analyst_insights.get("summary", "")
-        if analysis_content:
-            result["data_analysis_event"] = {
-                "type": "sql_step",
-                "step": "data_analysis",
-                "status": "completed",
-                "result": analysis_content,
-                "time_ms": elapsed_ms
-            }
+        result["agent_response"] = "数据分析完成"
         
         return result
         
     except Exception as e:
         logger.error(f"[Worker] data_analyst 失败: {e}")
-        return {"current_stage": "analysis_done"}
+        return {
+            "current_stage": "error_recovery",
+            "error_history": state.get("error_history", []) + [{
+                "stage": "analysis",
+                "error": str(e),
+                "timestamp": time.time()
+            }]
+        }
 
 
 async def chart_generator_node(state: SQLMessageState) -> Dict[str, Any]:
@@ -207,11 +210,17 @@ async def chart_generator_node(state: SQLMessageState) -> Dict[str, Any]:
         logger.info(f"[Worker] chart_generator 完成, 耗时 {elapsed:.2f}s")
         
         result["current_stage"] = "chart_done"
+        result["agent_response"] = "图表生成完成"
+        
         return result
         
     except Exception as e:
         logger.error(f"[Worker] chart_generator 失败: {e}")
-        return {"current_stage": "chart_done", "chart_config": None}
+        # 图表生成失败不阻塞流程
+        return {
+            "current_stage": "chart_done",
+            "chart_config": None
+        }
 
 
 async def error_recovery_node(state: SQLMessageState) -> Dict[str, Any]:
@@ -221,8 +230,10 @@ async def error_recovery_node(state: SQLMessageState) -> Dict[str, Any]:
     try:
         from app.agents.agents.error_recovery_agent import error_recovery_agent
         result = await error_recovery_agent.process(state)
+        
         logger.info("[Worker] error_recovery 完成")
         return result
+        
     except Exception as e:
         logger.error(f"[Worker] error_recovery 失败: {e}")
         return {
@@ -232,7 +243,7 @@ async def error_recovery_node(state: SQLMessageState) -> Dict[str, Any]:
 
 
 async def general_chat_node(state: SQLMessageState) -> Dict[str, Any]:
-    """General Chat 节点"""
+    """General Chat 节点 (闲聊)"""
     logger.info("[Worker] general_chat 开始执行")
     
     from app.core.llms import get_default_model
@@ -257,35 +268,6 @@ async def general_chat_node(state: SQLMessageState) -> Dict[str, Any]:
     }
 
 
-async def clarification_node_wrapper(state: SQLMessageState) -> Dict[str, Any]:
-    """
-    澄清节点包装器
-    
-    使用现有的 clarification_node 实现，支持 interrupt
-    """
-    logger.info("[Worker] clarification 开始执行")
-    
-    try:
-        from app.agents.nodes.clarification_node import clarification_node
-        
-        # 调用现有实现
-        result = clarification_node(state)
-        
-        # 如果触发了 interrupt，LangGraph 会自动处理
-        # 这里只需要更新阶段
-        if result.get("current_stage") != "schema_analysis":
-            result["current_stage"] = "clarification_done"
-        
-        return result
-        
-    except Exception as e:
-        # interrupt 会抛出特殊异常，需要重新抛出
-        if "interrupt" in str(type(e).__name__).lower():
-            raise
-        logger.error(f"[Worker] clarification 失败: {e}")
-        return {"current_stage": "clarification_done"}
-
-
 # ============================================================================
 # Supervisor 节点
 # ============================================================================
@@ -294,70 +276,13 @@ async def supervisor_node(state: SQLMessageState) -> Dict[str, Any]:
     """
     Supervisor 中心节点
     
-    职责:
-    - 汇总各 Agent 的执行结果
-    - 构造统一的 final_response
+    在 Hub-and-Spoke 架构中:
+    - 这是入口节点
+    - 每个 Worker 执行完都会回到这里
+    - 负责决策和汇总
     """
-    current_stage = state.get("current_stage", "init")
-    
-    # 如果已完成，构造最终响应
-    if current_stage in ["completed", "chart_done"]:
-        return _aggregate_results(state)
-    
-    # 分析完成且跳过图表
-    if current_stage == "analysis_done" and state.get("skip_chart_generation", False):
-        return _aggregate_results(state)
-    
-    return {}
-
-
-def _aggregate_results(state: SQLMessageState) -> Dict[str, Any]:
-    """汇总所有执行结果"""
-    execution_result = state.get("execution_result")
-    data = None
-    if execution_result:
-        if hasattr(execution_result, 'data'):
-            data = execution_result.data
-        elif isinstance(execution_result, dict):
-            data = execution_result.get("data")
-    
-    final_response = {
-        "success": state.get("current_stage") not in ["error_recovery", "error"],
-        "query": state.get("enriched_query") or state.get("original_query"),
-        "sql": state.get("generated_sql"),
-        "data": data,
-        "analysis": state.get("analyst_insights"),
-        "chart": state.get("chart_config"),
-        "recommendations": state.get("recommended_questions", []),
-        "source": _determine_source(state),
-        "metadata": {
-            "connection_id": state.get("connection_id"),
-            "cache_hit_type": state.get("cache_hit_type"),
-            "fast_mode": state.get("fast_mode", False),
-            "retry_count": state.get("retry_count", 0)
-        }
-    }
-    
-    if not final_response["success"]:
-        error_history = state.get("error_history", [])
-        if error_history:
-            final_response["error"] = error_history[-1].get("error", "Unknown error")
-    
-    logger.info("[Supervisor] 结果汇总完成")
-    
-    return {
-        "final_response": final_response,
-        "current_stage": "completed"
-    }
-
-
-def _determine_source(state: SQLMessageState) -> str:
-    """确定结果来源"""
-    if state.get("thread_history_hit"):
-        return "thread_history_cache"
-    if state.get("cache_hit"):
-        return f"{state.get('cache_hit_type', 'exact')}_cache"
-    return "generated"
+    supervisor = get_supervisor()
+    return await supervisor.supervisor_node(state)
 
 
 # ============================================================================
@@ -365,37 +290,37 @@ def _determine_source(state: SQLMessageState) -> str:
 # ============================================================================
 
 def supervisor_route(state: SQLMessageState) -> str:
-    """Supervisor 路由决策"""
+    """
+    Supervisor 路由函数 (同步版本)
+    
+    决定下一步调用哪个 Agent
+    
+    注意: LangGraph 条件边需要同步函数，所以路由逻辑直接实现在这里
+    """
+    supervisor = get_supervisor()
+    
     current_stage = state.get("current_stage", "init")
     logger.info(f"[Route] 当前阶段: {current_stage}")
     
-    # 0. 优先检查完成状态
+    # 0. 优先检查完成状态 (防止无限循环)
     if current_stage in ["completed", "chart_done"]:
         logger.info("[Route] 已完成 → FINISH")
         return "FINISH"
     
-    # 1. 检查闲聊 (仅在初始阶段)
+    # 1. 检查是否闲聊 (仅在初始阶段)
     if current_stage == "init":
         route_decision = state.get("route_decision")
         if route_decision == "general_chat":
+            logger.info("[Route] → general_chat")
             return "general_chat"
         
+        # 简单关键词检测闲聊
         messages = state.get("messages", [])
         if messages:
             last_msg = messages[-1]
-            # 处理不同类型的消息格式
-            if hasattr(last_msg, 'content'):
-                content = last_msg.content
-            elif isinstance(last_msg, dict):
-                content = last_msg.get('content', '')
-            else:
-                content = str(last_msg)
-            # 确保 content 是字符串
-            if isinstance(content, list):
-                content = ' '.join(str(c) for c in content)
-            content = str(content) if content else ''
+            content = last_msg.content if hasattr(last_msg, 'content') else str(last_msg)
             chat_keywords = ["你好", "谢谢", "帮助", "你是谁", "hello", "hi", "thanks"]
-            if content and any(kw in content.lower() for kw in chat_keywords):
+            if any(kw in content.lower() for kw in chat_keywords):
                 logger.info("[Route] 检测到闲聊 → general_chat")
                 return "general_chat"
     
@@ -409,20 +334,25 @@ def supervisor_route(state: SQLMessageState) -> str:
         retry_count = state.get("retry_count", 0)
         max_retries = state.get("max_retries", 3)
         if retry_count >= max_retries:
-            logger.info(f"[Route] 达到重试上限 ({retry_count}/{max_retries}) → FINISH")
+            logger.info("[Route] 达到重试上限 → FINISH")
             return "FINISH"
-        logger.info(f"[Route] 错误恢复 ({retry_count}/{max_retries}) → sql_generator")
+        logger.info("[Route] 错误恢复 → sql_generator")
         return "sql_generator"
     
     # 4. 基于阶段路由
     stage_routes = {
         "init": "schema_agent",
-        "schema_done": "clarification",  # Schema完成后先检查澄清
-        "clarification_done": "sql_generator",
-        "schema_analysis": "sql_generator",  # 兼容现有阶段名
+        "schema_done": "sql_generator",
         "sql_generated": "sql_executor",
         "execution_done": "data_analyst",
         "analysis_done": "chart_generator" if not state.get("skip_chart_generation") else "FINISH",
+        
+        # 兼容现有阶段名称
+        "schema_analysis": "schema_agent",
+        "sql_generation": "sql_generator",
+        "sql_execution": "sql_executor",
+        "analysis": "data_analyst",
+        "chart_generation": "chart_generator",
     }
     
     next_agent = stage_routes.get(current_stage, "FINISH")
@@ -435,13 +365,29 @@ def supervisor_route(state: SQLMessageState) -> str:
 # ============================================================================
 
 def create_hub_spoke_graph(checkpointer=None) -> CompiledStateGraph:
-    """创建 Hub-and-Spoke 架构的图"""
+    """
+    创建 Hub-and-Spoke 架构的图
+    
+    核心特点:
+    - Supervisor 是唯一入口
+    - 所有 Worker 执行完返回 Supervisor
+    - Supervisor 决定下一步或结束
+    
+    Args:
+        checkpointer: 可选的 checkpointer (用于 interrupt 支持)
+        
+    Returns:
+        编译后的 LangGraph 图
+    """
     logger.info("创建 Hub-and-Spoke 图...")
     
     graph = StateGraph(SQLMessageState)
     
-    # 添加节点
+    # ========== 添加节点 ==========
+    # 中心节点
     graph.add_node("supervisor", supervisor_node)
+    
+    # Worker 节点
     graph.add_node("schema_agent", schema_agent_node)
     graph.add_node("sql_generator", sql_generator_node)
     graph.add_node("sql_executor", sql_executor_node)
@@ -449,12 +395,13 @@ def create_hub_spoke_graph(checkpointer=None) -> CompiledStateGraph:
     graph.add_node("chart_generator", chart_generator_node)
     graph.add_node("error_recovery", error_recovery_node)
     graph.add_node("general_chat", general_chat_node)
-    graph.add_node("clarification", clarification_node_wrapper)
     
-    # Supervisor 是入口
+    # ========== 设置入口 ==========
+    # Supervisor 是唯一入口
     graph.set_entry_point("supervisor")
     
-    # 所有 Worker 返回 Supervisor (Hub-and-Spoke 核心)
+    # ========== 所有 Worker 返回 Supervisor ==========
+    # 这是 Hub-and-Spoke 的核心: 辐射回中心
     graph.add_edge("schema_agent", "supervisor")
     graph.add_edge("sql_generator", "supervisor")
     graph.add_edge("sql_executor", "supervisor")
@@ -462,9 +409,8 @@ def create_hub_spoke_graph(checkpointer=None) -> CompiledStateGraph:
     graph.add_edge("chart_generator", "supervisor")
     graph.add_edge("error_recovery", "supervisor")
     graph.add_edge("general_chat", "supervisor")
-    graph.add_edge("clarification", "supervisor")
     
-    # Supervisor 条件路由
+    # ========== Supervisor 条件路由 ==========
     graph.add_conditional_edges(
         "supervisor",
         supervisor_route,
@@ -476,170 +422,101 @@ def create_hub_spoke_graph(checkpointer=None) -> CompiledStateGraph:
             "chart_generator": "chart_generator",
             "error_recovery": "error_recovery",
             "general_chat": "general_chat",
-            "clarification": "clarification",
             "FINISH": END
         }
     )
     
-    # 编译
+    # ========== 编译 ==========
     if checkpointer:
         compiled = graph.compile(checkpointer=checkpointer)
     else:
-        compiled = graph.compile(checkpointer=_get_default_checkpointer())
+        # 使用内存 checkpointer (支持 interrupt)
+        compiled = graph.compile(checkpointer=InMemorySaver())
     
     logger.info("✓ Hub-and-Spoke 图创建完成")
     return compiled
 
 
 # ============================================================================
-# 主图类 (保持 API 兼容)
+# 高级接口类
 # ============================================================================
 
-class IntelligentSQLGraph:
+class HubSpokeGraph:
     """
-    智能 SQL 代理图 - Hub-and-Spoke 架构
+    Hub-and-Spoke 图的高级接口
     
-    保持与原有 Pipeline 架构的 API 兼容
+    提供与 IntelligentSQLGraph 兼容的接口
     """
     
-    def __init__(
-        self, 
-        active_agent_profiles: List[AgentProfile] = None, 
-        custom_analyst=None,
-        use_default_checkpointer: bool = True
-    ):
-        self._use_default_checkpointer = use_default_checkpointer
-        self._checkpointer = None
-        self.graph = self._create_graph()
+    def __init__(self, checkpointer=None):
+        self.graph = create_hub_spoke_graph(checkpointer)
         self._initialized = True
-    
-    def _create_graph(self):
-        """创建图"""
-        if self._use_default_checkpointer:
-            self._checkpointer = _get_default_checkpointer()
-            return create_hub_spoke_graph(checkpointer=self._checkpointer)
-        return create_hub_spoke_graph()
-    
-    async def _ensure_initialized(self):
-        """确保已初始化"""
-        if not self._initialized:
-            self.graph = self._create_graph()
-            self._initialized = True
     
     async def process_query(
         self,
         query: str,
-        connection_id: Optional[int] = None,
-        thread_id: Optional[str] = None
+        connection_id: int,
+        thread_id: str = None
     ) -> Dict[str, Any]:
-        """处理 SQL 查询"""
+        """
+        处理用户查询
+        
+        Args:
+            query: 用户查询
+            connection_id: 数据库连接 ID
+            thread_id: 会话线程 ID
+            
+        Returns:
+            处理结果字典
+        """
+        from langchain_core.messages import HumanMessage
+        from uuid import uuid4
+        
+        thread_id = thread_id or str(uuid4())
+        
+        # 构建初始状态
+        initial_state = {
+            "messages": [HumanMessage(content=query)],
+            "connection_id": connection_id,
+            "current_stage": "init",
+            "retry_count": 0,
+            "max_retries": 3,
+            "error_history": [],
+            "context": {"connectionId": connection_id}
+        }
+        
+        config = {"configurable": {"thread_id": thread_id}}
+        
         try:
-            from uuid import uuid4
-            
-            await self._ensure_initialized()
-            
-            if thread_id is None:
-                thread_id = str(uuid4())
-                logger.info(f"生成新的 thread_id: {thread_id}")
-            else:
-                logger.info(f"使用现有 thread_id: {thread_id}")
-            
-            # 初始化状态
-            initial_state = {
-                "messages": [HumanMessage(content=query)],
-                "connection_id": connection_id,
-                "thread_id": thread_id,
-                "current_stage": "init",
-                "retry_count": 0,
-                "max_retries": 3,
-                "error_history": [],
-                "context": {"connectionId": connection_id}
-            }
-            
-            config = {"configurable": {"thread_id": thread_id}}
-            
             # 执行图
             result = await self.graph.ainvoke(initial_state, config=config)
             
             return {
                 "success": True,
                 "result": result,
-                "thread_id": thread_id,
-                "final_stage": result.get("current_stage", "completed")
+                "final_response": result.get("final_response"),
+                "thread_id": thread_id
             }
             
         except Exception as e:
-            logger.error(f"查询处理失败: {e}")
+            logger.error(f"查询处理失败: {e}", exc_info=True)
             return {
                 "success": False,
                 "error": str(e),
-                "thread_id": thread_id if 'thread_id' in locals() else None,
-                "final_stage": "error"
+                "thread_id": thread_id
             }
-    
-    @property
-    def worker_agents(self):
-        """获取工作代理列表"""
-        from app.agents.agents.schema_agent import schema_agent
-        from app.agents.agents.sql_generator_agent import sql_generator_agent
-        from app.agents.agents.sql_executor_agent import sql_executor_agent
-        from app.agents.agents.data_analyst_agent import data_analyst_agent
-        from app.agents.agents.chart_generator_agent import chart_generator_agent
-        
-        return [
-            schema_agent,
-            sql_generator_agent,
-            sql_executor_agent,
-            data_analyst_agent,
-            chart_generator_agent
-        ]
 
 
 # ============================================================================
-# 便捷函数 (保持兼容)
+# 全局实例
 # ============================================================================
 
-def create_intelligent_sql_graph(active_agent_profiles: List[AgentProfile] = None) -> IntelligentSQLGraph:
-    """创建智能 SQL 图实例"""
-    return IntelligentSQLGraph()
+_hub_spoke_graph: HubSpokeGraph = None
 
 
-async def process_sql_query(
-    query: str,
-    connection_id: Optional[int] = None,
-    active_agent_profiles: List[AgentProfile] = None
-) -> Dict[str, Any]:
-    """处理 SQL 查询的便捷函数"""
-    graph = create_intelligent_sql_graph()
-    return await graph.process_query(query, connection_id)
-
-
-# ============================================================================
-# 全局实例管理
-# ============================================================================
-
-_global_graph: Optional[IntelligentSQLGraph] = None
-
-
-def get_global_graph() -> IntelligentSQLGraph:
-    """获取全局图实例"""
-    global _global_graph
-    if _global_graph is None:
-        _global_graph = create_intelligent_sql_graph()
-    return _global_graph
-
-
-async def get_global_graph_async() -> IntelligentSQLGraph:
-    """异步获取全局图实例"""
-    graph = get_global_graph()
-    await graph._ensure_initialized()
-    return graph
-
-
-def graph():
-    """
-    图工厂函数 - 供 LangGraph API 使用
-    
-    返回编译好的图实例
-    """
-    return create_hub_spoke_graph()
+def get_hub_spoke_graph() -> HubSpokeGraph:
+    """获取 Hub-and-Spoke 图单例"""
+    global _hub_spoke_graph
+    if _hub_spoke_graph is None:
+        _hub_spoke_graph = HubSpokeGraph()
+    return _hub_spoke_graph

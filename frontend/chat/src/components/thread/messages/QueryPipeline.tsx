@@ -3,6 +3,8 @@
  * 
  * 整合所有工具调用，展示完整的执行流程
  * 支持点击展开查看详细数据
+ * 
+ * 已对齐后端 Hub-and-Spoke 架构
  */
 import React, { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -15,112 +17,28 @@ import {
   ChevronRight,
   Database,
   Sparkles,
-  Search,
-  Wrench,
-  Play,
-  Brain,
   Clock,
   Copy,
   Check,
-  BarChart2,
-  Table2,
   History,
   Zap,
   HardDrive,
-  AlertCircle,
+  Terminal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { QueryContext } from "@/types/stream-events";
 import { CACHE_HIT_LABELS } from "@/types/stream-events";
-import {
-  LineChart,
-  Line,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from "recharts";
-
-// 图表颜色配置
-const CHART_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
-const CHART_MARGIN = { top: 10, right: 30, left: 10, bottom: 10 };
-const DOT_STYLE = { r: 4, fill: "#fff", strokeWidth: 2 };
-const ACTIVE_DOT_STYLE = { r: 6 };
-
-// 执行节点配置
-interface NodeConfig {
-  key: string;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  description: string;
-  dataKey: keyof QueryContext | "sql_step";
-  stepKey?: string;
-}
-
-const PIPELINE_NODES: NodeConfig[] = [
-  {
-    key: "intent",
-    label: "意图解析",
-    icon: Brain,
-    description: "理解用户查询意图，识别数据集和查询模式",
-    dataKey: "intentAnalysis",
-  },
-  {
-    key: "schema_mapping",
-    label: "Schema映射",
-    icon: Database,
-    description: "获取相关表结构和字段信息",
-    dataKey: "sql_step",
-    stepKey: "schema_mapping",
-  },
-  {
-    key: "few_shot",
-    label: "Few-shot示例",
-    icon: Search,
-    description: "检索相似查询示例作为参考",
-    dataKey: "sql_step",
-    stepKey: "few_shot",
-  },
-  {
-    key: "llm_parse",
-    label: "LLM解析S2SQL",
-    icon: Sparkles,
-    description: "使用大语言模型生成SQL查询",
-    dataKey: "sql_step",
-    stepKey: "llm_parse",
-  },
-  {
-    key: "sql_fix",
-    label: "修正S2SQL",
-    icon: Wrench,
-    description: "语法检查与SQL优化修正",
-    dataKey: "sql_step",
-    stepKey: "sql_fix",
-  },
-  {
-    key: "final_sql",
-    label: "执行SQL查询",
-    icon: Play,
-    description: "执行最终SQL查询，获取数据",
-    dataKey: "sql_step",
-    stepKey: "final_sql",
-  },
-];
-
-type NodeStatus = "pending" | "running" | "completed" | "error" | "skipped";
-
-// 静态状态配置
-const STATUS_CONFIG: Record<NodeStatus, { bg: string; border: string; text: string; icon: React.ComponentType<{ className?: string }>; iconColor: string; animate?: boolean }> = {
-  pending: { bg: "bg-slate-100", border: "border-slate-200", text: "text-slate-400", icon: Circle, iconColor: "text-slate-300", animate: false },
-  running: { bg: "bg-blue-50", border: "border-blue-200", text: "text-blue-600", icon: Loader2, iconColor: "text-blue-500", animate: true },
-  completed: { bg: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-600", icon: CheckCircle2, iconColor: "text-emerald-500", animate: false },
-  error: { bg: "bg-red-50", border: "border-red-200", text: "text-red-600", icon: XCircle, iconColor: "text-red-500", animate: false },
-  skipped: { bg: "bg-slate-50", border: "border-slate-200", text: "text-slate-400", icon: Circle, iconColor: "text-slate-300", animate: false },
-};
+import { DataChartDisplay } from "./DataChartDisplay";
+import { DataQueryResult } from "./DataQueryResult";
+import { DataAnalysisDisplay } from "./DataAnalysisDisplay";
+import { 
+  PIPELINE_NODES, 
+  STATUS_CONFIG, 
+  findNodeByStep, 
+  isCompletedStep,
+  type NodeConfig, 
+  type NodeStatus 
+} from "./query-pipeline/nodes-config";
 
 // 缓存命中配置
 const CACHE_HIT_CONFIG = {
@@ -159,17 +77,44 @@ const NodeDetailContent = React.memo(function NodeDetailContent({ node, data, co
   // 意图解析详情
   if (node.key === "intent" && data) {
     return (
-      <div className="grid grid-cols-3 gap-4">
-        <DetailItem label="数据集" value={data.dataset} highlight />
-        <DetailItem label="查询模式" value={data.query_mode} highlight />
-        <DetailItem label="指标" value={data.metrics?.join(", ") || "默认指标"} />
-        {data.filters?.date_range && (
-          <DetailItem 
-            label="日期范围" 
-            value={`${data.filters.date_range[0]} ~ ${data.filters.date_range[1]}`} 
-            className="col-span-3"
-          />
-        )}
+      <div className="space-y-4">
+        {/* 工具调用信息 */}
+        <div className="flex items-center gap-2 pb-3 border-b border-slate-200">
+          <Terminal className="h-4 w-4 text-slate-400" />
+          <span className="text-xs font-mono text-slate-500">调用工具: {node.toolName}</span>
+          <span className="text-xs text-emerald-600 ml-auto">调用成功</span>
+        </div>
+        
+        {/* 解析结果 */}
+        <div className="grid grid-cols-3 gap-4">
+          <DetailItem label="数据集" value={data.dataset} highlight />
+          <DetailItem label="查询模式" value={data.query_mode} highlight />
+          <DetailItem label="指标" value={data.metrics?.join(", ") || "默认指标"} />
+          {data.filters?.date_range && (
+            <DetailItem 
+              label="日期范围" 
+              value={`${data.filters.date_range[0]} ~ ${data.filters.date_range[1]}`} 
+              className="col-span-3"
+            />
+          )}
+        </div>
+        
+        {/* 原始返回 */}
+        <div className="pt-3 border-t border-slate-200">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-slate-500">原始返回消息</span>
+            <button
+              onClick={() => copySQL(JSON.stringify(data, null, 2))}
+              className="flex items-center gap-1 px-2 py-1 text-xs text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded transition-colors"
+            >
+              {copiedSql ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+              <span>{copiedSql ? "已复制" : "复制"}</span>
+            </button>
+          </div>
+          <pre className="text-xs font-mono text-slate-600 bg-white border border-slate-200 rounded-lg p-3 max-h-40 overflow-auto">
+            {JSON.stringify(data, null, 2)}
+          </pre>
+        </div>
       </div>
     );
   }
@@ -181,6 +126,13 @@ const NodeDetailContent = React.memo(function NodeDetailContent({ node, data, co
       if (schemaData.tables && Array.isArray(schemaData.tables) && schemaData.tables.length > 0) {
         return (
           <div className="space-y-4">
+            {/* 工具调用信息 */}
+            <div className="flex items-center gap-2 pb-3 border-b border-slate-200">
+              <Terminal className="h-4 w-4 text-slate-400" />
+              <span className="text-xs font-mono text-slate-500">调用工具: {node.toolName}</span>
+              <span className="text-xs text-emerald-600 ml-auto">调用成功</span>
+            </div>
+            
             {schemaData.summary && (
               <div className="text-sm font-medium text-slate-700 mb-3">
                 {schemaData.summary}
@@ -237,7 +189,12 @@ const NodeDetailContent = React.memo(function NodeDetailContent({ node, data, co
       // 如果 tables 为空或格式不对，显示原始 JSON
       return (
         <div className="space-y-3">
-          <span className="text-xs text-slate-500">Schema 信息 (JSON)</span>
+          <div className="flex items-center gap-2 pb-3 border-b border-slate-200">
+            <Terminal className="h-4 w-4 text-slate-400" />
+            <span className="text-xs font-mono text-slate-500">调用工具: {node.toolName}</span>
+            <span className="text-xs text-emerald-600 ml-auto">调用成功</span>
+          </div>
+          <span className="text-xs text-slate-500">原始返回消息</span>
           <pre className={cn(
             "text-xs whitespace-pre-wrap break-all font-mono p-3 rounded-lg border",
             "bg-white border-slate-200 text-slate-700",
@@ -247,11 +204,16 @@ const NodeDetailContent = React.memo(function NodeDetailContent({ node, data, co
           </pre>
         </div>
       );
-    } catch (e) {
+    } catch {
       // JSON 解析失败，显示原始文本
       return (
         <div className="space-y-3">
-          <span className="text-xs text-slate-500">Schema 信息</span>
+          <div className="flex items-center gap-2 pb-3 border-b border-slate-200">
+            <Terminal className="h-4 w-4 text-slate-400" />
+            <span className="text-xs font-mono text-slate-500">调用工具: {node.toolName}</span>
+            <span className="text-xs text-emerald-600 ml-auto">调用成功</span>
+          </div>
+          <span className="text-xs text-slate-500">原始返回消息</span>
           <pre className={cn(
             "text-xs whitespace-pre-wrap break-all font-mono p-3 rounded-lg border",
             "bg-white border-slate-200 text-slate-700",
@@ -264,58 +226,122 @@ const NodeDetailContent = React.memo(function NodeDetailContent({ node, data, co
     }
   }
 
-  // SQL步骤详情 - 检查是否为 SQL 类型的步骤
+  // SQL步骤详情 - 显示执行结果明细
   if (data?.result) {
     const isSQL = node.key === "llm_parse" || node.key === "sql_fix" || node.key === "final_sql";
+    const stepStatus = data.status || "completed";
     
-    // 尝试解析 JSON，如果失败则当作纯文本
-    let displayContent = data.result;
-    let isJSON = false;
+    // 尝试解析 result JSON
+    const displayResult = data.result;
+    let parsedResult: any = null;
+    let isResultJSON = false;
     
     try {
-      const parsed = JSON.parse(data.result);
-      // 如果解析成功且是对象，格式化显示
-      if (typeof parsed === "object" && parsed !== null) {
-        displayContent = JSON.stringify(parsed, null, 2);
-        isJSON = true;
+      parsedResult = JSON.parse(data.result);
+      if (typeof parsedResult === "object" && parsedResult !== null) {
+        isResultJSON = true;
       }
     } catch {
       // 不是 JSON，保持原样
     }
     
     return (
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-slate-500">
-            {isSQL ? "生成的SQL" : isJSON ? "处理结果 (JSON)" : "处理结果"}
+      <div className="space-y-4">
+        {/* 工具调用信息 */}
+        <div className="flex items-center gap-2 pb-3 border-b border-slate-200">
+          <Terminal className="h-4 w-4 text-slate-400" />
+          <span className="text-xs font-mono text-slate-500">调用工具: {node.toolName}</span>
+          <span className={cn(
+            "text-xs ml-auto",
+            stepStatus === "completed" ? "text-emerald-600" : 
+            stepStatus === "error" ? "text-red-600" : "text-blue-600"
+          )}>
+            {stepStatus === "completed" ? "调用成功" : stepStatus === "error" ? "调用失败" : "调用中..."}
           </span>
-          {(isSQL || displayContent.length > 50) && (
-            <button
-              onClick={() => copySQL(data.result)}
-              className="flex items-center gap-1.5 px-2 py-1 text-xs text-slate-600 hover:text-slate-800 hover:bg-slate-200 rounded-md transition-colors"
-            >
-              {copiedSql ? (
-                <>
-                  <Check className="h-3 w-3 text-emerald-500" />
-                  <span className="text-emerald-600">已复制</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="h-3 w-3" />
-                  <span>复制</span>
-                </>
-              )}
-            </button>
-          )}
         </div>
-        <pre className={cn(
-          "text-xs whitespace-pre-wrap break-all font-mono p-3 rounded-lg border",
-          "bg-white border-slate-200 text-slate-700",
-          "max-h-64 overflow-auto",
-          isSQL && "bg-slate-900 text-green-400 border-slate-700"  // SQL 使用深色主题
-        )}>
-          {displayContent}
-        </pre>
+        
+        {/* 执行结果明细 */}
+        {isResultJSON && parsedResult ? (
+          <div className="space-y-3">
+            {/* 如果是对象，逐字段显示 */}
+            {Object.entries(parsedResult).map(([key, value]) => (
+              <div key={key} className="space-y-1">
+                <span className="text-xs font-medium text-slate-600">{key}</span>
+                <div className="bg-slate-50 rounded-lg border border-slate-200 p-3">
+                  {typeof value === "object" ? (
+                    <pre className="text-xs font-mono text-slate-700 whitespace-pre-wrap break-all max-h-40 overflow-auto">
+                      {JSON.stringify(value, null, 2)}
+                    </pre>
+                  ) : (
+                    <span className="text-xs font-mono text-slate-700">{String(value)}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+            
+            {/* 原始 JSON 可折叠查看 */}
+            <details className="mt-3">
+              <summary className="text-xs text-slate-500 cursor-pointer hover:text-slate-700">
+                查看原始 JSON
+              </summary>
+              <div className="mt-2 flex items-center justify-end">
+                <button
+                  onClick={() => copySQL(data.result)}
+                  className="flex items-center gap-1.5 px-2 py-1 text-xs text-slate-600 hover:text-slate-800 hover:bg-slate-200 rounded-md transition-colors"
+                >
+                  {copiedSql ? (
+                    <>
+                      <Check className="h-3 w-3 text-emerald-500" />
+                      <span className="text-emerald-600">已复制</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3 w-3" />
+                      <span>复制</span>
+                    </>
+                  )}
+                </button>
+              </div>
+              <pre className="text-xs font-mono text-slate-600 bg-white border border-slate-200 rounded-lg p-3 max-h-64 overflow-auto mt-2">
+                {JSON.stringify(parsedResult, null, 2)}
+              </pre>
+            </details>
+          </div>
+        ) : (
+          /* 非 JSON 结果（如 SQL）直接显示 */
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-slate-600">
+                {isSQL ? "生成的SQL" : "执行结果"}
+              </span>
+              {displayResult.length > 50 && (
+                <button
+                  onClick={() => copySQL(data.result)}
+                  className="flex items-center gap-1.5 px-2 py-1 text-xs text-slate-600 hover:text-slate-800 hover:bg-slate-200 rounded-md transition-colors"
+                >
+                  {copiedSql ? (
+                    <>
+                      <Check className="h-3 w-3 text-emerald-500" />
+                      <span className="text-emerald-600">已复制</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3 w-3" />
+                      <span>复制</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+            <pre className={cn(
+              "text-xs whitespace-pre-wrap break-all font-mono p-3 rounded-lg border",
+              "max-h-64 overflow-auto",
+              isSQL ? "bg-slate-900 text-green-400 border-slate-700" : "bg-white border-slate-200 text-slate-700"
+            )}>
+              {displayResult}
+            </pre>
+          </div>
+        )}
       </div>
     );
   }
@@ -345,6 +371,15 @@ const PipelineNode = React.memo(function PipelineNode({ node, status, data, isEx
 
   const config = STATUS_CONFIG[status];
   const StatusIcon = config.icon;
+
+  // 状态文本
+  const statusText = status === "running" 
+    ? `正在调用 ${node.toolName}...`
+    : status === "completed"
+    ? `${node.toolName} 调用成功`
+    : status === "error"
+    ? `${node.toolName} 调用失败`
+    : "等待执行";
 
   return (
     <div className="mb-3">
@@ -377,14 +412,26 @@ const PipelineNode = React.memo(function PipelineNode({ node, status, data, isEx
 
         {/* 节点信息 */}
         <div className="flex-1 text-left">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Icon className={cn("h-4 w-4", config.text)} />
             <span className={cn("font-medium text-sm", config.text)}>{node.label}</span>
+            {/* 工具名称标签 */}
+            {node.toolName && (status === "running" || status === "completed" || status === "error") && (
+              <span className={cn(
+                "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono",
+                status === "running" ? "bg-blue-100 text-blue-700" :
+                status === "completed" ? "bg-emerald-100 text-emerald-700" :
+                "bg-red-100 text-red-700"
+              )}>
+                <Terminal className="h-2.5 w-2.5" />
+                {node.toolName}
+              </span>
+            )}
             {data?.time_ms > 0 && (
               <span className="text-xs text-slate-400 ml-auto mr-2">{data.time_ms}ms</span>
             )}
           </div>
-          <p className="text-xs text-slate-500 mt-0.5">{node.description}</p>
+          <p className="text-xs text-slate-500 mt-0.5">{statusText}</p>
         </div>
 
         {/* 展开箭头 */}
@@ -423,234 +470,7 @@ const PipelineNode = React.memo(function PipelineNode({ node, status, data, isEx
   );
 });
 
-// 数据图表
-const DataChart = React.memo(function DataChart({ data, columns, chartConfig }: { 
-  data: Record<string, any>[]; 
-  columns: string[];
-  chartConfig?: any;
-}) {
-  const xDataKey = chartConfig?.xDataKey || columns[0];
-  const yDataKeys = columns.filter(col => col !== xDataKey).slice(0, 3);
-  const ChartType = chartConfig?.type === "line" ? LineChart : BarChart;
 
-  return (
-    <ResponsiveContainer width="100%" height={280}>
-      <ChartType data={data} margin={CHART_MARGIN}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-        <XAxis 
-          dataKey={xDataKey} 
-          tick={{ fontSize: 11, fill: "#64748b" }} 
-          stroke="#cbd5e1" 
-          tickLine={{ stroke: "#cbd5e1" }}
-        />
-        <YAxis 
-          tick={{ fontSize: 11, fill: "#64748b" }} 
-          stroke="#cbd5e1"
-          tickLine={{ stroke: "#cbd5e1" }}
-        />
-        <Tooltip
-          contentStyle={{
-            backgroundColor: "#fff",
-            border: "1px solid #e2e8f0",
-            borderRadius: "8px",
-            fontSize: "12px",
-            boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
-          }}
-        />
-        <Legend 
-          wrapperStyle={{ fontSize: "12px", paddingTop: "10px" }} 
-        />
-        {yDataKeys.map((key, index) => (
-          chartConfig?.type === "line" ? (
-            <Line
-              key={key}
-              type="monotone"
-              dataKey={key}
-              stroke={CHART_COLORS[index % CHART_COLORS.length]}
-              strokeWidth={2}
-              dot={DOT_STYLE}
-              activeDot={ACTIVE_DOT_STYLE}
-            />
-          ) : (
-            <Bar
-              key={key}
-              dataKey={key}
-              fill={CHART_COLORS[index % CHART_COLORS.length]}
-              radius={[4, 4, 0, 0]}
-            />
-          )
-        ))}
-      </ChartType>
-    </ResponsiveContainer>
-  );
-});
-
-// 格式化单元格值
-function formatValue(value: any): string {
-  if (value === null || value === undefined) return "-";
-  if (typeof value === "number") {
-    return value.toLocaleString("zh-CN", { 
-      minimumFractionDigits: 0, 
-      maximumFractionDigits: 2 
-    });
-  }
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  }
-  return String(value);
-}
-
-// 数据表格
-const DataTable = React.memo(function DataTable({ data, columns }: { data: Record<string, any>[]; columns: string[] }) {
-  return (
-    <div className="overflow-auto max-h-80 rounded-lg border border-slate-200">
-      <table className="w-full text-sm">
-        <thead className="bg-gradient-to-b from-slate-50 to-slate-100 sticky top-0">
-          <tr>
-            {columns.map((col) => (
-              <th 
-                key={col} 
-                className="px-4 py-3 text-left font-semibold text-slate-600 whitespace-nowrap border-b border-slate-200"
-              >
-                {col}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100">
-          {data.slice(0, 50).map((row, i) => (
-            <tr 
-              key={i} 
-              className={cn(
-                "transition-colors",
-                i % 2 === 0 ? "bg-white" : "bg-slate-50/50",
-                "hover:bg-blue-50/50"
-              )}
-            >
-              {columns.map((col) => (
-                <td 
-                  key={col} 
-                  className="px-4 py-2.5 text-slate-600 whitespace-nowrap"
-                >
-                  {formatValue(row[col])}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {data.length > 50 && (
-        <div className="text-center text-xs text-slate-500 py-2 bg-slate-50 border-t border-slate-200">
-          显示前 50 条，共 {data.length} 条数据
-        </div>
-      )}
-    </div>
-  );
-});
-
-// 数据查询结果组件 - 只显示表格
-const DataQueryResult = React.memo(function DataQueryResult({ 
-  dataQuery, 
-}: { 
-  dataQuery: QueryContext["dataQuery"]; 
-}) {
-  // 转换数据格式 - 使用 useMemo 缓存（必须在 early return 之前调用）
-  const tableData = useMemo(() => {
-    if (!dataQuery?.rows) return [];
-    return dataQuery.rows.map(row => {
-      if (Array.isArray(row)) {
-        const obj: Record<string, any> = {};
-        dataQuery.columns.forEach((col, i) => {
-          obj[col] = row[i];
-        });
-        return obj;
-      }
-      return row;
-    });
-  }, [dataQuery?.rows, dataQuery?.columns]);
-
-  // Early return 放在所有 hooks 调用之后
-  if (!dataQuery) return null;
-
-  const { columns, rows, row_count } = dataQuery;
-  const hasData = rows && rows.length > 0;
-
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
-      {/* 标题栏 */}
-      <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-slate-200">
-        <div className="flex items-center gap-2">
-          <Table2 className="h-4 w-4 text-blue-600" />
-          <span className="font-medium text-sm text-slate-700">查询结果</span>
-          <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">
-            {row_count || rows?.length || 0} 条记录
-          </span>
-        </div>
-      </div>
-
-      {/* 内容区域 */}
-      <div className="p-4">
-        {!hasData ? (
-          <div className="flex flex-col items-center justify-center py-8 text-slate-500">
-            <AlertCircle className="h-8 w-8 mb-2 text-slate-400" />
-            <span className="text-sm">查询结果为空</span>
-          </div>
-        ) : (
-          <DataTable data={tableData} columns={columns} />
-        )}
-      </div>
-    </div>
-  );
-});
-
-// 智能图表组件 - 独立显示
-const SmartChart = React.memo(function SmartChart({ 
-  dataQuery 
-}: { 
-  dataQuery: QueryContext["dataQuery"]; 
-}) {
-  // 转换数据格式
-  const tableData = useMemo(() => {
-    if (!dataQuery?.rows) return [];
-    return dataQuery.rows.map(row => {
-      if (Array.isArray(row)) {
-        const obj: Record<string, any> = {};
-        dataQuery.columns.forEach((col, i) => {
-          obj[col] = row[i];
-        });
-        return obj;
-      }
-      return row;
-    });
-  }, [dataQuery?.rows, dataQuery?.columns]);
-
-  if (!dataQuery || !dataQuery.rows || dataQuery.rows.length === 0) return null;
-  
-  const { columns, chart_config } = dataQuery;
-  
-  // 如果没有 chart_config，不显示图表
-  if (!chart_config) return null;
-
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
-      {/* 标题栏 */}
-      <div className="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-emerald-50 to-teal-50 border-b border-slate-200">
-        <div className="flex items-center gap-2">
-          <BarChart2 className="h-4 w-4 text-emerald-600" />
-          <span className="font-medium text-sm text-slate-700">数据可视化</span>
-          <span className="text-xs px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">
-            {chart_config.type === "line" ? "折线图" : chart_config.type === "bar" ? "柱状图" : "图表"}
-          </span>
-        </div>
-      </div>
-
-      {/* 图表内容 */}
-      <div className="p-4">
-        <DataChart data={tableData} columns={columns} chartConfig={chart_config} />
-      </div>
-    </div>
-  );
-});
 
 // 推荐问题组件
 const SimilarQuestions = React.memo(function SimilarQuestions({ 
@@ -739,9 +559,9 @@ export function QueryPipeline({ queryContext, onSelectQuestion }: QueryPipelineP
     // 意图解析状态
     map.set("intent", intentAnalysis ? "completed" : "pending");
     
-    // SQL 步骤状态
+    // SQL 步骤状态 - 使用 findNodeByStep 支持多个 stepKey
     sqlSteps.forEach(step => {
-      const node = PIPELINE_NODES.find(n => n.stepKey === step.step);
+      const node = findNodeByStep(step.step);
       if (node) {
         map.set(node.key, step.status as NodeStatus);
       }
@@ -759,9 +579,9 @@ export function QueryPipeline({ queryContext, onSelectQuestion }: QueryPipelineP
       map.set("intent", intentAnalysis);
     }
     
-    // SQL 步骤数据
+    // SQL 步骤数据 - 使用 findNodeByStep 支持多个 stepKey
     sqlSteps.forEach(step => {
-      const node = PIPELINE_NODES.find(n => n.stepKey === step.step);
+      const node = findNodeByStep(step.step);
       if (node) {
         map.set(node.key, step);
       }
@@ -792,10 +612,17 @@ export function QueryPipeline({ queryContext, onSelectQuestion }: QueryPipelineP
     return {
       hasRunningStep: sqlSteps.some(s => s.status === "running"),
       hasError: sqlSteps.some(s => s.status === "error"),
-      isCompleted: sqlSteps.some(s => s.step === "final_sql" && s.status === "completed"),
+      // 完成条件：使用 isCompletedStep 检查新旧节点名称
+      isCompleted: sqlSteps.some((s) => 
+        isCompletedStep(s.step) && s.status === "completed"
+      ),
     };
   }, [sqlSteps]);
 
+  // 如果状态更新了，但 container 是折叠的，我们是否应该自动展开？
+  // 或者是为了避免闪烁，我们需要保持状态稳定。
+  // 目前逻辑看起来是稳定的。
+  
   // 切换节点展开状态
   const toggleNode = (key: string) => {
     setExpandedNodes(prev => {
@@ -919,7 +746,7 @@ export function QueryPipeline({ queryContext, onSelectQuestion }: QueryPipelineP
         </AnimatePresence>
       </div>
 
-      {/* 数据表格 - 独立显示在工具链路之外 */}
+      {/* 数据表格 */}
       {dataQuery && dataQuery.rows && dataQuery.rows.length > 0 && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
@@ -930,16 +757,33 @@ export function QueryPipeline({ queryContext, onSelectQuestion }: QueryPipelineP
         </motion.div>
       )}
 
-      {/* 智能图表 - 独立显示（如果有 chart_config） */}
+      {/* 智能图表 - 使用统一的 DataChartDisplay */}
       {dataQuery && dataQuery.chart_config && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2 }}
         >
-          <SmartChart dataQuery={dataQuery} />
+          <DataChartDisplay dataQuery={dataQuery} />
         </motion.div>
       )}
+
+      {/* 数据分析洞察 - 在图表下方显示 */}
+      {(() => {
+        // 支持新旧节点名称: data_analyst (Hub-and-Spoke) 和 data_analysis (旧版)
+        const analysisStep = sqlSteps.find(s => 
+          s.step === "data_analyst" || s.step === "data_analysis"
+        );
+        return analysisStep && analysisStep.status === "completed" && analysisStep.result && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.25 }}
+          >
+            <DataAnalysisDisplay analysisStep={analysisStep} />
+          </motion.div>
+        );
+      })()}
 
       {/* 推荐问题 - 在最后显示 */}
       {similarQuestions && similarQuestions.questions && similarQuestions.questions.length > 0 && (

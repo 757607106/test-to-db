@@ -286,6 +286,32 @@ const StreamSession = ({
       sleep().then(() => getThreads().then(setThreads).catch(console.error));
     },
     onFinish: (state, run) => {
+      // 处理 data_analysis_event（从 state 中提取）
+      // 支持新版节点名 data_analyst 和旧版 data_analysis
+      const analysisEvent = (state as any)?.data_analysis_event;
+      if (analysisEvent && analysisEvent.type === "sql_step" && 
+          (analysisEvent.step === "data_analysis" || analysisEvent.step === "data_analyst")) {
+        const resultPrefix = analysisEvent.result ? analysisEvent.result.substring(0, 50) : '';
+        const stepSignature = `${analysisEvent.step}-${analysisEvent.status}-${resultPrefix}-${analysisEvent.time_ms || 0}`;
+        
+        if (!processedStepsRef.current.has(stepSignature)) {
+          processedStepsRef.current.add(stepSignature);
+          setQueryContext(prev => {
+            // 同时检查新旧节点名
+            const existingIndex = prev.sqlSteps.findIndex(
+              s => s.step === "data_analysis" || s.step === "data_analyst"
+            );
+            if (existingIndex >= 0) {
+              const newSteps = [...prev.sqlSteps];
+              newSteps[existingIndex] = analysisEvent;
+              return { ...prev, sqlSteps: newSteps };
+            } else {
+              return { ...prev, sqlSteps: [...prev.sqlSteps, analysisEvent] };
+            }
+          });
+        }
+      }
+      
       // Refetch threads list when stream finishes to update thread names
       // This ensures the thread list shows the proper conversation title instead of thread ID
       sleep(1000).then(() => getThreads().then(setThreads).catch(console.error));

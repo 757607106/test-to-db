@@ -43,7 +43,7 @@ def setup_environment():
         "LANGSMITH_LANGGRAPH_API_VARIANT": "local_dev",
         "LANGGRAPH_DISABLE_FILE_PERSISTENCE": "false",
         "LANGGRAPH_ALLOW_BLOCKING": "true",
-        "LANGGRAPH_API_URL": "http://localhost:2025",
+        "LANGGRAPH_API_URL": "http://localhost:2024",
 
         "LANGGRAPH_DEFAULT_RECURSION_LIMIT": "200",
         
@@ -73,10 +73,10 @@ def main():
     
     # Print server information
     print("\n" + "="*60)
-    print("📍 Server URL: http://localhost:2025")
-    print("📚 API Documentation: http://localhost:2025/docs")
-    print("🎨 Studio UI: http://localhost:2025/ui")
-    print("💚 Health Check: http://localhost:2025/ok")
+    print("📍 Server URL: http://localhost:2024")
+    print("📚 API Documentation: http://localhost:2024/docs")
+    print("🎨 Studio UI: http://localhost:2024/ui")
+    print("💚 Health Check: http://localhost:2024/ok")
     print("="*60)
     
     try:
@@ -87,7 +87,7 @@ def main():
         uvicorn.run(
             "langgraph_api.server:app",
             host="0.0.0.0",
-            port=2025,
+            port=2024,
             reload=True,
             access_log=False,
             log_config={

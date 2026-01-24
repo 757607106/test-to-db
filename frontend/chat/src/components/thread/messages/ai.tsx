@@ -3,30 +3,28 @@
  * 
  * 基于 LangGraph 官方 streaming 标准实现
  * 
- * 设计原则：
- * 1. messages 模式：仅用于 AI 最终回答的文本内容
- * 2. custom 模式：用于所有工具进度和查询结果（由 QueryPipeline 独立渲染）
- * 3. 所有 ToolMessage 统一隐藏（进度通过 custom 事件展示）
- * 
  * @see https://docs.langchain.com/oss/python/langgraph/streaming
  */
+import { parsePartialJson } from "@langchain/core/output_parsers";
 import { useStreamContext } from "@/providers/Stream";
-import { Checkpoint, Message, ToolMessage } from "@langchain/langgraph-sdk";
+import { AIMessage, Checkpoint, Message } from "@langchain/langgraph-sdk";
 import { getContentString } from "../utils";
 import { BranchSwitcher, CommandBar } from "./shared";
 import { MarkdownText } from "../markdown-text";
 import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 import { cn } from "@/lib/utils";
-import { Fragment } from "react/jsx-runtime";
+import { MessageContentComplex } from "@langchain/core/messages";
+import { Fragment, useCallback, useMemo } from "react";
 import { isAgentInboxInterruptSchema } from "@/lib/agent-inbox-interrupt";
 import { ThreadView } from "../agent-inbox";
-import { useQueryState, parseAsInteger } from "nuqs";
+import { useQueryState } from "nuqs";
 import { GenericInterruptView } from "./generic-interrupt";
 import { 
   ClarificationInterruptView, 
   extractClarificationData 
 } from "./clarification-interrupt";
 import { useArtifact } from "../artifact";
+import { QueryPipeline } from "./QueryPipeline";
 
 function CustomComponent({
   message,
@@ -104,137 +102,210 @@ function Interrupt({
   );
 }
 
-/**
- * AI/工具消息组件
- * 
- * 简化后的渲染逻辑：
- * - 工具消息：统一返回 null（进度通过 QueryPipeline 展示）
- * - AI 消息：只渲染文本内容
- * 
- * QueryPipeline 和数据展示组件已移至 index.tsx 独立渲染
- */
+
+function parseAnthropicStreamedToolCalls(
+  content: MessageContentComplex[],
+): AIMessage["tool_calls"] {
+  const toolCallContents = content.filter((c) => c.type === "tool_use" && c.id);
+
+  return toolCallContents.map((tc) => {
+    const toolCall = tc as Record<string, any>;
+    let json: Record<string, any> = {};
+    if (toolCall?.input) {
+      try {
+        json = parsePartialJson(toolCall.input) ?? {};
+      } catch {
+        // Pass
+      }
+    }
+    return {
+      name: toolCall.name ?? "",
+      id: toolCall.id ?? "",
+      args: json,
+      type: "tool_call",
+    };
+  });
+}
+
 export function AssistantMessage({
   message,
   isLoading,
   handleRegenerate,
+  connectionId,
 }: {
   message: Message | undefined;
   isLoading: boolean;
   handleRegenerate: (parentCheckpoint: Checkpoint | null | undefined) => void;
+  connectionId?: number;
 }) {
-  // 从 URL 参数获取 connectionId
-  const [connectionId] = useQueryState(
-    "connectionId",
-    parseAsInteger.withDefault(0),
-  );
-  
-  // 从 URL 参数获取 threadId
+  const content = message?.content ?? [];
+  const contentString = getContentString(content);
   const [threadId] = useQueryState("threadId");
 
   const thread = useStreamContext();
-  const { queryContext } = thread;
-  const messages = Array.isArray(thread.messages) ? thread.messages : [];
-  
-  // 基础判断
-  const isLastMessage = messages.length > 0 && messages[messages.length - 1]?.id === message?.id;
-  const hasNoAIOrToolMessages = !messages.find((m) => m.type === "ai" || m.type === "tool");
+  const isLastMessage =
+    thread.messages[thread.messages.length - 1].id === message?.id;
+  const hasNoAIOrToolMessages = !thread.messages.find(
+    (m) => m.type === "ai" || m.type === "tool",
+  );
   const meta = message ? thread.getMessagesMetadata(message) : undefined;
   const threadInterrupt = thread.interrupt;
-  const parentCheckpoint = meta?.firstSeenState?.parent_checkpoint;
 
-  // 消息内容处理
-  const content = message?.content ?? [];
-  const contentString = getContentString(content);
-  
-  // 工具消息检测
+  const toolCalls = message && "tool_calls" in message ? (message as AIMessage).tool_calls : undefined;
+
+  const parentCheckpoint = meta?.firstSeenState?.parent_checkpoint;
+  const anthropicStreamedToolCalls = Array.isArray(content)
+    ? parseAnthropicStreamedToolCalls(content)
+    : undefined;
+
+  const hasToolCalls =
+    message &&
+    "tool_calls" in message &&
+    message.tool_calls &&
+    message.tool_calls.length > 0;
+  const hasAnthropicToolCalls = !!anthropicStreamedToolCalls?.length;
   const isToolResult = message?.type === "tool";
 
-  // ========================================
-  // 简化逻辑：所有工具消息统一隐藏
-  // 工具进度通过 custom 事件在 QueryPipeline 中展示
-  // ========================================
+  // 准备反馈上下文
+  const feedbackContext = useMemo(() => {
+    if (!connectionId || !thread.queryContext?.dataQuery) return undefined;
+    
+    // 获取SQL - 支持新旧节点名称 (sql_executor / final_sql)
+    const sqlStep = thread.queryContext.sqlSteps?.find(s => 
+      s.step === 'sql_executor' || s.step === 'final_sql'
+    );
+    const sql = sqlStep?.result || "";
+    
+    if (!sql) return undefined;
+
+    // 获取问题
+    // 简单查找：当前消息之前的最后一个 human message
+    let question = "";
+    if (message) {
+      const msgIndex = thread.messages.findIndex(m => m.id === message.id);
+      if (msgIndex > 0) {
+        const humanMsg = thread.messages.slice(0, msgIndex).reverse().find(m => m.type === 'human');
+        if (humanMsg) {
+          question = getContentString(humanMsg.content);
+        }
+      }
+    }
+
+    return {
+      question,
+      sql,
+      connectionId,
+      threadId: threadId || undefined
+    };
+  }, [connectionId, thread.queryContext, thread.messages, message, threadId]);
+
+  const handleSelectQuestion = useCallback((q: string) => {
+    const form = document.querySelector("form");
+    const textarea = form?.querySelector("textarea") as HTMLTextAreaElement | null;
+    if (!textarea || !form) return;
+    const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    nativeTextAreaValueSetter?.call(textarea, q);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.focus();
+  }, []);
+
+  // 判断是否应该使用 QueryPipeline（优先级高于 ToolCalls）
+  // 对于最后一条消息，如果有 tool_calls 或 queryContext 数据，始终使用 QueryPipeline
+  const hasQueryContextData = thread.queryContext && (
+    thread.queryContext.sqlSteps.length > 0 ||
+    thread.queryContext.intentAnalysis ||
+    thread.queryContext.dataQuery
+  );
+  const hasAnyToolCalls = hasToolCalls || hasAnthropicToolCalls;
+  const useQueryPipeline = isLastMessage && (hasQueryContextData || hasAnyToolCalls);
+
+  // 简单逻辑：当使用 QueryPipeline 或有工具调用时，隐藏文本内容
+  const shouldShowContent = contentString.length > 0 && !useQueryPipeline && !hasAnyToolCalls;
+
   if (isToolResult) {
-    return null;
+    // Tool 消息：只显示 Interrupt，ToolResult 组件已移除（返回 null 无实际功能）
+    return (
+      <div className="group mr-auto flex w-full items-start gap-2">
+         <div className="flex w-full flex-col gap-2">
+            <Interrupt
+              interrupt={threadInterrupt}
+              isLastMessage={isLastMessage}
+              hasNoAIOrToolMessages={hasNoAIOrToolMessages}
+            />
+         </div>
+      </div>
+    );
   }
 
-  // 渲染 AI 消息 - 只渲染文本内容
   return (
     <div className="group mr-auto flex w-full items-start gap-2">
-      <div className="flex w-full flex-col gap-3">
-        {/* 文本内容（AI 的最终回答） */}
-        {contentString.length > 0 && (
+      <div className="flex w-full flex-col gap-2">
+        {/* 统一查询流水线 - 优先使用，包含意图解析、SQL步骤、数据、图表、推荐问题 */}
+        {useQueryPipeline && thread.queryContext && (
+          <QueryPipeline
+            queryContext={thread.queryContext}
+            onSelectQuestion={handleSelectQuestion}
+          />
+        )}
+
+        {/* 文本内容 */}
+        {shouldShowContent && (
           <div className="py-1">
             <MarkdownText>{contentString}</MarkdownText>
           </div>
         )}
 
-        {/* 自定义组件 */}
+        {/* ToolCalls 组件已移除 - 所有工具调用现在由 QueryPipeline 统一处理 */}
+        
         {message && (
-          <CustomComponent message={message} thread={thread} />
+          <CustomComponent
+            message={message}
+            thread={thread}
+          />
         )}
-
-        {/* 中断处理 */}
         <Interrupt
           interrupt={threadInterrupt}
           isLastMessage={isLastMessage}
           hasNoAIOrToolMessages={hasNoAIOrToolMessages}
         />
-
-        {/* 操作栏 - 仅在有内容时显示 */}
-        {contentString.length > 0 && (
-          <div
-            className={cn(
-              "mr-auto flex items-center gap-2 transition-opacity",
-              "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
-            )}
-          >
-            <BranchSwitcher
-              branch={meta?.branch}
-              branchOptions={meta?.branchOptions}
-              onSelect={(branch) => thread.setBranch(branch)}
-              isLoading={isLoading}
-            />
-            <CommandBar
-              content={contentString}
-              isLoading={isLoading}
-              isAiMessage={true}
-              handleRegenerate={() => handleRegenerate(parentCheckpoint)}
-              feedbackContext={
-                queryContext?.dataQuery && connectionId
-                  ? {
-                      question: contentString,
-                      sql: (queryContext.sqlSteps as any[])?.find((s: any) => s.step === "llm_parse" || s.step === "final_sql")?.result || "",
-                      connectionId: connectionId,
-                      threadId: threadId || undefined,
-                    }
-                  : undefined
-              }
-            />
-          </div>
-        )}
+        <div
+          className={cn(
+            "mr-auto flex items-center gap-2 transition-opacity",
+            "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
+          )}
+        >
+          <BranchSwitcher
+            branch={meta?.branch}
+            branchOptions={meta?.branchOptions}
+            onSelect={(branch) => thread.setBranch(branch)}
+            isLoading={isLoading}
+          />
+          <CommandBar
+            content={contentString}
+            isLoading={isLoading}
+            isAiMessage={true}
+            handleRegenerate={() => handleRegenerate(parentCheckpoint)}
+            feedbackContext={feedbackContext}
+          />
+        </div>
       </div>
     </div>
   );
 }
 
-/**
- * 加载中状态组件
- * 
- * 简化后只显示基础加载动画
- * QueryPipeline 的实时进度在 index.tsx 中独立渲染
- */
+
+
 export function AssistantMessageLoading() {
   return (
     <div className="mr-auto flex items-start gap-2">
-      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 flex h-auto items-center gap-3 rounded-xl px-4 py-2.5 shadow-sm">
-        <div className="flex items-center gap-1">
-          <div className="bg-blue-500 h-2 w-2 animate-[pulse_1.5s_ease-in-out_infinite] rounded-full shadow-sm shadow-blue-300"></div>
-          <div className="bg-blue-500 h-2 w-2 animate-[pulse_1.5s_ease-in-out_0.3s_infinite] rounded-full shadow-sm shadow-blue-300"></div>
-          <div className="bg-blue-500 h-2 w-2 animate-[pulse_1.5s_ease-in-out_0.6s_infinite] rounded-full shadow-sm shadow-blue-300"></div>
-        </div>
-        <span className="text-sm font-medium text-blue-700">思考中...</span>
+      <div className="bg-muted flex h-8 items-center gap-1 rounded-2xl px-4 py-2">
+        <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_infinite] rounded-full"></div>
+        <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_0.5s_infinite] rounded-full"></div>
+        <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_1s_infinite] rounded-full"></div>
       </div>
     </div>
   );
 }
-
