@@ -493,10 +493,41 @@ async def supervisor_node(state: SQLMessageState) -> Dict[str, Any]:
     Supervisor 中心节点
     
     职责:
+    - 检测新消息并重置状态
     - 汇总各 Agent 的执行结果
     - 构造统一的 final_response
     """
     current_stage = state.get("current_stage", "init")
+    
+    # 检测是否有新的用户消息需要处理
+    # 当 current_stage 是 completed 但最后一条消息是 HumanMessage 时，说明用户发送了新问题
+    if current_stage in ["completed", "recommendation_done"]:
+        messages = state.get("messages", [])
+        if messages:
+            last_msg = messages[-1]
+            # 检查最后一条消息是否是用户消息
+            is_human_message = False
+            if hasattr(last_msg, 'type'):
+                is_human_message = last_msg.type == "human"
+            elif isinstance(last_msg, dict):
+                is_human_message = last_msg.get("type") == "human"
+            elif hasattr(last_msg, '__class__'):
+                is_human_message = last_msg.__class__.__name__ == "HumanMessage"
+            
+            if is_human_message:
+                logger.info("[Supervisor] 检测到新的用户消息，重置状态到 init")
+                return {
+                    "current_stage": "init",
+                    # 清除之前的执行结果，避免显示旧数据
+                    "execution_result": None,
+                    "generated_sql": None,
+                    "analyst_insights": None,
+                    "chart_config": None,
+                    "recommended_questions": [],
+                    "final_response": None,
+                    "cache_hit": False,
+                    "thread_history_hit": False,
+                }
     
     # 如果推荐完成，构造最终响应
     if current_stage == "recommendation_done":

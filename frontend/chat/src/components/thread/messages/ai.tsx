@@ -234,13 +234,18 @@ export function AssistantMessage({
     const form = document.querySelector("form");
     const textarea = form?.querySelector("textarea") as HTMLTextAreaElement | null;
     if (!textarea || !form) return;
+    
     const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(
       window.HTMLTextAreaElement.prototype,
       "value",
     )?.set;
     nativeTextAreaValueSetter?.call(textarea, q);
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    textarea.focus();
+    
+    // 自动提交表单，触发新的查询
+    setTimeout(() => {
+      form.requestSubmit();
+    }, 50);
   }, []);
 
   // Tool 消息处理 - 和官方一样
