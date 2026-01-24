@@ -1,9 +1,8 @@
 /**
  * AI 消息组件
  * 
- * 基于 LangGraph 官方 streaming 标准实现
- * 
- * @see https://docs.langchain.com/oss/python/langgraph/streaming
+ * 直接参考 LangChain agent-chat-ui 官方实现
+ * @see https://github.com/langchain-ai/agent-chat-ui
  */
 import { parsePartialJson } from "@langchain/core/output_parsers";
 import { useStreamContext } from "@/providers/Stream";
@@ -17,14 +16,51 @@ import { MessageContentComplex } from "@langchain/core/messages";
 import { Fragment, useCallback, useMemo } from "react";
 import { isAgentInboxInterruptSchema } from "@/lib/agent-inbox-interrupt";
 import { ThreadView } from "../agent-inbox";
-import { useQueryState } from "nuqs";
+import { useQueryState, parseAsBoolean } from "nuqs";
 import { GenericInterruptView } from "./generic-interrupt";
 import { 
   ClarificationInterruptView, 
   extractClarificationData 
 } from "./clarification-interrupt";
 import { useArtifact } from "../artifact";
-import { QueryPipeline } from "./QueryPipeline";
+import { ToolCalls, ToolResult } from "./tool-calls";
+import { DataChartDisplay } from "./DataChartDisplay";
+import { Sparkles } from "lucide-react";
+
+/**
+ * 推荐问题组件
+ */
+function SimilarQuestions({ 
+  questions,
+  onSelectQuestion 
+}: { 
+  questions: string[];
+  onSelectQuestion?: (question: string) => void;
+}) {
+  if (!questions || questions.length === 0) return null;
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+      <div className="flex items-center gap-2 px-4 py-3 bg-gradient-to-r from-purple-50 to-pink-50 border-b border-slate-200">
+        <Sparkles className="h-4 w-4 text-purple-600" />
+        <span className="font-medium text-sm text-slate-700">您可能还想问</span>
+      </div>
+      <div className="p-4 space-y-2">
+        {questions.map((question, index) => (
+          <button
+            key={index}
+            onClick={() => onSelectQuestion?.(question)}
+            className="w-full text-left px-4 py-2.5 rounded-lg bg-slate-50 hover:bg-purple-50 border border-slate-200 hover:border-purple-200 transition-colors group"
+          >
+            <span className="text-sm text-slate-700 group-hover:text-purple-700">
+              {question}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function CustomComponent({
   message,
@@ -54,55 +90,6 @@ function CustomComponent({
   );
 }
 
-interface InterruptProps {
-  interrupt?: unknown;
-  isLastMessage: boolean;
-  hasNoAIOrToolMessages: boolean;
-}
-
-function Interrupt({
-  interrupt,
-  isLastMessage,
-  hasNoAIOrToolMessages,
-}: InterruptProps) {
-  // 提取澄清数据（支持多种包装格式）
-  const clarificationData = extractClarificationData(interrupt);
-  const isClarification = clarificationData !== null;
-  
-  // 通用 fallback 值
-  const fallbackValue = Array.isArray(interrupt)
-    ? (interrupt as Record<string, any>[])
-    : (((interrupt as { value?: unknown } | undefined)?.value ??
-        interrupt) as Record<string, any>);
-
-  // 只在最后一条消息或没有 AI 消息时显示 interrupt
-  const shouldShow = isLastMessage || hasNoAIOrToolMessages;
-
-  if (!interrupt || !shouldShow) {
-    return null;
-  }
-
-  return (
-    <>
-      {/* Agent Inbox 类型的 interrupt */}
-      {isAgentInboxInterruptSchema(interrupt) && (
-        <ThreadView interrupt={interrupt} />
-      )}
-      
-      {/* 澄清类型的 interrupt - 使用提取后的数据 */}
-      {isClarification && clarificationData && (
-        <ClarificationInterruptView interrupt={clarificationData} />
-      )}
-      
-      {/* 其他类型的 interrupt */}
-      {!isAgentInboxInterruptSchema(interrupt) && !isClarification && (
-        <GenericInterruptView interrupt={fallbackValue} />
-      )}
-    </>
-  );
-}
-
-
 function parseAnthropicStreamedToolCalls(
   content: MessageContentComplex[],
 ): AIMessage["tool_calls"] {
@@ -127,6 +114,44 @@ function parseAnthropicStreamedToolCalls(
   });
 }
 
+interface InterruptProps {
+  interrupt?: unknown;
+  isLastMessage: boolean;
+  hasNoAIOrToolMessages: boolean;
+}
+
+function Interrupt({
+  interrupt,
+  isLastMessage,
+  hasNoAIOrToolMessages,
+}: InterruptProps) {
+  const clarificationData = extractClarificationData(interrupt);
+  const isClarification = clarificationData !== null;
+  
+  const fallbackValue = Array.isArray(interrupt)
+    ? (interrupt as Record<string, any>[])
+    : (((interrupt as { value?: unknown } | undefined)?.value ??
+        interrupt) as Record<string, any>);
+
+  return (
+    <>
+      {isAgentInboxInterruptSchema(interrupt) &&
+        (isLastMessage || hasNoAIOrToolMessages) && (
+          <ThreadView interrupt={interrupt} />
+        )}
+      {isClarification && clarificationData && (isLastMessage || hasNoAIOrToolMessages) && (
+        <ClarificationInterruptView interrupt={clarificationData} />
+      )}
+      {interrupt &&
+      !isAgentInboxInterruptSchema(interrupt) &&
+      !isClarification &&
+      (isLastMessage || hasNoAIOrToolMessages) ? (
+        <GenericInterruptView interrupt={fallbackValue} />
+      ) : null}
+    </>
+  );
+}
+
 export function AssistantMessage({
   message,
   isLoading,
@@ -140,6 +165,12 @@ export function AssistantMessage({
 }) {
   const content = message?.content ?? [];
   const contentString = getContentString(content);
+  
+  // 和官方一样，默认显示工具调用 (false)
+  const [hideToolCalls] = useQueryState(
+    "hideToolCalls",
+    parseAsBoolean.withDefault(false),
+  );
   const [threadId] = useQueryState("threadId");
 
   const thread = useStreamContext();
@@ -151,8 +182,6 @@ export function AssistantMessage({
   const meta = message ? thread.getMessagesMetadata(message) : undefined;
   const threadInterrupt = thread.interrupt;
 
-  const toolCalls = message && "tool_calls" in message ? (message as AIMessage).tool_calls : undefined;
-
   const parentCheckpoint = meta?.firstSeenState?.parent_checkpoint;
   const anthropicStreamedToolCalls = Array.isArray(content)
     ? parseAnthropicStreamedToolCalls(content)
@@ -163,23 +192,30 @@ export function AssistantMessage({
     "tool_calls" in message &&
     message.tool_calls &&
     message.tool_calls.length > 0;
+  const toolCallsHaveContents =
+    hasToolCalls &&
+    message.tool_calls?.some(
+      (tc) => tc.args && Object.keys(tc.args).length > 0,
+    );
   const hasAnthropicToolCalls = !!anthropicStreamedToolCalls?.length;
   const isToolResult = message?.type === "tool";
 
-  // 准备反馈上下文
+  // 数据可视化相关
+  const hasQueryData = isLastMessage && thread.queryContext?.dataQuery;
+  const hasChartConfig = hasQueryData && thread.queryContext?.dataQuery?.chart_config;
+  const hasSimilarQuestions = isLastMessage && 
+    thread.queryContext?.similarQuestions?.questions && 
+    thread.queryContext.similarQuestions.questions.length > 0;
+
+  // 反馈上下文
   const feedbackContext = useMemo(() => {
     if (!connectionId || !thread.queryContext?.dataQuery) return undefined;
-    
-    // 获取SQL - 支持新旧节点名称 (sql_executor / final_sql)
     const sqlStep = thread.queryContext.sqlSteps?.find(s => 
       s.step === 'sql_executor' || s.step === 'final_sql'
     );
     const sql = sqlStep?.result || "";
-    
     if (!sql) return undefined;
 
-    // 获取问题
-    // 简单查找：当前消息之前的最后一个 human message
     let question = "";
     if (message) {
       const msgIndex = thread.messages.findIndex(m => m.id === message.id);
@@ -191,12 +227,7 @@ export function AssistantMessage({
       }
     }
 
-    return {
-      question,
-      sql,
-      connectionId,
-      threadId: threadId || undefined
-    };
+    return { question, sql, connectionId, threadId: threadId || undefined };
   }, [connectionId, thread.queryContext, thread.messages, message, threadId]);
 
   const handleSelectQuestion = useCallback((q: string) => {
@@ -212,93 +243,101 @@ export function AssistantMessage({
     textarea.focus();
   }, []);
 
-  // 判断是否应该使用 QueryPipeline（优先级高于 ToolCalls）
-  // 修复: 只要有 queryContext 数据就显示，不限制 isLastMessage，确保历史消息也能显示工具流
-  const hasQueryContextData = thread.queryContext && (
-    thread.queryContext.sqlSteps.length > 0 ||
-    thread.queryContext.intentAnalysis ||
-    thread.queryContext.dataQuery
-  );
-  const hasAnyToolCalls = hasToolCalls || hasAnthropicToolCalls;
-  // 放宽条件：只要有 queryContext 数据就显示，或者是最后一条消息正在执行工具调用
-  const useQueryPipeline = hasQueryContextData || (isLastMessage && isLoading && hasAnyToolCalls);
-
-  // 修复: 允许文本内容与工具流共存，消除闪烁
-  // 只要有实际文本内容就显示（不再与 QueryPipeline 互斥）
-  const shouldShowContent = contentString.trim().length > 0;
-
-  if (isToolResult) {
-    // Tool 消息：只显示 Interrupt，ToolResult 组件已移除（返回 null 无实际功能）
-    return (
-      <div className="group mr-auto flex w-full items-start gap-2">
-         <div className="flex w-full flex-col gap-2">
-            <Interrupt
-              interrupt={threadInterrupt}
-              isLastMessage={isLastMessage}
-              hasNoAIOrToolMessages={hasNoAIOrToolMessages}
-            />
-         </div>
-      </div>
-    );
+  // Tool 消息处理 - 和官方一样
+  if (isToolResult && hideToolCalls) {
+    return null;
   }
 
   return (
     <div className="group mr-auto flex w-full items-start gap-2">
       <div className="flex w-full flex-col gap-2">
-        {/* 统一查询流水线 - 优先使用，包含意图解析、SQL步骤、数据、图表、推荐问题 */}
-        {useQueryPipeline && thread.queryContext && (
-          <QueryPipeline
-            queryContext={thread.queryContext}
-            onSelectQuestion={handleSelectQuestion}
-          />
-        )}
+        {isToolResult ? (
+          <>
+            <ToolResult message={message} />
+            <Interrupt
+              interrupt={threadInterrupt}
+              isLastMessage={isLastMessage}
+              hasNoAIOrToolMessages={hasNoAIOrToolMessages}
+            />
+          </>
+        ) : (
+          <>
+            {/* 流式文字内容 */}
+            {contentString.length > 0 && (
+              <div className="py-1">
+                <MarkdownText>{contentString}</MarkdownText>
+              </div>
+            )}
 
-        {/* 文本内容 */}
-        {shouldShowContent && (
-          <div className="py-1">
-            <MarkdownText>{contentString}</MarkdownText>
-          </div>
-        )}
+            {/* 工具调用 - 和官方一样 */}
+            {!hideToolCalls && (
+              <>
+                {(hasToolCalls && toolCallsHaveContents && (
+                  <ToolCalls toolCalls={message.tool_calls} />
+                )) ||
+                  (hasAnthropicToolCalls && (
+                    <ToolCalls toolCalls={anthropicStreamedToolCalls} />
+                  )) ||
+                  (hasToolCalls && (
+                    <ToolCalls toolCalls={message.tool_calls} />
+                  ))}
+              </>
+            )}
 
-        {/* ToolCalls 组件已移除 - 所有工具调用现在由 QueryPipeline 统一处理 */}
-        
-        {message && (
-          <CustomComponent
-            message={message}
-            thread={thread}
-          />
+            {/* 数据可视化图表 */}
+            {hasChartConfig && thread.queryContext?.dataQuery && (
+              <DataChartDisplay dataQuery={thread.queryContext.dataQuery} />
+            )}
+
+            {/* 推荐问题 */}
+            {hasSimilarQuestions && thread.queryContext?.similarQuestions && (
+              <SimilarQuestions 
+                questions={thread.queryContext.similarQuestions.questions}
+                onSelectQuestion={handleSelectQuestion}
+              />
+            )}
+
+            {/* 自定义组件 */}
+            {message && (
+              <CustomComponent
+                message={message}
+                thread={thread}
+              />
+            )}
+            
+            <Interrupt
+              interrupt={threadInterrupt}
+              isLastMessage={isLastMessage}
+              hasNoAIOrToolMessages={hasNoAIOrToolMessages}
+            />
+            
+            {/* 操作栏 */}
+            <div
+              className={cn(
+                "mr-auto flex items-center gap-2 transition-opacity",
+                "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
+              )}
+            >
+              <BranchSwitcher
+                branch={meta?.branch}
+                branchOptions={meta?.branchOptions}
+                onSelect={(branch) => thread.setBranch(branch)}
+                isLoading={isLoading}
+              />
+              <CommandBar
+                content={contentString}
+                isLoading={isLoading}
+                isAiMessage={true}
+                handleRegenerate={() => handleRegenerate(parentCheckpoint)}
+                feedbackContext={feedbackContext}
+              />
+            </div>
+          </>
         )}
-        <Interrupt
-          interrupt={threadInterrupt}
-          isLastMessage={isLastMessage}
-          hasNoAIOrToolMessages={hasNoAIOrToolMessages}
-        />
-        <div
-          className={cn(
-            "mr-auto flex items-center gap-2 transition-opacity",
-            "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
-          )}
-        >
-          <BranchSwitcher
-            branch={meta?.branch}
-            branchOptions={meta?.branchOptions}
-            onSelect={(branch) => thread.setBranch(branch)}
-            isLoading={isLoading}
-          />
-          <CommandBar
-            content={contentString}
-            isLoading={isLoading}
-            isAiMessage={true}
-            handleRegenerate={() => handleRegenerate(parentCheckpoint)}
-            feedbackContext={feedbackContext}
-          />
-        </div>
       </div>
     </div>
   );
 }
-
-
 
 export function AssistantMessageLoading() {
   return (

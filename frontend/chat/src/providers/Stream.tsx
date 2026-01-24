@@ -286,9 +286,21 @@ const StreamSession = ({
       sleep().then(() => getThreads().then(setThreads).catch(console.error));
     },
     onFinish: (state, run) => {
-      // 修复: 移除 data_analysis_event 的特殊提取逻辑
-      // 后端已通过 writer() 发送事件，由 onCustomEvent 统一处理
-      // 不再需要在 onFinish 时从 state 中提取
+      // 兜底清理：强制结束所有 running 状态的步骤
+      // 防止后端漏发完成事件导致 UI 永久显示加载状态
+      setQueryContext(prev => {
+        const hasRunningSteps = prev.sqlSteps.some(s => s.status === "running");
+        if (!hasRunningSteps) return prev;
+        
+        return {
+          ...prev,
+          sqlSteps: prev.sqlSteps.map(step => 
+            step.status === "running" 
+              ? { ...step, status: "completed" as const }
+              : step
+          )
+        };
+      });
       
       // Refetch threads list when stream finishes to update thread names
       // This ensures the thread list shows the proper conversation title instead of thread ID
