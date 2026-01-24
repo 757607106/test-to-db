@@ -6,6 +6,7 @@
  * - 选项使用字母标记 (A/B/C/D)
  * - 最后一个选项为自定义输入
  * - 支持"推荐选项"提示
+ * - 2026-01-24: UI 重构，适配亮/暗色模式，移除硬编码深色背景
  */
 import { useState, useMemo } from "react";
 import { useStreamContext } from "@/providers/Stream";
@@ -14,6 +15,7 @@ import {
   MessageCircleQuestion, 
   LoaderCircle, 
   Sparkles,
+  Check
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -129,23 +131,28 @@ export function ClarificationInterruptView({
   };
 
   return (
-    <div className="w-full max-w-2xl">
+    <div className="w-full max-w-2xl my-4">
       <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.2 }}
-        className="rounded-2xl overflow-hidden bg-[#2A2A2E] dark:bg-[#1C1C1E] border border-white/10 shadow-xl"
+        transition={{ duration: 0.3 }}
+        className="rounded-2xl overflow-hidden bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-xl"
       >
         {/* 头部标题 */}
-        <div className="px-6 py-4 border-b border-white/10">
+        <div className="px-6 py-4 border-b border-slate-100 dark:border-zinc-800 bg-slate-50/50 dark:bg-zinc-900/50">
           <div className="flex items-center gap-3">
-            <MessageCircleQuestion className="w-5 h-5 text-slate-400" />
-            <span className="text-base font-medium text-slate-200">请回答以下问题</span>
+            <div className="p-2 bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400 rounded-lg">
+              <MessageCircleQuestion className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-semibold text-slate-800 dark:text-slate-100">需要您的确认</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">为了准确执行，请帮忙澄清以下细节</p>
+            </div>
           </div>
         </div>
 
         {/* 问题列表 */}
-        <div className="px-6 py-5 space-y-6">
+        <div className="px-6 py-6 space-y-8">
           <AnimatePresence mode="wait">
             {questions.map((question, qIndex) => (
               <motion.div
@@ -153,16 +160,21 @@ export function ClarificationInterruptView({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                transition={{ duration: 0.15, delay: qIndex * 0.05 }}
-                className="space-y-3"
+                transition={{ duration: 0.2, delay: qIndex * 0.1 }}
+                className="space-y-4"
               >
                 {/* 问题标题 */}
-                <p className="text-sm font-semibold text-white">
-                  {qIndex + 1}. {question.question}
-                </p>
+                <div className="flex gap-3">
+                   <span className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-100 dark:bg-zinc-800 text-xs font-bold text-slate-500 dark:text-slate-400 flex-shrink-0 mt-0.5">
+                     {qIndex + 1}
+                   </span>
+                   <p className="text-sm font-medium text-slate-800 dark:text-slate-200 leading-relaxed">
+                     {question.question}
+                   </p>
+                </div>
 
                 {/* 选项列表 */}
-                <div className="space-y-2">
+                <div className="pl-9 space-y-2.5">
                   {question.type === "choice" && question.options ? (
                     <>
                       {question.options.map((option, optIndex) => {
@@ -175,80 +187,85 @@ export function ClarificationInterruptView({
                             key={option}
                             onClick={() => handleOptionSelect(question.id, option)}
                             className={cn(
-                              "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all",
+                              "group w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all border shadow-sm",
                               isSelected
-                                ? "bg-blue-600/20 border border-blue-500/50"
-                                : "bg-white/5 border border-transparent hover:bg-white/10"
+                                ? "bg-indigo-50 border-indigo-200 shadow-indigo-100 dark:bg-indigo-900/20 dark:border-indigo-800 dark:shadow-none"
+                                : "bg-white border-slate-200 hover:border-indigo-200 hover:shadow-md dark:bg-zinc-800/50 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:border-zinc-600"
                             )}
                           >
                             <span className={cn(
-                              "flex items-center justify-center w-7 h-7 rounded-lg text-sm font-medium flex-shrink-0",
+                              "flex items-center justify-center w-6 h-6 rounded-md text-xs font-bold flex-shrink-0 transition-colors",
                               isSelected
-                                ? "bg-blue-600 text-white"
-                                : "bg-white/10 text-slate-400"
+                                ? "bg-indigo-600 text-white"
+                                : "bg-slate-100 text-slate-500 group-hover:bg-indigo-50 group-hover:text-indigo-600 dark:bg-zinc-700 dark:text-zinc-400 dark:group-hover:bg-zinc-600"
                             )}>
-                              {letter}
+                              {isSelected ? <Check className="w-3.5 h-3.5" /> : letter}
                             </span>
                             <span className={cn(
-                              "text-sm flex-1",
-                              isSelected ? "text-white" : "text-slate-400"
+                              "text-sm flex-1 transition-colors",
+                              isSelected 
+                                ? "text-indigo-900 font-medium dark:text-indigo-100" 
+                                : "text-slate-600 group-hover:text-slate-900 dark:text-slate-300 dark:group-hover:text-slate-100"
                             )}>
                               {option}
                               {isRecommended && (
-                                <span className="ml-2 text-xs text-blue-400">(推荐)</span>
+                                <span className="ml-2 inline-flex items-center gap-1 text-xs font-normal text-amber-500 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 px-2 py-0.5 rounded-full border border-amber-100 dark:border-amber-800/50">
+                                  <Sparkles className="w-3 h-3" /> 推荐
+                                </span>
                               )}
                             </span>
                           </button>
                         );
                       })}
                       
-                      {/* 自定义输入选项 - 始终作为最后一个选项 */}
-                      <div className="space-y-2">
+                      {/* 自定义输入选项 */}
+                      <div className="relative">
                         <button
                           onClick={() => handleOptionSelect(question.id, "", true)}
                           className={cn(
-                            "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all",
+                            "group w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all border shadow-sm",
                             responses[question.id] === "__custom__"
-                              ? "bg-blue-600/20 border border-blue-500/50"
-                              : "bg-white/5 border border-transparent hover:bg-white/10"
+                              ? "bg-indigo-50 border-indigo-200 dark:bg-indigo-900/20 dark:border-indigo-800"
+                              : "bg-white border-slate-200 hover:border-indigo-200 hover:shadow-md dark:bg-zinc-800/50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                           )}
                         >
                           <span className={cn(
-                            "flex items-center justify-center w-7 h-7 rounded-lg text-sm font-medium flex-shrink-0",
+                            "flex items-center justify-center w-6 h-6 rounded-md text-xs font-bold flex-shrink-0 transition-colors",
                             responses[question.id] === "__custom__"
-                              ? "bg-blue-600 text-white"
-                              : "bg-white/10 text-slate-400"
+                              ? "bg-indigo-600 text-white"
+                              : "bg-slate-100 text-slate-500 group-hover:bg-indigo-50 group-hover:text-indigo-600 dark:bg-zinc-700 dark:text-zinc-400"
                           )}>
-                            {OPTION_LETTERS[question.options.length] || "E"}
+                            {responses[question.id] === "__custom__" ? <Check className="w-3.5 h-3.5" /> : (OPTION_LETTERS[question.options.length] || "E")}
                           </span>
+                          
                           {responses[question.id] === "__custom__" ? (
                             <input
                               type="text"
                               value={customInputs[question.id] || ""}
                               onChange={(e) => handleCustomInputChange(question.id, e.target.value)}
                               onClick={(e) => e.stopPropagation()}
-                              placeholder="请输入您的答案..."
+                              placeholder="请输入您的具体需求..."
                               autoFocus
-                              className="flex-1 bg-transparent text-sm text-white placeholder-slate-500 outline-none"
+                              className="flex-1 bg-transparent text-sm text-indigo-900 dark:text-indigo-100 placeholder-indigo-300 outline-none"
                             />
                           ) : (
-                            <span className="text-sm text-slate-500">其他 (自定义输入)</span>
+                            <span className="text-sm text-slate-500 dark:text-slate-400">其他 (自定义输入)</span>
                           )}
                         </button>
                       </div>
                     </>
                   ) : (
                     /* 纯文本输入类型 */
-                    <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-white/5 border border-white/10">
-                      <span className="flex items-center justify-center w-7 h-7 rounded-lg text-sm font-medium bg-white/10 text-slate-400 flex-shrink-0">
+                    <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-white dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-500 transition-all shadow-sm">
+                      <span className="flex items-center justify-center w-6 h-6 rounded-md bg-slate-100 dark:bg-zinc-700 text-xs font-bold text-slate-500 dark:text-slate-400 flex-shrink-0">
                         A
                       </span>
                       <input
                         type="text"
                         value={responses[question.id] || ""}
                         onChange={(e) => setResponses(prev => ({ ...prev, [question.id]: e.target.value }))}
-                        placeholder="请输入您的答案..."
-                        className="flex-1 bg-transparent text-sm text-white placeholder-slate-500 outline-none"
+                        placeholder="请输入您的回答..."
+                        className="flex-1 bg-transparent text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 outline-none"
                       />
                     </div>
                   )}
@@ -259,42 +276,33 @@ export function ClarificationInterruptView({
         </div>
 
         {/* 底部操作栏 */}
-        <div className="px-6 py-4 border-t border-white/10 flex items-center justify-between">
-          {/* 推荐选项提示 */}
-          <div className="flex items-center gap-2 text-slate-500">
-            <Sparkles className="w-4 h-4" />
-            <span className="text-sm">推荐选项</span>
-          </div>
-
-          {/* 按钮组 */}
-          <div className="flex items-center gap-3">
+        <div className="px-6 py-4 border-t border-slate-100 dark:border-zinc-800 bg-slate-50/50 dark:bg-zinc-900/50 flex items-center justify-end gap-3">
             <button
               onClick={handleCancel}
               disabled={isSubmitting}
-              className="px-4 py-2 text-sm text-slate-400 hover:text-slate-300 transition-colors"
+              className="px-4 py-2 text-sm font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-200/50 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-zinc-800 rounded-lg transition-colors"
             >
-              取消
+              跳过/取消
             </button>
             <button
               onClick={handleSubmit}
               disabled={isSubmitting || !allAnswered}
               className={cn(
-                "px-5 py-2 rounded-lg text-sm font-medium transition-all",
+                "px-6 py-2 rounded-lg text-sm font-medium transition-all shadow-sm flex items-center gap-2",
                 allAnswered && !isSubmitting
-                  ? "bg-blue-600 text-white hover:bg-blue-500"
-                  : "bg-white/10 text-slate-500 cursor-not-allowed"
+                  ? "bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-indigo-200 dark:hover:shadow-none"
+                  : "bg-slate-200 text-slate-400 cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-600"
               )}
             >
               {isSubmitting ? (
-                <span className="flex items-center gap-2">
+                <>
                   <LoaderCircle className="w-4 h-4 animate-spin" />
                   提交中...
-                </span>
+                </>
               ) : (
-                "提交"
+                "确认提交"
               )}
             </button>
-          </div>
         </div>
       </motion.div>
     </div>

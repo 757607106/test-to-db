@@ -201,11 +201,46 @@ export function AssistantMessage({
   const isToolResult = message?.type === "tool";
 
   // 数据可视化相关
-  const hasQueryData = isLastMessage && thread.queryContext?.dataQuery;
+  // 检查当前消息是否关联了 queryContext 数据
+  // 逻辑优化：
+  // 1. 如果是最后一条消息，直接使用当前的 queryContext
+  // 2. 如果是历史消息，我们需要一种机制来关联数据。目前最简单的方式是假设只有最后一条消息持有当前的 queryContext。
+  //    为了支持历史记录回看，我们需要确认 queryContext 是否包含了历史数据或者消息本身是否携带了这些数据。
+  //    在此项目中，StreamProvider 似乎只维护了"当前"的 queryContext。
+  //    为了让历史消息也能显示图表，我们暂时放宽限制：如果 thread.queryContext 存在且对应的消息 ID 匹配（如果有这个字段）
+  //    或者，我们简单地只在最后一条消息显示，但用户反馈"看不到了"，说明可能在流式传输结束后，isLastMessage 状态变化或者 queryContext 被清空了？
+  //    通常 queryContext 会保留直到下一次查询。
+  //    用户的问题可能是：当生成结束后，虽然还是最后一条消息，但某些状态可能变了。
+  //    或者用户进行了新的对话，旧的消息就不显示图表了。
+  //    为了解决这个问题，我们需要查看 artifact 或其他持久化存储。
+  //    但在现有架构下，最稳妥的修复是：确保只要是最后一条消息，或者该消息触发了查询（需要后端配合将 ID 写入），就显示。
+  //    
+  //    根据现有代码，thread.queryContext 是全局单例的。这意味着只有最后一次查询的结果被保存在 Context 中。
+  //    因此，历史消息确实无法显示旧的图表/推荐问题，除非这些数据被持久化到了 message.content 或 artifact 中。
+  //    
+  //    现在的临时修复（针对用户反馈"看不到了"）：
+  //    用户可能是在流式生成过程中能看到，生成完（或者状态切换）后消失了。
+  //    或者用户指的历史记录里没有。
+  //    
+  //    如果在历史记录中也需要，我们需要检查 message 中是否包含 tool_call 结果，并从中提取数据。
+  //    但这里的 DataChartDisplay 依赖于 `dataQuery` 对象。
+  //    
+  //    让我们先确保在"当前会话"中，只要数据存在就显示，稍微放宽 isLastMessage 的判断，
+  //    或者确认一下是否因为 key 变化导致重渲染丢失。
+  
+  // 修正：移除 isLastMessage 限制，只要 queryContext 存在且属于当前上下文周期即可。
+  // 但这样会导致所有 AI 消息都显示同一个图表。
+  // 正确的做法是：图表应该只关联到触发它的那条消息。
+  // 假设当前场景用户是在进行单轮或多轮对话，期望最新的结果常驻。
+  
+  const hasQueryData = thread.queryContext?.dataQuery;
   const hasChartConfig = hasQueryData && thread.queryContext?.dataQuery?.chart_config;
-  const hasSimilarQuestions = isLastMessage && 
-    thread.queryContext?.similarQuestions?.questions && 
+  const hasSimilarQuestions = thread.queryContext?.similarQuestions?.questions && 
     thread.queryContext.similarQuestions.questions.length > 0;
+
+  // 只有当消息是最后一条消息时，才关联全局的 queryContext
+  // 这是因为 queryContext 是 ephemeral (瞬态) 的
+  const showTransientComponents = isLastMessage;
 
   // 反馈上下文
   const feedbackContext = useMemo(() => {
@@ -267,35 +302,37 @@ export function AssistantMessage({
           </>
         ) : (
           <>
-            {/* 流式文字内容 */}
+            {/* 工具调用 - 优先显示，实现实时反馈 */}
+            {!hideToolCalls && (
+              <div className="mb-2">
+                {(hasToolCalls && toolCallsHaveContents && (
+                  <ToolCalls toolCalls={message.tool_calls} />
+                )) ||
+                  (hasAnthropicToolCalls && (
+                    <ToolCalls toolCalls={anthropicStreamedToolCalls} isLoading={true} />
+                  )) ||
+                  (hasToolCalls && (
+                    <ToolCalls toolCalls={message.tool_calls} />
+                  ))}
+              </div>
+            )}
+
+            {/* 数据可视化图表 - 放在分析文本之前 */}
+            {hasChartConfig && thread.queryContext?.dataQuery && showTransientComponents && (
+              <div className="mb-4">
+                <DataChartDisplay dataQuery={thread.queryContext.dataQuery} />
+              </div>
+            )}
+
+            {/* 流式文字内容 - AI 的分析 */}
             {contentString.length > 0 && (
               <div className="py-1">
                 <MarkdownText>{contentString}</MarkdownText>
               </div>
             )}
 
-            {/* 工具调用 - 和官方一样 */}
-            {!hideToolCalls && (
-              <>
-                {(hasToolCalls && toolCallsHaveContents && (
-                  <ToolCalls toolCalls={message.tool_calls} />
-                )) ||
-                  (hasAnthropicToolCalls && (
-                    <ToolCalls toolCalls={anthropicStreamedToolCalls} />
-                  )) ||
-                  (hasToolCalls && (
-                    <ToolCalls toolCalls={message.tool_calls} />
-                  ))}
-              </>
-            )}
-
-            {/* 数据可视化图表 */}
-            {hasChartConfig && thread.queryContext?.dataQuery && (
-              <DataChartDisplay dataQuery={thread.queryContext.dataQuery} />
-            )}
-
             {/* 推荐问题 */}
-            {hasSimilarQuestions && thread.queryContext?.similarQuestions && (
+            {hasSimilarQuestions && thread.queryContext?.similarQuestions && showTransientComponents && (
               <SimilarQuestions 
                 questions={thread.queryContext.similarQuestions.questions}
                 onSelectQuestion={handleSelectQuestion}
