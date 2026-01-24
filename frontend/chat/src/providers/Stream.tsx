@@ -189,6 +189,21 @@ const StreamSession = ({
     assistantId,
     threadId: threadId ?? null,
     fetchStateHistory: true,  // 恢复历史消息，custom 事件通过 localStorage 恢复
+    // 增加错误处理配置，忽略中断错误
+    onError: (e) => {
+      // 忽略用户主动中止或网络连接中断导致的错误
+      if (
+        e.name === 'AbortError' || 
+        e.message?.includes('The user aborted a request') ||
+        e.message?.includes('net::ERR_ABORTED') ||
+        e.message?.includes('Failed to fetch')
+      ) {
+        console.log('Stream aborted or connection interrupted (ignored)');
+        // 不向上传递错误，避免 UI 闪烁
+        return;
+      }
+      console.error("Stream error:", e);
+    },
     onCustomEvent: (event, options) => {
       // 处理 UI 消息
       if (isUIMessage(event) || isRemoveUIMessage(event)) {

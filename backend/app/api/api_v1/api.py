@@ -4,7 +4,7 @@ from app.api.api_v1.endpoints import (
     connections, schema, query, value_mappings, 
     graph_visualization, relationship_tips, hybrid_qa,
     dashboards, dashboard_widgets, dashboard_insights,
-    llm_configs, agent_profiles, system_config
+    llm_configs, agent_profiles, system_config, auth, tenant_users
 )
 
 # 强制重新加载 - 修复API路由问题
@@ -27,11 +27,14 @@ async def api_root():
             "graph_visualization": "/api/graph-visualization/",
             "relationship_tips": "/api/relationship-tips/",
             "hybrid_qa": "/api/hybrid-qa/",
+            "tenant": "/api/tenant/",
             "docs": "/docs",
             "openapi": "/openapi.json"
         }
     }
 
+api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
+api_router.include_router(tenant_users.router, prefix="/tenant", tags=["tenant"])
 api_router.include_router(connections.router, prefix="/connections", tags=["connections"])
 api_router.include_router(schema.router, prefix="/schema", tags=["schema"])
 api_router.include_router(query.router, prefix="/query", tags=["query"])

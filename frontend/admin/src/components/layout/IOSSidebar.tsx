@@ -11,13 +11,46 @@ import {
   UserOutlined,
   DashboardOutlined,
   ApiOutlined,
-  RobotOutlined
+  RobotOutlined,
+  TeamOutlined
 } from '@ant-design/icons';
+import { useAuth } from '../../contexts/AuthContext';
 
 const IOSSidebar: React.FC = () => {
   const location = useLocation();
+  const { user } = useAuth();
 
-  const menuItems = [
+  // Menu permission mapping
+  const menuPermissionMap: Record<string, string> = {
+    '/': 'chat',
+    '/hybrid-qa': 'training',
+    '/schema': 'training',
+    '/graph-visualization': 'training',
+    '/dashboards': 'chat',
+    '/connections': 'connections',
+    '/value-mappings': 'training',
+    '/llm-config': 'llm_configs',
+    '/agent-profile': 'agents',
+    '/users': 'users',
+  };
+
+  // Check if user has permission for a menu
+  const hasMenuPermission = (path: string): boolean => {
+    // Super admin and tenant admin have all permissions
+    if (user?.role === 'super_admin' || user?.role === 'tenant_admin') {
+      return true;
+    }
+    
+    const menuKey = menuPermissionMap[path];
+    if (!menuKey) return true; // No permission required
+    
+    const permissions = user?.permissions as { menus?: string[] } | null;
+    if (!permissions?.menus) return false;
+    
+    return permissions.menus.includes(menuKey);
+  };
+
+  const allMenuItems = [
     { key: '/', icon: <HomeOutlined />, label: '首页', to: '/' },
     { key: '/hybrid-qa', icon: <BulbOutlined />, label: '智能训练', to: '/hybrid-qa' },
     { key: '/schema', icon: <TableOutlined />, label: '数据建模', to: '/schema' },
@@ -27,7 +60,17 @@ const IOSSidebar: React.FC = () => {
     { key: '/value-mappings', icon: <SwapOutlined />, label: '数据映射', to: '/value-mappings' },
     { key: '/llm-config', icon: <ApiOutlined />, label: '模型配置', to: '/llm-config' },
     { key: '/agent-profile', icon: <RobotOutlined />, label: '智能体配置', to: '/agent-profile' },
+    { key: '/users', icon: <TeamOutlined />, label: '用户管理', to: '/users', adminOnly: true },
   ];
+
+  // Filter menu items based on permissions
+  const menuItems = allMenuItems.filter(item => {
+    // Admin-only items
+    if (item.adminOnly) {
+      return user?.role === 'super_admin' || user?.role === 'tenant_admin';
+    }
+    return hasMenuPermission(item.to);
+  });
 
   const styles = {
     sidebar: {
@@ -128,7 +171,7 @@ const IOSSidebar: React.FC = () => {
           }}>
             <UserOutlined style={{ fontSize: '14px' }} />
           </div>
-          <span style={{ fontWeight: 500 }}>管理员</span>
+          <span style={{ fontWeight: 500 }}>{user?.display_name || user?.username || '用户'}</span>
         </div>
       </div>
     </aside>

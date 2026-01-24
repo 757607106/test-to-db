@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app import crud, models, schemas
 from app.api import deps
 from app.models.db_connection import DBConnection # Import for type hinting mock
+from app.models.user import User
 
 router = APIRouter()
 
@@ -13,13 +14,18 @@ router = APIRouter()
 @router.get("/", response_model=List[schemas.DBConnection])
 def read_connections(
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     skip: int = 0,
     limit: int = 100,
 ) -> Any:
     """
-    Retrieve all database connections.
+    Retrieve all database connections for current user's tenant.
     """
-    connections = crud.db_connection.get_multi(db, skip=skip, limit=limit)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    connections = crud.db_connection.get_multi_by_tenant(
+        db, tenant_id=current_user.tenant_id, skip=skip, limit=limit
+    )
     return connections
 
 
@@ -28,12 +34,17 @@ def read_connections(
 def create_connection(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     connection_in: schemas.DBConnectionCreate,
 ) -> Any:
     """
-    Create new database connection.
+    Create new database connection for current user's tenant.
     """
-    connection = crud.db_connection.create(db=db, obj_in=connection_in)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    connection = crud.db_connection.create(
+        db=db, obj_in=connection_in, user_id=current_user.id, tenant_id=current_user.tenant_id
+    )
     return connection
 
 
@@ -41,6 +52,7 @@ def create_connection(
 def discover_and_save_schema(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     connection_id: int,
 ) -> Any:
     """
@@ -48,7 +60,9 @@ def discover_and_save_schema(
     """
     from app.services.schema_service import discover_schema, save_discovered_schema
 
-    connection = crud.db_connection.get(db=db, id=connection_id)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    connection = crud.db_connection.get_by_tenant(db=db, id=connection_id, tenant_id=current_user.tenant_id)
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
 
@@ -77,12 +91,15 @@ def discover_and_save_schema(
 def read_connection(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     connection_id: int,
 ) -> Any:
     """
-    Get database connection by ID.
+    Get database connection by ID for current user's tenant.
     """
-    connection = crud.db_connection.get(db=db, id=connection_id)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    connection = crud.db_connection.get_by_tenant(db=db, id=connection_id, tenant_id=current_user.tenant_id)
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
     return connection
@@ -92,13 +109,16 @@ def read_connection(
 def update_connection(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     connection_id: int,
     connection_in: schemas.DBConnectionUpdate,
 ) -> Any:
     """
-    Update a database connection.
+    Update a database connection for current user's tenant.
     """
-    connection = crud.db_connection.get(db=db, id=connection_id)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    connection = crud.db_connection.get_by_tenant(db=db, id=connection_id, tenant_id=current_user.tenant_id)
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
     connection = crud.db_connection.update(db=db, db_obj=connection, obj_in=connection_in)
@@ -109,12 +129,15 @@ def update_connection(
 def delete_connection(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     connection_id: int,
 ) -> Any:
     """
-    Delete a database connection.
+    Delete a database connection for current user's tenant.
     """
-    connection = crud.db_connection.get(db=db, id=connection_id)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    connection = crud.db_connection.get_by_tenant(db=db, id=connection_id, tenant_id=current_user.tenant_id)
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
     connection = crud.db_connection.remove(db=db, id=connection_id)
@@ -125,12 +148,15 @@ def delete_connection(
 def test_connection(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     connection_id: int,
 ) -> Any:
     """
-    Test a database connection (existing).
+    Test a database connection (existing) for current user's tenant.
     """
-    connection = crud.db_connection.get(db=db, id=connection_id)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    connection = crud.db_connection.get_by_tenant(db=db, id=connection_id, tenant_id=current_user.tenant_id)
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
 

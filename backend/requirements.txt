@@ -15,7 +15,9 @@ langgraph-checkpoint-postgres
 langchain-mcp-adapters~=0.1.11
 langchain-ollama~=0.3.10
 pydantic-settings~=2.11.0
-passlib~=1.7.4
+passlib[bcrypt]~=1.7.4
+python-jose[cryptography]~=3.3.0
+email-validator~=2.1.0
 sqlparse~=0.5.3
 typing_extensions~=4.15.0
 uvicorn~=0.37.0

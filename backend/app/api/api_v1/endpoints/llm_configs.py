@@ -8,6 +8,7 @@ from app import crud, schemas
 from app.api import deps
 from app.schemas.llm_config import LLMConfigCreate, LLMConfigUpdate
 from app.models.agent_profile import AgentProfile
+from app.models.user import User
 from app.core.llms import create_llm_from_config
 
 router = APIRouter()
@@ -16,38 +17,49 @@ logger = logging.getLogger(__name__)
 @router.get("/", response_model=List[schemas.LLMConfig])
 def read_llm_configs(
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
     skip: int = 0,
     limit: int = 100,
 ) -> Any:
     """
-    Retrieve LLM configurations.
+    Retrieve LLM configurations for the current user's tenant.
     """
-    configs = crud.llm_config.get_multi(db, skip=skip, limit=limit)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    configs = crud.llm_config.get_multi_by_tenant(db, tenant_id=current_user.tenant_id, skip=skip, limit=limit)
     return configs
 
 @router.post("/", response_model=schemas.LLMConfig)
 def create_llm_config(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
     config_in: LLMConfigCreate,
 ) -> Any:
     """
-    Create new LLM configuration.
+    Create new LLM configuration for the current user's tenant.
     """
-    config = crud.llm_config.create(db=db, obj_in=config_in)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    config = crud.llm_config.create_with_tenant(
+        db=db, obj_in=config_in, user_id=current_user.id, tenant_id=current_user.tenant_id
+    )
     return config
 
 @router.put("/{config_id}", response_model=schemas.LLMConfig)
 def update_llm_config(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
     config_id: int,
     config_in: LLMConfigUpdate,
 ) -> Any:
     """
     Update an LLM configuration.
     """
-    config = crud.llm_config.get(db=db, id=config_id)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    config = crud.llm_config.get_by_tenant(db=db, id=config_id, tenant_id=current_user.tenant_id)
     if not config:
         raise HTTPException(status_code=404, detail="Configuration not found")
     config = crud.llm_config.update(db=db, db_obj=config, obj_in=config_in)
@@ -57,20 +69,25 @@ def update_llm_config(
 def delete_llm_config(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
     config_id: int,
 ) -> Any:
     """
     Delete an LLM configuration.
     Checks if any agent profiles are using this configuration before deletion.
     """
-    # 1. Check if configuration exists
-    config = crud.llm_config.get(db=db, id=config_id)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    
+    # 1. Check if configuration exists and belongs to tenant
+    config = crud.llm_config.get_by_tenant(db=db, id=config_id, tenant_id=current_user.tenant_id)
     if not config:
         raise HTTPException(status_code=404, detail="Configuration not found")
     
     # 2. Check if any agent profiles are using this configuration
     agents_using_config = db.query(AgentProfile).filter(
-        AgentProfile.llm_config_id == config_id
+        AgentProfile.llm_config_id == config_id,
+        AgentProfile.tenant_id == current_user.tenant_id
     ).all()
     
     if agents_using_config:
@@ -85,12 +102,13 @@ def delete_llm_config(
     
     # 3. Delete the configuration
     config = crud.llm_config.remove(db=db, id=config_id)
-    logger.info(f"Deleted LLM config (id={config_id})")
+    logger.info(f"Deleted LLM config (id={config_id}) by user {current_user.id}")
     return {"message": "删除成功", "id": config_id}
 
 @router.post("/test", response_model=dict)
 def test_llm_connection(
     *,
+    current_user: User = Depends(deps.get_current_user),
     config_in: LLMConfigCreate,
 ) -> Any:
     """

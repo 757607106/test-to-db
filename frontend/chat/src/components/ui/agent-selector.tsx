@@ -83,7 +83,7 @@ export function AgentSelector({
   return (
     <div className={cn("flex items-center", className)}>
       <Select value={currentValue} onValueChange={handleValueChange}>
-        <SelectTrigger className="h-8 border-0 bg-transparent shadow-none focus:ring-0 focus:ring-offset-0 text-sm text-gray-600 hover:text-gray-800 transition-colors p-0 gap-1 min-w-0">
+        <SelectTrigger className="h-8 border-0 bg-transparent shadow-none focus:ring-0 focus:ring-offset-0 text-sm font-medium text-gray-600 hover:text-gray-800 transition-colors p-0 gap-1 min-w-0">
           <div className="flex items-center gap-2">
             <Bot className="h-4 w-4 text-gray-600 flex-shrink-0" />
             <SelectValue
@@ -91,11 +91,11 @@ export function AgentSelector({
               className="text-sm"
             >
               {selectedAgent ? (
-                <span className="truncate max-w-[120px]">
+                <span className="truncate max-w-[120px] text-sm font-medium text-gray-600">
                   {selectedAgent.name}
                 </span>
               ) : (
-                <span className="text-gray-600">选择智能体</span>
+                <span className="text-gray-600 font-medium">选择智能体</span>
               )}
             </SelectValue>
           </div>

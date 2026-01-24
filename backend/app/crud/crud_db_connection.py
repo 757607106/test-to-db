@@ -16,10 +16,8 @@ from app.schemas.db_connection import DBConnectionCreate, DBConnectionUpdate
 
 
 class CRUDDBConnection(CRUDBase[DBConnection, DBConnectionCreate, DBConnectionUpdate]):
-    def create(self, db: Session, *, obj_in: DBConnectionCreate) -> DBConnection:
-        # 在实际应用中，应该对密码进行加密
-        # 但为了解决当前的连接问题，我们暂时存储明文密码
-        # password_encrypted=get_password_hash(obj_in.password),
+    def create(self, db: Session, *, obj_in: DBConnectionCreate, user_id: int, tenant_id: int) -> DBConnection:
+        """Create new connection with user and tenant ownership."""
         db_obj = DBConnection(
             name=obj_in.name,
             db_type=obj_in.db_type,
@@ -28,11 +26,57 @@ class CRUDDBConnection(CRUDBase[DBConnection, DBConnectionCreate, DBConnectionUp
             username=obj_in.username,
             password_encrypted=obj_in.password,  # 暂时存储明文密码
             database_name=obj_in.database_name,
+            user_id=user_id,
+            tenant_id=tenant_id,
         )
         db.add(db_obj)
         db.commit()
         db.refresh(db_obj)
         return db_obj
+
+    def get_multi_by_tenant(
+        self, db: Session, *, tenant_id: int, skip: int = 0, limit: int = 100
+    ) -> List[DBConnection]:
+        """Get all connections owned by a specific tenant."""
+        return (
+            db.query(DBConnection)
+            .filter(DBConnection.tenant_id == tenant_id)
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+
+    def get_by_tenant(
+        self, db: Session, *, id: int, tenant_id: int
+    ) -> Optional[DBConnection]:
+        """Get a specific connection owned by a tenant."""
+        return (
+            db.query(DBConnection)
+            .filter(DBConnection.id == id, DBConnection.tenant_id == tenant_id)
+            .first()
+        )
+
+    def get_multi_by_user(
+        self, db: Session, *, user_id: int, skip: int = 0, limit: int = 100
+    ) -> List[DBConnection]:
+        """Get all connections owned by a specific user."""
+        return (
+            db.query(DBConnection)
+            .filter(DBConnection.user_id == user_id)
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+
+    def get_by_user(
+        self, db: Session, *, id: int, user_id: int
+    ) -> Optional[DBConnection]:
+        """Get a specific connection owned by a user."""
+        return (
+            db.query(DBConnection)
+            .filter(DBConnection.id == id, DBConnection.user_id == user_id)
+            .first()
+        )
 
 
     def update(

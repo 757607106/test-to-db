@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, String, Text, DateTime, JSON
+from sqlalchemy import Column, BigInteger, String, Text, DateTime, JSON, ForeignKey
 from sqlalchemy.sql import func
 
 from app.db.base_class import Base
@@ -10,6 +10,7 @@ class QueryHistory(Base):
     query_text = Column(Text, nullable=False)
     embedding = Column(JSON, nullable=True) # Store as JSON list of floats for MySQL compatibility
     connection_id = Column(BigInteger, nullable=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Metadata like execution success, result summary, etc.

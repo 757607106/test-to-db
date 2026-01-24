@@ -16,6 +16,10 @@ class AgentProfile(Base):
     # Optional: Link to a specific LLM config, otherwise use system default
     llm_config_id = Column(BigInteger, ForeignKey("llm_configuration.id"), nullable=True)
     
+    # User ownership: null for system agents, user_id for user-created agents
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)
+    tenant_id = Column(BigInteger, ForeignKey("tenants.id"), nullable=True, index=True)
+    
     is_active = Column(Boolean, default=True)
     is_system = Column(Boolean, default=False)
     
@@ -23,3 +27,5 @@ class AgentProfile(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     llm_config = relationship("LLMConfiguration")
+    owner = relationship("User", back_populates="agent_profiles")
+    tenant = relationship("Tenant", back_populates="agent_profiles")

@@ -1,3 +1,4 @@
+from app.crud.crud_tenant import tenant
 from app.crud.crud_db_connection import db_connection
 from app.crud.crud_schema_table import schema_table
 from app.crud.crud_schema_column import schema_column
@@ -9,3 +10,4 @@ from app.crud.crud_dashboard_permission import crud_dashboard_permission
 from app.crud.crud_llm_config import llm_config
 from app.crud.crud_agent_profile import agent_profile
 from app.crud.crud_system_config import system_config
+from app.crud.crud_user import user

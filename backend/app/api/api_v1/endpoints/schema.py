@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app import crud, models, schemas
 from app.api import deps
+from app.models.user import User
 from app.services.schema_service import discover_schema, sync_schema_to_graph_db, save_discovered_schema
 
 router = APIRouter()
@@ -13,12 +14,15 @@ router = APIRouter()
 def discover_connection_schema(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
     connection_id: int,
 ) -> Any:
     """
     Discover schema from a database connection.
     """
-    connection = crud.db_connection.get(db=db, id=connection_id)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    connection = crud.db_connection.get_by_tenant(db=db, id=connection_id, tenant_id=current_user.tenant_id)
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
 
@@ -58,12 +62,15 @@ def discover_connection_schema(
 def get_schema_metadata(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
     connection_id: int,
 ) -> Any:
     """
     Get maintained schema metadata for a connection.
     """
-    connection = crud.db_connection.get(db=db, id=connection_id)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    connection = crud.db_connection.get_by_tenant(db=db, id=connection_id, tenant_id=current_user.tenant_id)
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
 
@@ -169,13 +176,16 @@ def get_schema_metadata(
 def publish_schema(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
     connection_id: int,
     schema_data: Dict[str, Any],
 ) -> Any:
     """
     Publish schema metadata to MySQL and Graph DB.
     """
-    connection = crud.db_connection.get(db=db, id=connection_id)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    connection = crud.db_connection.get_by_tenant(db=db, id=connection_id, tenant_id=current_user.tenant_id)
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
 
@@ -326,12 +336,15 @@ def publish_schema(
 def get_saved_schema(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
     connection_id: int,
 ) -> Any:
     """
     Get saved schema with UI metadata for a connection.
     """
-    connection = crud.db_connection.get(db=db, id=connection_id)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    connection = crud.db_connection.get_by_tenant(db=db, id=connection_id, tenant_id=current_user.tenant_id)
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
 
@@ -403,12 +416,15 @@ def get_saved_schema(
 def sync_to_neo4j(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
     connection_id: int,
 ) -> Any:
     """
     Manually sync schema metadata to Neo4j graph database.
     """
-    connection = crud.db_connection.get(db=db, id=connection_id)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    connection = crud.db_connection.get_by_tenant(db=db, id=connection_id, tenant_id=current_user.tenant_id)
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
 
@@ -429,12 +445,15 @@ def sync_to_neo4j(
 def discover_and_sync(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
     connection_id: int,
 ) -> Any:
     """
     Discover schema from database, save it, and sync to Neo4j.
     """
-    connection = crud.db_connection.get(db=db, id=connection_id)
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    connection = crud.db_connection.get_by_tenant(db=db, id=connection_id, tenant_id=current_user.tenant_id)
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
 
@@ -461,14 +480,23 @@ def discover_and_sync(
 def update_table(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
     table_id: int,
     table_in: schemas.SchemaTableUpdate,
 ) -> Any:
     """
     Update a table's information.
     """
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    
     table = crud.schema_table.get(db=db, id=table_id)
     if not table:
+        raise HTTPException(status_code=404, detail="Table not found")
+    
+    # Verify user has access to this connection via tenant
+    connection = crud.db_connection.get_by_tenant(db=db, id=table.connection_id, tenant_id=current_user.tenant_id)
+    if not connection:
         raise HTTPException(status_code=404, detail="Table not found")
 
     try:
@@ -481,14 +509,26 @@ def update_table(
 def update_column(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
     column_id: int,
     column_in: schemas.SchemaColumnUpdate,
 ) -> Any:
     """
     Update a column's information.
     """
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    
     column = crud.schema_column.get(db=db, id=column_id)
     if not column:
+        raise HTTPException(status_code=404, detail="Column not found")
+    
+    # Verify user has access to this connection via table and tenant
+    table = crud.schema_table.get(db=db, id=column.table_id)
+    if not table:
+        raise HTTPException(status_code=404, detail="Column not found")
+    connection = crud.db_connection.get_by_tenant(db=db, id=table.connection_id, tenant_id=current_user.tenant_id)
+    if not connection:
         raise HTTPException(status_code=404, detail="Column not found")
 
     try:

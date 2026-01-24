@@ -176,7 +176,7 @@ export function ClarificationInterruptView({
                 {/* 选项列表 */}
                 <div className="pl-9 space-y-2.5">
                   {question.type === "choice" && question.options ? (
-                    <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {question.options.map((option, optIndex) => {
                         const letter = OPTION_LETTERS[optIndex] || String(optIndex + 1);
                         const isSelected = responses[question.id] === option;
@@ -190,7 +190,8 @@ export function ClarificationInterruptView({
                               "group w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all border shadow-sm",
                               isSelected
                                 ? "bg-indigo-50 border-indigo-200 shadow-indigo-100 dark:bg-indigo-900/20 dark:border-indigo-800 dark:shadow-none"
-                                : "bg-white border-slate-200 hover:border-indigo-200 hover:shadow-md dark:bg-zinc-800/50 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:border-zinc-600"
+                                : "bg-white border-slate-200 hover:border-indigo-200 hover:shadow-md dark:bg-zinc-800/50 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:border-zinc-600",
+                              isRecommended && "ring-2 ring-amber-400/30 dark:ring-amber-500/20 animate-pulse-slow"
                             )}
                           >
                             <span className={cn(
@@ -202,7 +203,7 @@ export function ClarificationInterruptView({
                               {isSelected ? <Check className="w-3.5 h-3.5" /> : letter}
                             </span>
                             <span className={cn(
-                              "text-sm flex-1 transition-colors",
+                              "text-sm flex-1 transition-colors truncate",
                               isSelected 
                                 ? "text-indigo-900 font-medium dark:text-indigo-100" 
                                 : "text-slate-600 group-hover:text-slate-900 dark:text-slate-300 dark:group-hover:text-slate-100"
@@ -219,7 +220,7 @@ export function ClarificationInterruptView({
                       })}
                       
                       {/* 自定义输入选项 */}
-                      <div className="relative">
+                      <div className="relative col-span-1 sm:col-span-2">
                         <button
                           onClick={() => handleOptionSelect(question.id, "", true)}
                           className={cn(
@@ -239,21 +240,23 @@ export function ClarificationInterruptView({
                           </span>
                           
                           {responses[question.id] === "__custom__" ? (
-                            <input
+                            <motion.input
+                              initial={{ width: 0, opacity: 0 }}
+                              animate={{ width: "100%", opacity: 1 }}
                               type="text"
                               value={customInputs[question.id] || ""}
                               onChange={(e) => handleCustomInputChange(question.id, e.target.value)}
                               onClick={(e) => e.stopPropagation()}
                               placeholder="请输入您的具体需求..."
                               autoFocus
-                              className="flex-1 bg-transparent text-sm text-indigo-900 dark:text-indigo-100 placeholder-indigo-300 outline-none"
+                              className="flex-1 bg-transparent text-sm text-indigo-900 dark:text-indigo-100 placeholder-indigo-300 outline-none min-w-0"
                             />
                           ) : (
                             <span className="text-sm text-slate-500 dark:text-slate-400">其他 (自定义输入)</span>
                           )}
                         </button>
                       </div>
-                    </>
+                    </div>
                   ) : (
                     /* 纯文本输入类型 */
                     <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-white dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-500 transition-all shadow-sm">
@@ -288,16 +291,19 @@ export function ClarificationInterruptView({
               onClick={handleSubmit}
               disabled={isSubmitting || !allAnswered}
               className={cn(
-                "px-6 py-2 rounded-lg text-sm font-medium transition-all shadow-sm flex items-center gap-2",
+                "relative px-6 py-2 rounded-lg text-sm font-medium transition-all shadow-sm flex items-center gap-2 overflow-hidden",
                 allAnswered && !isSubmitting
                   ? "bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-indigo-200 dark:hover:shadow-none"
                   : "bg-slate-200 text-slate-400 cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-600"
               )}
             >
+              {isSubmitting && (
+                <div className="absolute inset-0 bg-white/20 dark:bg-black/20 z-10" />
+              )}
               {isSubmitting ? (
                 <>
                   <LoaderCircle className="w-4 h-4 animate-spin" />
-                  提交中...
+                  <span>提交中...</span>
                 </>
               ) : (
                 "确认提交"
@@ -318,59 +324,64 @@ export function ClarificationInterruptView({
 export function extractClarificationData(
   interrupt: unknown
 ): ClarificationInterruptData | null {
-  if (!interrupt || typeof interrupt !== "object") return null;
-  
-  const obj = interrupt as Record<string, unknown>;
-  
-  // 直接格式
-  if (
-    (obj.type === "clarification" || obj.type === "clarification_request" || obj.type === "schema_clarification") &&
-    Array.isArray(obj.questions)
-  ) {
-    return obj as unknown as ClarificationInterruptData;
-  }
-  
-  // 包装在 value 中的格式
-  if (obj.value && typeof obj.value === "object") {
-    const valueObj = obj.value as Record<string, unknown>;
+  try {
+    if (!interrupt || typeof interrupt !== "object") return null;
+    
+    const obj = interrupt as Record<string, unknown>;
+    
+    // 直接格式
     if (
-      (valueObj.type === "clarification" || valueObj.type === "clarification_request" || valueObj.type === "schema_clarification") &&
-      Array.isArray(valueObj.questions)
+      (obj.type === "clarification" || obj.type === "clarification_request" || obj.type === "schema_clarification") &&
+      Array.isArray(obj.questions)
     ) {
-      return valueObj as unknown as ClarificationInterruptData;
+      return obj as unknown as ClarificationInterruptData;
     }
-  }
-  
-  // 嵌套 interrupt 格式 (LangGraph 某些版本可能使用)
-  if (obj.interrupt && typeof obj.interrupt === "object") {
-    return extractClarificationData(obj.interrupt);
-  }
-  
-  // 数组格式 (取第一个元素)
-  if (Array.isArray(interrupt) && interrupt.length > 0) {
-    const first = interrupt[0];
-    if (first && typeof first === "object") {
-      // 直接检查数组元素
-      const firstObj = first as Record<string, unknown>;
+    
+    // 包装在 value 中的格式
+    if (obj.value && typeof obj.value === "object") {
+      const valueObj = obj.value as Record<string, unknown>;
       if (
-        (firstObj.type === "clarification" || firstObj.type === "clarification_request" || firstObj.type === "schema_clarification") &&
-        Array.isArray(firstObj.questions)
+        (valueObj.type === "clarification" || valueObj.type === "clarification_request" || valueObj.type === "schema_clarification") &&
+        Array.isArray(valueObj.questions)
       ) {
-        return firstObj as unknown as ClarificationInterruptData;
+        return valueObj as unknown as ClarificationInterruptData;
       }
-      
-      // 检查数组元素的 value 属性
-      const firstValue = firstObj.value;
-      if (firstValue && typeof firstValue === "object") {
-        const valueObj = firstValue as Record<string, unknown>;
+    }
+    
+    // 嵌套 interrupt 格式 (LangGraph 某些版本可能使用)
+    if (obj.interrupt && typeof obj.interrupt === "object") {
+      return extractClarificationData(obj.interrupt);
+    }
+    
+    // 数组格式 (取第一个元素)
+    if (Array.isArray(interrupt) && interrupt.length > 0) {
+      const first = interrupt[0];
+      if (first && typeof first === "object") {
+        // 直接检查数组元素
+        const firstObj = first as Record<string, unknown>;
         if (
-          (valueObj.type === "clarification" || valueObj.type === "clarification_request" || valueObj.type === "schema_clarification") &&
-          Array.isArray(valueObj.questions)
+          (firstObj.type === "clarification" || firstObj.type === "clarification_request" || firstObj.type === "schema_clarification") &&
+          Array.isArray(firstObj.questions)
         ) {
-          return valueObj as unknown as ClarificationInterruptData;
+          return firstObj as unknown as ClarificationInterruptData;
+        }
+        
+        // 检查数组元素的 value 属性
+        const firstValue = firstObj.value;
+        if (firstValue && typeof firstValue === "object") {
+          const valueObj = firstValue as Record<string, unknown>;
+          if (
+            (valueObj.type === "clarification" || valueObj.type === "clarification_request" || valueObj.type === "schema_clarification") &&
+            Array.isArray(valueObj.questions)
+          ) {
+            return valueObj as unknown as ClarificationInterruptData;
+          }
         }
       }
     }
+  } catch (e) {
+    console.warn("Failed to extract clarification data:", e);
+    return null;
   }
   
   return null;

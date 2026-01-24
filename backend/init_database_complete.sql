@@ -49,10 +49,13 @@ CREATE TABLE IF NOT EXISTS `dbconnection` (
     `username` VARCHAR(255) NOT NULL COMMENT '用户名',
     `password_encrypted` VARCHAR(255) NOT NULL COMMENT '加密的密码',
     `database_name` VARCHAR(255) NOT NULL COMMENT '数据库名',
+    `user_id` BIGINT NOT NULL COMMENT '所属用户ID',
     `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `updated_at` TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     
-    INDEX `idx_dbconn_name` (`name`)
+    INDEX `idx_dbconn_name` (`name`),
+    INDEX `idx_dbconn_user` (`user_id`),
+    FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='数据库连接表';
 
 -- ============================================================
@@ -217,13 +220,16 @@ CREATE TABLE IF NOT EXISTS `agent_profile` (
     `system_prompt` TEXT DEFAULT NULL COMMENT '系统提示词',
     `tools` JSON DEFAULT NULL COMMENT '工具列表配置',
     `llm_config_id` BIGINT DEFAULT NULL COMMENT 'LLM配置ID',
+    `user_id` BIGINT DEFAULT NULL COMMENT '所属用户ID（系统Agent为空）',
     `is_active` BOOLEAN DEFAULT TRUE COMMENT '是否激活',
     `is_system` BOOLEAN DEFAULT FALSE COMMENT '是否系统Agent',
     `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `updated_at` TIMESTAMP NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     
     INDEX `idx_agent_name` (`name`),
-    FOREIGN KEY (`llm_config_id`) REFERENCES `llm_configuration`(`id`) ON DELETE SET NULL
+    INDEX `idx_agent_user` (`user_id`),
+    FOREIGN KEY (`llm_config_id`) REFERENCES `llm_configuration`(`id`) ON DELETE SET NULL,
+    FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent配置表';
 
 -- ============================================================
@@ -236,11 +242,14 @@ CREATE TABLE IF NOT EXISTS `query_history` (
     `query_text` TEXT NOT NULL COMMENT '查询文本',
     `embedding` JSON DEFAULT NULL COMMENT '查询向量嵌入（JSON格式）',
     `connection_id` BIGINT DEFAULT NULL COMMENT '数据库连接ID',
+    `user_id` BIGINT DEFAULT NULL COMMENT '所属用户ID',
     `meta_info` JSON DEFAULT NULL COMMENT '元信息：执行结果、耗时等',
     `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     
     INDEX `idx_queryhistory_created` (`created_at`),
-    INDEX `idx_queryhistory_connection` (`connection_id`)
+    INDEX `idx_queryhistory_connection` (`connection_id`),
+    INDEX `idx_queryhistory_user` (`user_id`),
+    FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='查询历史表';
 
 -- ============================================================

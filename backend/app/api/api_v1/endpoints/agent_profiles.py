@@ -9,6 +9,7 @@ from app import crud, models, schemas
 from app.api import deps
 from app.schemas.agent_profile import AgentProfileCreate, AgentProfileUpdate
 from app.core.llms import get_default_model
+from app.models.user import User
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -16,57 +17,81 @@ logger = logging.getLogger(__name__)
 @router.get("/", response_model=List[schemas.AgentProfile])
 def read_agent_profiles(
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     skip: int = 0,
     limit: int = 100,
     is_system: Optional[bool] = None,
 ) -> Any:
     """
     获取智能体配置列表 (Retrieve agent profiles).
+    返回系统内置智能体和当前租户创建的智能体。
     """
-    if is_system is not None:
-        profiles = db.query(models.AgentProfile).filter(models.AgentProfile.is_system == is_system).offset(skip).limit(limit).all()
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    
+    if is_system is True:
+        # 只返回系统智能体
+        profiles = db.query(models.AgentProfile).filter(
+            models.AgentProfile.is_system == True
+        ).offset(skip).limit(limit).all()
+    elif is_system is False:
+        # 只返回租户自己的智能体
+        profiles = db.query(models.AgentProfile).filter(
+            models.AgentProfile.tenant_id == current_user.tenant_id,
+            models.AgentProfile.is_system == False
+        ).offset(skip).limit(limit).all()
     else:
-        profiles = crud.agent_profile.get_multi(db, skip=skip, limit=limit)
+        # 返回系统智能体和租户自己的智能体
+        profiles = crud.agent_profile.get_multi_for_tenant(
+            db, tenant_id=current_user.tenant_id, skip=skip, limit=limit
+        )
     return profiles
 
 @router.post("/", response_model=schemas.AgentProfile)
 def create_agent_profile(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     profile_in: AgentProfileCreate,
 ) -> Any:
     """
     创建新的智能体配置 (Create new agent profile).
     用户创建的智能体默认 is_system=False。
     """
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    
     # 检查名称是否已存在
     profile = crud.agent_profile.get_by_name(db, name=profile_in.name)
     if profile:
         logger.warning(f"Attempted to create agent with duplicate name: {profile_in.name}")
         raise HTTPException(status_code=400, detail="该名称的智能体配置已存在")
     
-    # 确保用户创建的智能体 is_system=False
-    profile_data = profile_in.dict()
-    profile_data['is_system'] = False
-    
-    # 创建智能体
-    profile = crud.agent_profile.create(db=db, obj_in=profile_data)
-    logger.info(f"Created custom agent profile: {profile.name} (id={profile.id})")
+    # 使用 tenant_id 创建智能体
+    profile = crud.agent_profile.create_with_tenant(
+        db=db, obj_in=profile_in, user_id=current_user.id, tenant_id=current_user.tenant_id
+    )
+    logger.info(f"Created custom agent profile: {profile.name} (id={profile.id}) for tenant {current_user.tenant_id}")
     return profile
 
 @router.put("/{profile_id}", response_model=schemas.AgentProfile)
 def update_agent_profile(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     profile_id: int,
     profile_in: AgentProfileUpdate,
 ) -> Any:
     """
     更新智能体配置 (Update an agent profile).
     系统内置智能体不允许修改 name 和 role_description。
+    用户只能修改自己租户创建的智能体。
     """
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    
     # 获取现有配置
-    profile = crud.agent_profile.get(db=db, id=profile_id)
+    profile = crud.agent_profile.get_by_tenant(db=db, id=profile_id, tenant_id=current_user.tenant_id)
     if not profile:
         raise HTTPException(status_code=404, detail="智能体配置不存在")
     
@@ -115,14 +140,19 @@ def update_agent_profile(
 def delete_agent_profile(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     profile_id: int,
 ) -> Any:
     """
     删除智能体配置 (Delete an agent profile).
     系统内置智能体不允许删除。
+    用户只能删除自己租户创建的智能体。
     """
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    
     # 获取配置
-    profile = crud.agent_profile.get(db=db, id=profile_id)
+    profile = crud.agent_profile.get_by_tenant(db=db, id=profile_id, tenant_id=current_user.tenant_id)
     if not profile:
         raise HTTPException(status_code=404, detail="智能体配置不存在")
     

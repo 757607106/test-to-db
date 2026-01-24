@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, Integer, String, DateTime
+from sqlalchemy import Column, BigInteger, Integer, String, DateTime, ForeignKey
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
@@ -16,8 +16,12 @@ class DBConnection(Base):
     username = Column(String(255), nullable=False)
     password_encrypted = Column(String(255), nullable=False)
     database_name = Column(String(255), nullable=False)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)
+    tenant_id = Column(BigInteger, ForeignKey("tenants.id"), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     # Relationships
     tables = relationship("SchemaTable", back_populates="connection")
+    owner = relationship("User", back_populates="connections")
+    tenant = relationship("Tenant", back_populates="connections")

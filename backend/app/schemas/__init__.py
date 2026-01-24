@@ -1,4 +1,5 @@
 # Import and re-export schema classes
+from app.schemas.tenant import TenantCreate, TenantUpdate, TenantResponse, TenantWithStats
 from app.schemas.db_connection import DBConnection, DBConnectionCreate, DBConnectionUpdate, DBConnectionInDB
 from app.schemas.schema_table import SchemaTable, SchemaTableCreate, SchemaTableUpdate, SchemaTableWithRelationships
 from app.schemas.schema_column import SchemaColumn, SchemaColumnCreate, SchemaColumnUpdate, SchemaColumnWithMappings
