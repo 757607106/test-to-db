@@ -116,14 +116,15 @@ async def question_recommendation_node(
             writer(create_similar_questions_event(questions=all_questions))
         
         return {
-            "similar_queries": [{"question": q} for q in all_questions]
+            "recommended_questions": all_questions,
+            "current_stage": "recommendation_done"
         }
         
     except Exception as e:
         elapsed_ms = int((time.time() - start_time) * 1000)
         logger.error(f"问题推荐失败: {e}, 耗时: {elapsed_ms}ms")
         # 问题推荐失败不影响整体流程
-        return {}
+        return {"current_stage": "recommendation_done"}
 
 
 def _extract_user_query(state: SQLMessageState) -> Optional[str]:

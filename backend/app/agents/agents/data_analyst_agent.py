@@ -115,7 +115,7 @@ class DataAnalystAgent:
         # 发送分析开始事件
         if writer:
             writer(create_sql_step_event(
-                step="data_analysis",
+                step="data_analyst",  # 使用 Hub-and-Spoke 节点名称
                 status="running",
                 result="正在分析数据...",
                 time_ms=0
@@ -157,12 +157,12 @@ class DataAnalystAgent:
             # 计算耗时
             elapsed_ms = int((time.time() - start_time) * 1000)
             
-            # 发送分析完成事件
+            # 发送分析完成事件 - 修复: 将实际分析内容包含在事件中，支持前端实时显示
             if writer:
                 writer(create_sql_step_event(
-                    step="data_analysis",
+                    step="data_analyst",  # 使用 Hub-and-Spoke 节点名称
                     status="completed",
-                    result=f"数据分析完成",
+                    result=analysis_content,  # 包含实际分析内容
                     time_ms=elapsed_ms
                 ))
             
@@ -190,7 +190,7 @@ class DataAnalystAgent:
             # 发送错误事件
             if writer:
                 writer(create_sql_step_event(
-                    step="data_analysis",
+                    step="data_analyst",  # 使用 Hub-and-Spoke 节点名称
                     status="error",
                     result=str(e),
                     time_ms=elapsed_ms

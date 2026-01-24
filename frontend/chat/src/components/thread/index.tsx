@@ -8,6 +8,7 @@ import { useState, FormEvent } from "react";
 import { Button } from "../ui/button";
 import { Checkpoint, Message } from "@langchain/langgraph-sdk";
 import { AssistantMessage, AssistantMessageLoading } from "./messages/ai";
+import { QueryPipeline } from "./messages/QueryPipeline";
 import { HumanMessage } from "./messages/human";
 import {
   DO_NOT_RENDER_ID_PREFIX,
@@ -484,9 +485,31 @@ export function Thread() {
                       connectionId={selectedConnectionId || undefined}
                     />
                   )}
-                  {isLoading && !firstTokenReceived && (
-                    <AssistantMessageLoading />
-                  )}
+                  {/* 占位流水线：在 Loading 状态下且没有 AI 消息渲染时显示 
+                      修复：延长显示时间，避免工具流显示空窗期 */}
+                  {(() => {
+                    const lastMessage = messages[messages.length - 1];
+                    const hasAIMessageRendering = lastMessage && lastMessage.type === "ai";
+                    const hasQueryContextData = stream.queryContext.sqlSteps.length > 0 || stream.queryContext.intentAnalysis;
+                    
+                    return (
+                      <>
+                        {/* 占位 QueryPipeline：只在没有 AI 消息但有 queryContext 数据时显示 */}
+                        {isLoading && !hasAIMessageRendering && hasQueryContextData && (
+                          <QueryPipeline 
+                            queryContext={stream.queryContext}
+                            onSelectQuestion={(q) => {
+                              setInput(q);
+                            }}
+                          />
+                        )}
+                        {/* Loading 指示器：只在没有收到第一个 token 时显示 */}
+                        {isLoading && !firstTokenReceived && (
+                          <AssistantMessageLoading />
+                        )}
+                      </>
+                    );
+                  })()}
                 </>
               }
               footer={

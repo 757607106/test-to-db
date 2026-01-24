@@ -213,17 +213,19 @@ export function AssistantMessage({
   }, []);
 
   // 判断是否应该使用 QueryPipeline（优先级高于 ToolCalls）
-  // 对于最后一条消息，如果有 tool_calls 或 queryContext 数据，始终使用 QueryPipeline
+  // 修复: 只要有 queryContext 数据就显示，不限制 isLastMessage，确保历史消息也能显示工具流
   const hasQueryContextData = thread.queryContext && (
     thread.queryContext.sqlSteps.length > 0 ||
     thread.queryContext.intentAnalysis ||
     thread.queryContext.dataQuery
   );
   const hasAnyToolCalls = hasToolCalls || hasAnthropicToolCalls;
-  const useQueryPipeline = isLastMessage && (hasQueryContextData || hasAnyToolCalls);
+  // 放宽条件：只要有 queryContext 数据就显示，或者是最后一条消息正在执行工具调用
+  const useQueryPipeline = hasQueryContextData || (isLastMessage && isLoading && hasAnyToolCalls);
 
-  // 简单逻辑：当使用 QueryPipeline 或有工具调用时，隐藏文本内容
-  const shouldShowContent = contentString.length > 0 && !useQueryPipeline && !hasAnyToolCalls;
+  // 修复: 允许文本内容与工具流共存，消除闪烁
+  // 只要有实际文本内容就显示（不再与 QueryPipeline 互斥）
+  const shouldShowContent = contentString.trim().length > 0;
 
   if (isToolResult) {
     // Tool 消息：只显示 Interrupt，ToolResult 组件已移除（返回 null 无实际功能）
