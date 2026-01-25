@@ -12,6 +12,7 @@ SQL 生成代理
 - 2026-01-22: 使用 InjectedState 优化工具设计
 - 2026-01-22: 修复异步调用问题，避免嵌套事件循环
 - 2026-01-25: 添加 LLM 调用指数退避重试
+- 2026-01-25: 添加数据库特定语法规则，确保生成兼容目标数据库的 SQL
 """
 from typing import Dict, Any, List, Annotated, Optional
 import logging
@@ -29,6 +30,119 @@ from app.core.message_utils import generate_tool_call_id
 from app.agents.utils.retry_utils import retry_with_backoff_sync, RetryConfigs
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# 数据库特定语法规则配置
+# ============================================================================
+
+DATABASE_SYNTAX_RULES = {
+    "mysql": {
+        "name": "MySQL",
+        "rules": [
+            "LIMIT 和 OFFSET 子句只能使用常量或变量，不支持子查询作为参数",
+            "计算中位数时必须使用用户变量或分步查询，不能在 LIMIT/OFFSET 中嵌套 SELECT",
+            "字符串使用单引号，标识符使用反引号 (`table_name`)",
+            "日期函数使用 DATE_FORMAT(), CURDATE(), NOW() 等",
+            "分页语法: LIMIT offset, count 或 LIMIT count OFFSET offset",
+            "不支持 FULL OUTER JOIN，需要用 UNION 模拟",
+            "GROUP BY 必须包含所有非聚合列（除非启用 ONLY_FULL_GROUP_BY 模式被禁用）",
+            "表别名引用格式: alias.column_name，禁止使用 database.alias.column_name",
+        ],
+        "median_hint": "MySQL 计算中位数建议使用变量方式：SET @row := 0; SELECT AVG(val) FROM (SELECT @row := @row + 1 AS row_num, column_name AS val FROM table ORDER BY column_name) t WHERE row_num IN (FLOOR((@row+1)/2), CEIL((@row+1)/2))",
+    },
+    "postgresql": {
+        "name": "PostgreSQL",
+        "rules": [
+            "支持在 LIMIT/OFFSET 中使用子查询",
+            "字符串使用单引号，标识符使用双引号 (\"table_name\")",
+            "支持 PERCENTILE_CONT() 和 PERCENTILE_DISC() 计算中位数",
+            "日期函数使用 TO_CHAR(), CURRENT_DATE, NOW() 等",
+            "支持 FULL OUTER JOIN",
+            "支持窗口函数 OVER(PARTITION BY ... ORDER BY ...)",
+            "布尔值使用 TRUE/FALSE 而非 1/0",
+            "支持 RETURNING 子句返回修改的行",
+        ],
+        "median_hint": "PostgreSQL 计算中位数：SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY column_name) FROM table",
+    },
+    "sqlite": {
+        "name": "SQLite",
+        "rules": [
+            "LIMIT 和 OFFSET 只支持常量表达式，不支持子查询",
+            "不支持 RIGHT JOIN 和 FULL OUTER JOIN",
+            "日期函数使用 DATE(), TIME(), DATETIME(), STRFTIME()",
+            "字符串连接使用 || 运算符",
+            "不支持存储过程和用户变量",
+            "ALTER TABLE 功能有限，不支持修改列或删除列",
+            "GROUP BY 对非聚合列较宽松，但建议明确列出",
+        ],
+        "median_hint": "SQLite 计算中位数：SELECT column_name FROM table ORDER BY column_name LIMIT 1 OFFSET (SELECT COUNT(*) FROM table) / 2",
+    },
+    "sqlserver": {
+        "name": "SQL Server",
+        "rules": [
+            "使用 TOP N 而非 LIMIT（SQL Server 2012+ 支持 OFFSET-FETCH）",
+            "分页语法: OFFSET n ROWS FETCH NEXT m ROWS ONLY（必须配合 ORDER BY）",
+            "字符串使用单引号，标识符使用方括号 [table_name]",
+            "日期函数使用 GETDATE(), DATEADD(), DATEDIFF(), FORMAT()",
+            "字符串连接使用 + 运算符",
+            "支持 PERCENTILE_CONT() 计算中位数（需要 OVER 子句）",
+            "CTE 使用 WITH ... AS 语法",
+        ],
+        "median_hint": "SQL Server 计算中位数：SELECT DISTINCT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY column_name) OVER() FROM table",
+    },
+    "oracle": {
+        "name": "Oracle",
+        "rules": [
+            "使用 ROWNUM 或 FETCH FIRST N ROWS ONLY（12c+）分页",
+            "字符串使用单引号，标识符使用双引号",
+            "日期函数使用 SYSDATE, TO_DATE(), TO_CHAR()",
+            "字符串连接使用 || 运算符",
+            "空字符串等于 NULL",
+            "SELECT 必须有 FROM 子句（可用 FROM DUAL）",
+            "支持 PERCENTILE_CONT() 计算中位数",
+        ],
+        "median_hint": "Oracle 计算中位数：SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY column_name) FROM table",
+    },
+}
+
+# 默认规则（当数据库类型未知时使用）
+DEFAULT_SYNTAX_RULES = {
+    "name": "通用 SQL",
+    "rules": [
+        "LIMIT/OFFSET 中避免使用子查询（部分数据库不支持）",
+        "使用标准 SQL 语法，避免数据库特定扩展",
+        "日期和时间处理使用 ANSI SQL 标准函数",
+        "字符串使用单引号",
+        "避免使用数据库特定的分页语法",
+    ],
+    "median_hint": "计算中位数时建议使用简单的子查询或 CTE 方式，避免在 LIMIT/OFFSET 中嵌套复杂表达式",
+}
+
+
+def get_database_rules(db_type: str) -> Dict[str, Any]:
+    """获取指定数据库类型的语法规则"""
+    db_type_lower = db_type.lower().strip()
+    return DATABASE_SYNTAX_RULES.get(db_type_lower, DEFAULT_SYNTAX_RULES)
+
+
+def format_database_rules_prompt(db_type: str) -> str:
+    """格式化数据库特定规则为提示词"""
+    rules = get_database_rules(db_type)
+    db_name = rules.get("name", db_type)
+    rule_list = rules.get("rules", [])
+    median_hint = rules.get("median_hint", "")
+    
+    prompt = f"""
+【{db_name} 数据库语法规则 - 必须严格遵守】
+"""
+    for i, rule in enumerate(rule_list, 1):
+        prompt += f"{i}. {rule}\n"
+    
+    if median_hint:
+        prompt += f"\n【中位数计算参考】\n{median_hint}\n"
+    
+    return prompt
 
 
 # ============================================================================
@@ -195,6 +309,9 @@ SQL: {sample.get('sql', '')}
 请根据以上信息，生成一个修正后的 SQL 查询。
 """
         
+        # 获取数据库特定语法规则
+        db_rules_prompt = format_database_rules_prompt(db_type)
+        
         # 构建 SQL 生成提示
         prompt = f"""
 基于以下信息生成 SQL 查询：
@@ -203,17 +320,18 @@ SQL: {sample.get('sql', '')}
 
 {context}
 {sample_context}
+{db_rules_prompt}
 {error_recovery_hint}
 
 请生成一个准确、高效的 SQL 查询语句。要求：
 1. 只返回 SQL 语句，不要其他解释
-2. 确保语法正确
-3. 使用适当的连接和过滤条件
-4. 限制结果数量（除非用户明确要求全部数据）
-5. 使用正确的值映射
-6. 【重要】避免在子查询的 WHERE 子句中引用外部查询的列别名
-7. 【重要】如果需要关联子查询，确保正确使用表别名
-8. 【MySQL 别名规则】当表使用别名时（如 product AS p），引用列必须使用 p.column_name 格式，绝对禁止使用 database.p.column_name 格式（这是无效语法）
+2. 【最重要】必须严格遵守上述 {db_type.upper()} 数据库的语法规则
+3. 确保语法在目标数据库中完全有效
+4. 使用适当的连接和过滤条件
+5. 限制结果数量（除非用户明确要求全部数据）
+6. 使用正确的值映射
+7. 避免在子查询的 WHERE 子句中引用外部查询的列别名
+8. 如果需要关联子查询，确保正确使用表别名
 """
         
         # 使用指数退避重试调用 LLM
@@ -747,6 +865,9 @@ class SQLGeneratorAgent:
             str: JSON格式的生成结果
         """
         try:
+            # 获取数据库特定语法规则
+            db_rules_prompt = format_database_rules_prompt(db_type)
+            
             # 构建模板增强的生成提示
             prompt = f"""作为 SQL 专家，请基于以下信息修改 SQL 查询：
 
@@ -765,16 +886,13 @@ class SQLGeneratorAgent:
 **值映射信息**:
 {json.dumps(value_mappings, ensure_ascii=False, indent=2) if value_mappings else '无'}
 
+{db_rules_prompt}
+
 **任务**: 
 1. 分析用户需求与参考SQL的差异
 2. 基于参考SQL的结构，修改WHERE条件、字段选择等以满足用户需求
-3. 确保SQL语法正确，字段名与模式一致
-
-**重要规则**:
-- 【MySQL 别名规则】当表使用别名时（如 product AS p），引用列必须使用 p.column_name 格式
-- 绝对禁止使用 database.alias.column_name 格式（如 erp_inventory.p.category_id），这是无效语法
-- 正确格式: p.category_id, o.order_date
-- 错误格式: erp_inventory.p.category_id, db_name.alias.column
+3. 【最重要】确保生成的SQL完全符合 {db_type.upper()} 的语法规则
+4. 确保SQL语法正确，字段名与模式一致
 
 **要求**: 只返回修改后的SQL语句，不要其他内容。
 """

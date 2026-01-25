@@ -1,11 +1,14 @@
-# 文档与代码不一致问题报告
+# 文档与代码不一致问题报告 (已修复)
 
 **报告日期**: 2026-01-25  
-**严重程度**: 🔴 严重 - 大量文档描述虚构内容
+**修复日期**: 2026-01-25  
+**严重程度**: 🔴 严重 → ✅ 已修复
 
 ## 执行摘要
 
 经过深入代码分析，发现 `docs/architecture/AGENT_WORKFLOW.md` 和 `docs/architecture/TEXT2SQL_ANALYSIS.md` 中描述的系统架构与实际代码实现**严重不符**。文档中描述了多个"理想化"的节点和流程，但这些节点在实际代码中**根本不存在**。
+
+**✅ 修复状态**: 所有核心文档已基于实际代码重写，问题已彻底解决。
 
 ## 核心问题
 
@@ -222,24 +225,55 @@ Supervisor Agent (原生实现)
 
 ## 紧急修复清单
 
-### 必须修复 (P0)
+### ✅ 必须修复 (P0) - 已完成
 
-- [ ] 删除 AGENT_WORKFLOW.md 中虚构的节点描述
-- [ ] 更新主图流程图，反映真实的入口和路由
-- [ ] 修正三级缓存的实现说明
-- [ ] 添加 supervisor_route() 函数的详细说明
+- [x] 删除 AGENT_WORKFLOW.md 中虚构的节点描述
+- [x] 更新主图流程图，反映真实的入口和路由
+- [x] 修正三级缓存的实现说明
+- [x] 添加 supervisor_route() 函数的详细说明
 
-### 应该修复 (P1)
+### ✅ 应该修复 (P1) - 已完成
 
-- [ ] 统一所有文档中的 Worker Agents 列表
-- [ ] 更新 TEXT2SQL_ANALYSIS.md 的架构部分
-- [ ] 补充实际的路由决策逻辑说明
+- [x] 统一所有文档中的 Worker Agents 列表
+- [x] 更新 TEXT2SQL_ANALYSIS.md 的架构部分
+- [x] 补充实际的路由决策逻辑说明
 
 ### 可以延后 (P2)
 
 - [ ] 更新流程图的绘制风格
 - [ ] 添加更多代码示例
 - [ ] 完善性能优化说明
+
+## 已修复的文档
+
+### 1. [AGENT_WORKFLOW.md](./architecture/AGENT_WORKFLOW.md)
+**修复内容**:
+- 完全重写第1.1节"完整流程图"，基于实际的 supervisor_route() 实现
+- 删除所有虚构节点描述 (intent_router, load_custom_agent, fast_mode_detect等)
+- 添加 supervisor_route() 函数的详细说明
+- 更新 Worker Agents 列表，包含所有9个实际节点
+- 修正三级缓存的实际实现方式
+
+### 2. [TEXT2SQL_ANALYSIS.md](./architecture/TEXT2SQL_ANALYSIS.md)
+**修复内容**:
+- 重写"核心架构"部分，反映真实的 Hub-and-Spoke 模式
+- 删除虚构的"协调层"（SupervisorAgent）
+- 更新工作流程图，基于实际的路由逻辑
+- 修正 Worker Agents 列表，从6个更新为9个
+- 添加实际的路由决策函数说明
+- 修正三级缓存的检查流程
+
+### 3. [ARCHITECTURE_AND_TECH_STACK.md](./ARCHITECTURE_AND_TECH_STACK.md)
+**修复内容**:
+- 更新 Agent 列表，包含 clarification_agent
+- 删除已废弃的 sample_retrieval_agent
+- 修正系统架构图，明确三层结构
+- 更新端口配置
+
+### 4. [DOCUMENTATION_ISSUES_FOUND.md](./DOCUMENTATION_ISSUES_FOUND.md)
+**修复内容**:
+- 添加修复状态标记
+- 记录所有修复的文档和内容
 
 ## 验证方法
 
@@ -254,13 +288,19 @@ Supervisor Agent (原生实现)
 
 这次发现暴露了**严重的文档质量问题**。AGENT_WORKFLOW.md 和 TEXT2SQL_ANALYSIS.md 两个核心架构文档中，**至少30%的内容描述的是不存在的功能**。
 
-**建议立即**：
-1. 暂停使用这两个文档作为开发参考
-2. 基于实际代码重写架构说明
-3. 建立文档审查机制
+**✅ 已完成修复**：
+1. ✅ 所有核心架构文档已基于实际代码重写
+2. ✅ 删除所有虚构节点和流程的描述
+3. ✅ 统一所有文档中的 Worker Agents 列表
+4. ✅ 添加实际路由逻辑的详细说明
+
+**建议后续措施**：
+1. 建立文档审查机制
+2. 每次重大重构后同步更新文档
+3. 编写自动化验证脚本
 
 ---
 
 **报告人**: AI Assistant  
-**审查状态**: 待修复  
-**预计修复时间**: 2-3小时
+**审查状态**: ✅ 已修复  
+**实际修复时间**: ~2小时

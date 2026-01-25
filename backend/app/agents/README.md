@@ -70,11 +70,11 @@ class SQLMessageState(MessagesState):
     error_history: List[Dict[str, Any]] = field(default_factory=list)
 ```
 
-#### 数据库管理器 (Database Manager)
-- **统一接口**: 封装多种数据库的连接和操作
-- **连接池**: 支持多数据库连接管理
-- **错误处理**: 智能连接恢复和超时处理
-- **文件**: `database/db_manager.py`
+#### 数据库服务 (Database Service)
+- **统一接口**: 封装多种数据库的连接和查询操作
+- **连接管理**: 基于 SQLAlchemy 的数据库连接
+- **错误处理**: 智能错误检测和超时处理
+- **文件**: `services/db_service.py`
 
 #### 图工作流 (Graph Workflow)
 - **智能路由**: 基于状态的条件路由
@@ -89,21 +89,18 @@ class SQLMessageState(MessagesState):
 pip install -r requirements.txt
 ```
 
-### 2. 配置数据库
+### 2. 配置数据库连接
+
+通过 Admin 后台配置数据库连接，或使用 API：
 
 ```python
-from app.db.db_manager import DatabaseConfig, db_manager
+from app.services.db_service import get_db_connection_by_id, execute_query
 
-config = DatabaseConfig(
-    db_type="mysql",
-    host="localhost",
-    port=3306,
-    database="Chinook",
-    username="root",
-    password="mysql"
-)
+# 获取数据库连接
+connection = get_db_connection_by_id(connection_id=15)
 
-db_manager.connect(config)
+# 执行查询
+result = execute_query(connection, "SELECT * FROM customers LIMIT 10")
 ```
 
 ### 3. 运行演示

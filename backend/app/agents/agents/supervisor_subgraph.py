@@ -25,73 +25,24 @@ from langgraph.graph.state import CompiledStateGraph
 from langchain_core.messages import AIMessage
 
 from app.core.state import SQLMessageState
+from app.agents.nodes.base import get_custom_agent, load_custom_agent_by_id, build_error_record
 
 logger = logging.getLogger(__name__)
 
 
-def _load_custom_agent_by_id(agent_id: int, agent_type: str = "data_analyst"):
-    """
-    根据 agent_id 动态加载自定义 Agent
-    
-    这个函数在每次需要时动态创建 Agent，避免将不可序列化的对象存储到 State
-    
-    Args:
-        agent_id: AgentProfile 的 ID
-        agent_type: Agent 类型（目前支持 data_analyst）
-        
-    Returns:
-        Agent 实例，如果加载失败则返回 None
-    """
-    if agent_type != "data_analyst":
-        return None
-    
-    try:
-        from app.db.session import get_db_session
-        from app.crud import agent_profile as crud_agent_profile
-        from app.agents.agent_factory import create_custom_analyst_agent
-        
-        with get_db_session() as db:
-            # 查询 AgentProfile
-            profile = crud_agent_profile.get(db, id=agent_id)
-            
-            if not profile:
-                logger.warning(f"未找到 agent_id={agent_id} 对应的 AgentProfile")
-                return None
-            
-            if not profile.is_active:
-                logger.warning(f"AgentProfile {profile.name} 未激活")
-                return None
-            
-            logger.info(f"动态加载 AgentProfile: {profile.name} (id={profile.id})")
-            
-            # 创建自定义 agent
-            return create_custom_analyst_agent(profile, db)
-            
-    except Exception as e:
-        logger.error(f"动态加载自定义 agent 失败: {e}", exc_info=True)
-        return None
-
-
 # ============================================================================
-# 节点函数
+# 节点适配器（无 StreamWriter 版本）
 # ============================================================================
 
 async def schema_agent_node(state: SQLMessageState) -> Dict[str, Any]:
     """
     Schema Agent 节点 - 获取数据库模式信息
     
-    支持自定义 Agent：通过 state["custom_agents"]["schema_agent"] 传入
+    适配器函数：调用 schema_agent 处理查询，无流式事件。
     """
-    # 优先使用自定义 agent
-    custom_agents = state.get("custom_agents") or {}
-    agent = custom_agents.get("schema_agent")
+    from app.agents.agents.schema_agent import schema_agent
     
-    if agent is None:
-        # 回退到默认 agent
-        from app.agents.agents.schema_agent import schema_agent
-        agent = schema_agent
-    else:
-        logger.info("使用自定义 schema_agent")
+    agent = get_custom_agent(state, "schema_agent", schema_agent)
     
     logger.info("=== 执行 schema_agent ===")
     start_time = time.time()
@@ -105,11 +56,9 @@ async def schema_agent_node(state: SQLMessageState) -> Dict[str, Any]:
         logger.error(f"schema_agent 执行失败: {e}")
         return {
             "current_stage": "error_recovery",
-            "error_history": state.get("error_history", []) + [{
-                "stage": "schema_analysis",
-                "error": str(e),
-                "timestamp": time.time()
-            }]
+            "error_history": state.get("error_history", []) + [
+                build_error_record("schema_analysis", str(e))
+            ]
         }
 
 
@@ -117,7 +66,7 @@ async def schema_clarification_node_wrapper(state: SQLMessageState) -> Dict[str,
     """
     Schema 澄清节点包装器 - 澄清点C
     
-    在 schema_agent 后执行，检测字段、关系、指标等歧义
+    在 schema_agent 后执行，检测字段、关系、指标等歧义。
     """
     from app.agents.nodes.schema_clarification_node import schema_clarification_node
     
@@ -131,7 +80,6 @@ async def schema_clarification_node_wrapper(state: SQLMessageState) -> Dict[str,
         return result
     except Exception as e:
         logger.error(f"schema_clarification 执行失败: {e}")
-        # 澄清失败不影响主流程，继续到 SQL 生成
         return {"current_stage": "sql_generation"}
 
 
@@ -144,23 +92,13 @@ async def sql_generator_node(state: SQLMessageState) -> Dict[str, Any]:
     - enriched_query / original_query: 用户查询
     - cached_sql_template: 缓存的 SQL 模板
     - error_recovery_context: 错误恢复上下文（如果是重试）
-    
-    支持自定义 Agent：通过 state["custom_agents"]["sql_generator"] 传入
     """
-    # 优先使用自定义 agent
-    custom_agents = state.get("custom_agents") or {}
-    agent = custom_agents.get("sql_generator")
+    from app.agents.agents.sql_generator_agent import sql_generator_agent
     
-    if agent is None:
-        # 回退到默认 agent
-        from app.agents.agents.sql_generator_agent import sql_generator_agent
-        agent = sql_generator_agent
-    else:
-        logger.info("使用自定义 sql_generator")
+    agent = get_custom_agent(state, "sql_generator", sql_generator_agent)
     
     logger.info("=== 执行 sql_generator_agent ===")
     
-    # 检查是否是重试
     error_recovery_context = state.get("error_recovery_context")
     retry_count = state.get("retry_count", 0)
     if error_recovery_context:
@@ -173,7 +111,6 @@ async def sql_generator_node(state: SQLMessageState) -> Dict[str, Any]:
         elapsed = time.time() - start_time
         logger.info(f"sql_generator_agent 完成，耗时 {elapsed:.2f}s")
         
-        # 成功生成后清除错误恢复上下文
         if result.get("current_stage") == "sql_execution":
             result["error_recovery_context"] = None
         
@@ -182,30 +119,19 @@ async def sql_generator_node(state: SQLMessageState) -> Dict[str, Any]:
         logger.error(f"sql_generator_agent 执行失败: {e}")
         return {
             "current_stage": "error_recovery",
-            "error_history": state.get("error_history", []) + [{
-                "stage": "sql_generation",
-                "error": str(e),
-                "timestamp": time.time()
-            }]
+            "error_history": state.get("error_history", []) + [
+                build_error_record("sql_generation", str(e))
+            ]
         }
 
 
 async def sql_executor_node(state: SQLMessageState) -> Dict[str, Any]:
     """
     SQL Executor 节点 - 执行 SQL 查询
-    
-    支持自定义 Agent：通过 state["custom_agents"]["sql_executor"] 传入
     """
-    # 优先使用自定义 agent
-    custom_agents = state.get("custom_agents") or {}
-    agent = custom_agents.get("sql_executor")
+    from app.agents.agents.sql_executor_agent import sql_executor_agent
     
-    if agent is None:
-        # 回退到默认 agent
-        from app.agents.agents.sql_executor_agent import sql_executor_agent
-        agent = sql_executor_agent
-    else:
-        logger.info("使用自定义 sql_executor")
+    agent = get_custom_agent(state, "sql_executor", sql_executor_agent)
     
     logger.info("=== 执行 sql_executor_agent ===")
     start_time = time.time()
@@ -217,14 +143,11 @@ async def sql_executor_node(state: SQLMessageState) -> Dict[str, Any]:
         return result
     except Exception as e:
         logger.error(f"sql_executor_agent 执行失败: {e}")
+        error_record = build_error_record("sql_execution", str(e))
+        error_record["sql_query"] = state.get("generated_sql")
         return {
             "current_stage": "error_recovery",
-            "error_history": state.get("error_history", []) + [{
-                "stage": "sql_execution",
-                "error": str(e),
-                "sql_query": state.get("generated_sql"),
-                "timestamp": time.time()
-            }]
+            "error_history": state.get("error_history", []) + [error_record]
         }
 
 
@@ -232,23 +155,18 @@ async def data_analyst_node(state: SQLMessageState) -> Dict[str, Any]:
     """
     Data Analyst 节点 - 分析查询结果
     
-    读取的上下文:
-    - execution_result: SQL 执行结果
-    
-    支持自定义 Agent：通过 state["agent_id"] 动态加载
-    这是最常需要自定义的 agent，可以根据不同业务场景定制数据分析逻辑
+    支持通过 state["agent_id"] 动态加载自定义 agent。
     """
     agent = None
     
-    # 根据 agent_id 动态加载自定义 agent（避免将不可序列化的对象存储到 state）
+    # 根据 agent_id 动态加载自定义 agent
     agent_id = state.get("agent_id")
     if agent_id:
-        agent = _load_custom_agent_by_id(agent_id, "data_analyst")
+        agent = load_custom_agent_by_id(agent_id, "data_analyst")
         if agent:
             logger.info(f"使用自定义 data_analyst (agent_id={agent_id})")
     
     if agent is None:
-        # 回退到默认 agent
         from app.agents.agents.data_analyst_agent import data_analyst_agent
         agent = data_analyst_agent
     
@@ -260,7 +178,6 @@ async def data_analyst_node(state: SQLMessageState) -> Dict[str, Any]:
         logger.warning("没有执行结果，跳过数据分析")
         return {"current_stage": "chart_generation"}
     
-    # 检查执行是否成功
     if hasattr(execution_result, 'success') and not execution_result.success:
         logger.warning("执行结果不成功，跳过数据分析")
         return {"current_stage": "chart_generation"}
@@ -274,35 +191,20 @@ async def data_analyst_node(state: SQLMessageState) -> Dict[str, Any]:
         return result
     except Exception as e:
         logger.error(f"data_analyst_agent 执行失败: {e}")
-        # 分析失败不影响整体流程，继续到图表生成
         return {"current_stage": "chart_generation"}
 
 
 async def chart_generator_node(state: SQLMessageState) -> Dict[str, Any]:
     """
     Chart Generator 节点 - 生成图表配置
-    
-    读取的上下文:
-    - execution_result: SQL 执行结果
-    - skip_chart_generation: 是否跳过图表生成
-    
-    支持自定义 Agent：通过 state["custom_agents"]["chart_generator"] 传入
     """
-    # 检查是否跳过图表生成
     if state.get("skip_chart_generation", False):
         logger.info("快速模式: 跳过图表生成")
         return {"current_stage": "completed"}
     
-    # 优先使用自定义 agent
-    custom_agents = state.get("custom_agents") or {}
-    agent = custom_agents.get("chart_generator")
+    from app.agents.agents.chart_generator_agent import chart_generator_agent
     
-    if agent is None:
-        # 回退到默认 agent
-        from app.agents.agents.chart_generator_agent import chart_generator_agent
-        agent = chart_generator_agent
-    else:
-        logger.info("使用自定义 chart_generator")
+    agent = get_custom_agent(state, "chart_generator", chart_generator_agent)
     
     logger.info("=== 执行 chart_generator_agent ===")
     start_time = time.time()
@@ -311,37 +213,20 @@ async def chart_generator_node(state: SQLMessageState) -> Dict[str, Any]:
         result = await agent.process(state)
         elapsed = time.time() - start_time
         logger.info(f"chart_generator_agent 完成，耗时 {elapsed:.2f}s")
-        
-        # 确保设置完成状态
         result["current_stage"] = "completed"
         return result
     except Exception as e:
         logger.error(f"chart_generator_agent 执行失败: {e}")
-        # 图表生成失败不影响整体结果
         return {"current_stage": "completed"}
 
 
 async def error_handler_node(state: SQLMessageState) -> Dict[str, Any]:
     """
     错误处理节点 - 使用智能 ErrorRecoveryAgent 分析错误并准备重试
-    
-    功能:
-    - 调用 error_recovery_agent 进行智能错误分析
-    - 生成用户友好的错误消息
-    - 设置 error_recovery_context 供 sql_generator 使用
-    
-    支持自定义 Agent：通过 state["custom_agents"]["error_recovery"] 传入
     """
-    # 优先使用自定义 agent
-    custom_agents = state.get("custom_agents") or {}
-    agent = custom_agents.get("error_recovery")
+    from app.agents.agents.error_recovery_agent import error_recovery_agent
     
-    if agent is None:
-        # 回退到默认 agent
-        from app.agents.agents.error_recovery_agent import error_recovery_agent
-        agent = error_recovery_agent
-    else:
-        logger.info("使用自定义 error_recovery")
+    agent = get_custom_agent(state, "error_recovery", error_recovery_agent)
     
     logger.info("=== 执行 error_handler (使用 ErrorRecoveryAgent) ===")
     
@@ -351,17 +236,13 @@ async def error_handler_node(state: SQLMessageState) -> Dict[str, Any]:
     logger.info(f"当前重试次数: {retry_count}/{max_retries}")
     
     try:
-        # 使用智能 ErrorRecoveryAgent 进行错误分析和恢复策略生成
         result = await agent.process(state)
-        
-        elapsed = time.time()
-        logger.info(f"error_recovery_agent 完成")
-        
+        logger.info("error_recovery_agent 完成")
         return result
     except Exception as e:
         logger.error(f"ErrorRecoveryAgent 执行失败: {e}")
         
-        # 回退到简单逻辑 - 使用 error_recovery_agent 的分类函数
+        # 回退到简单逻辑
         from app.agents.agents.error_recovery_agent import _classify_error_type
         
         error_history = state.get("error_history", [])
@@ -372,10 +253,9 @@ async def error_handler_node(state: SQLMessageState) -> Dict[str, Any]:
         if retry_count >= max_retries:
             return {
                 "current_stage": "completed",
-                "messages": [AIMessage(content=f"抱歉，多次尝试后仍无法生成正确的查询。")],
+                "messages": [AIMessage(content="抱歉，多次尝试后仍无法生成正确的查询。")],
             }
         
-        # 简单重试
         error_type = _classify_error_type(error_msg.lower())
         return {
             "retry_count": retry_count + 1,
@@ -397,9 +277,7 @@ async def error_handler_node(state: SQLMessageState) -> Dict[str, Any]:
 # ============================================================================
 
 def route_after_schema(state: SQLMessageState) -> Literal["schema_clarification", "error_handler"]:
-    """
-    Schema 分析后的路由
-    """
+    """Schema 分析后的路由"""
     current_stage = state.get("current_stage", "")
     
     if current_stage == "error_recovery":
@@ -411,9 +289,7 @@ def route_after_schema(state: SQLMessageState) -> Literal["schema_clarification"
 
 
 def route_after_schema_clarification(state: SQLMessageState) -> Literal["sql_generator", "error_handler"]:
-    """
-    Schema 澄清后的路由
-    """
+    """Schema 澄清后的路由"""
     current_stage = state.get("current_stage", "")
     
     if current_stage == "error_recovery":
@@ -425,9 +301,7 @@ def route_after_schema_clarification(state: SQLMessageState) -> Literal["sql_gen
 
 
 def route_after_sql_gen(state: SQLMessageState) -> Literal["sql_executor", "error_handler"]:
-    """
-    SQL 生成后的路由
-    """
+    """SQL 生成后的路由"""
     current_stage = state.get("current_stage", "")
     
     if current_stage == "error_recovery":
@@ -439,24 +313,19 @@ def route_after_sql_gen(state: SQLMessageState) -> Literal["sql_executor", "erro
 
 
 def route_after_execution(state: SQLMessageState) -> Literal["data_analyst", "error_handler", "finish"]:
-    """
-    SQL 执行后的路由
-    """
+    """SQL 执行后的路由"""
     current_stage = state.get("current_stage", "")
     execution_result = state.get("execution_result")
     
-    # 检查是否进入错误恢复
     if current_stage == "error_recovery":
         logger.info("[路由] sql_executor → error_handler (错误)")
         return "error_handler"
     
-    # 检查执行结果
     if execution_result:
         if hasattr(execution_result, 'success') and not execution_result.success:
             logger.info("[路由] sql_executor → error_handler (执行失败)")
             return "error_handler"
     
-    # 检查是否跳过分析（快速模式且已完成）
     if current_stage == "completed":
         logger.info("[路由] sql_executor → finish (已完成)")
         return "finish"
@@ -466,10 +335,7 @@ def route_after_execution(state: SQLMessageState) -> Literal["data_analyst", "er
 
 
 def route_after_analysis(state: SQLMessageState) -> Literal["chart_generator", "finish"]:
-    """
-    数据分析后的路由
-    """
-    # 检查是否跳过图表生成
+    """数据分析后的路由"""
     if state.get("skip_chart_generation", False):
         logger.info("[路由] data_analyst → finish (跳过图表)")
         return "finish"
@@ -484,14 +350,11 @@ def route_after_analysis(state: SQLMessageState) -> Literal["chart_generator", "
 
 
 def route_after_error(state: SQLMessageState) -> Literal["sql_generator", "finish"]:
-    """
-    错误处理后的路由
-    """
+    """错误处理后的路由"""
     current_stage = state.get("current_stage", "")
     retry_count = state.get("retry_count", 0)
     max_retries = state.get("max_retries", 3)
     
-    # 如果已达到重试上限或标记为完成
     if current_stage == "completed" or retry_count >= max_retries:
         logger.info(f"[路由] error_handler → finish (retry={retry_count}/{max_retries})")
         return "finish"
@@ -523,7 +386,7 @@ def create_supervisor_subgraph() -> CompiledStateGraph:
     
     graph = StateGraph(SQLMessageState)
     
-    # ============== 添加节点 ==============
+    # 添加节点
     graph.add_node("schema_agent", schema_agent_node)
     graph.add_node("schema_clarification", schema_clarification_node_wrapper)
     graph.add_node("sql_generator", sql_generator_node)
@@ -532,11 +395,10 @@ def create_supervisor_subgraph() -> CompiledStateGraph:
     graph.add_node("chart_generator", chart_generator_node)
     graph.add_node("error_handler", error_handler_node)
     
-    # ============== 设置入口 ==============
+    # 设置入口
     graph.set_entry_point("schema_agent")
     
-    # ============== 定义条件边 ==============
-    # schema_agent → schema_clarification (澄清点C)
+    # 定义条件边
     graph.add_conditional_edges(
         "schema_agent",
         route_after_schema,
@@ -546,7 +408,6 @@ def create_supervisor_subgraph() -> CompiledStateGraph:
         }
     )
     
-    # schema_clarification → sql_generator
     graph.add_conditional_edges(
         "schema_clarification",
         route_after_schema_clarification,
@@ -593,12 +454,10 @@ def create_supervisor_subgraph() -> CompiledStateGraph:
         }
     )
     
-    # chart_generator 直接到结束
     graph.add_edge("chart_generator", END)
     
-    # ============== 编译 ==============
     compiled = graph.compile()
-    logger.info("✓ Supervisor 子图创建完成")
+    logger.info("Supervisor 子图创建完成")
     
     return compiled
 
@@ -611,9 +470,7 @@ _supervisor_subgraph: CompiledStateGraph = None
 
 
 def get_supervisor_subgraph() -> CompiledStateGraph:
-    """
-    获取 Supervisor 子图实例（单例模式）
-    """
+    """获取 Supervisor 子图实例（单例模式）"""
     global _supervisor_subgraph
     if _supervisor_subgraph is None:
         _supervisor_subgraph = create_supervisor_subgraph()
@@ -636,28 +493,23 @@ async def supervisor_subgraph_node(state: SQLMessageState) -> Dict[str, Any]:
     subgraph = get_supervisor_subgraph()
     
     try:
-        # 调用子图
         result = await subgraph.ainvoke(state)
-        
         logger.info(f"=== Supervisor 子图完成，阶段: {result.get('current_stage', 'unknown')} ===")
-        
         return result
     except Exception as e:
         logger.error(f"Supervisor 子图执行失败: {e}")
         return {
             "current_stage": "completed",
             "messages": [AIMessage(content=f"处理过程中遇到错误: {str(e)[:200]}")],
-            "error_history": state.get("error_history", []) + [{
-                "stage": "supervisor_subgraph",
-                "error": str(e),
-                "timestamp": time.time()
-            }]
+            "error_history": state.get("error_history", []) + [
+                build_error_record("supervisor_subgraph", str(e))
+            ]
         }
 
 
-# ============================================================================
-# 导出
-# ============================================================================
+# 向后兼容：导出 _load_custom_agent_by_id 别名
+_load_custom_agent_by_id = load_custom_agent_by_id
+
 
 __all__ = [
     "create_supervisor_subgraph",

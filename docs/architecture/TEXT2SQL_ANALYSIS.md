@@ -20,20 +20,20 @@
 这是一个基于 LangGraph 的智能 Text-to-SQL 系统，能够将用户的自然语言查询转换为 SQL 语句并执行，同时支持数据可视化和智能分析。
 
 ### 核心特性
-- 🤖 **多Agent协作**: 使用原生 LangGraph Supervisor 模式协调6个专业 Agent
-- 🔄 **智能路由**: 双模式路由（状态机+LLM智能决策），自动识别查询类型
-- 🛡️ **错误恢复**: 完善的错误处理和自动恢复机制（专门的ErrorRecoveryAgent）
-- 📊 **数据可视化**: 自动生成适合的图表展示数据（规则引擎+LLM辅助）
-- 🎯 **职责分离**: 6个专业Agent职责清晰（Schema、SQL生成、执行、数据分析、图表、错误恢复）
+- 🤖 **多Agent协作**: Hub-and-Spoke 模式协调9个专业 Agent
+- 🔄 **智能路由**: supervisor_route() 函数统一路由决策，自动识别查询类型
+- 🛡️ **错误恢复**: 完善的错误处理和自动恢复机制
+- 📊 **数据可视化**: 自动生成适合的图表展示数据
+- 🎯 **职责分离**: 9个专业Agent/节点职责清晰
 - 🚀 **三级缓存**: Thread历史 → 精确匹配 → 语义匹配
 - 💬 **澄清机制**: 使用 interrupt() 实现人机交互
 - ⚡ **快速模式**: 简单查询自动跳过样本检索和图表生成
 
 ### 技术栈
-- **框架**: LangGraph (状态图编排) - 原生实现，不依赖第三方supervisor库
+- **框架**: LangGraph (状态图编排) - Hub-and-Spoke 模式
 - **LLM**: 支持多种大语言模型 (通过配置切换)
 - **数据库**: 支持 MySQL, PostgreSQL, SQLite 等
-- **可视化**: Recharts图表库（规则推断+LLM辅助）
+- **可视化**: Recharts图表库
 - **向量存储**: Milvus (语义缓存和样本检索)
 
 ---
@@ -44,35 +44,30 @@
 
 ```
 ┌────────────────────────────── 用户交互层 ──────────────────────────────┐
-│  Chat UI  ←→  API Server (FastAPI + LangGraph Server)                │
+│  Chat UI  ←→  API Server (FastAPI)                                   │
 └────────────────────────────────┬───────────────────────────────────────┘
                                  │
                                  ▼
 ┌────────────────────────────── 主图层 ──────────────────────────────────┐
-│  IntelligentSQLGraph (chat_graph.py)                                 │
-│  - 意图路由 (data_query vs general_chat)                              │
-│  - 三级缓存 (Thread → 精确 → 语义)                                     │
-│  - 澄清机制 (interrupt 人机交互)                                       │
-│  - 快速模式检测                                                        │
-└────────────────────────────────┬───────────────────────────────────────┘
-                                 │
-                                 ▼
-┌────────────────────────────── 协调层 ──────────────────────────────────┐
-│  SupervisorAgent (supervisor_agent.py)  - 原生LangGraph实现           │
-│  - 双模式路由：状态机路由 (快速) + LLM智能路由 (复杂场景)               │
-│  - 死循环检测 (防止同一阶段重复失败)                                    │
-│  - 智能错误恢复决策                                                    │
+│  Hub-and-Spoke Graph (chat_graph.py)                                 │
+│  - Entry Point: schema_agent                                         │
+│  - 统一路由: supervisor_route() 函数                                  │
+│  - 三级缓存检查逻辑 (在路由函数中)                                     │
+│  - Worker Agent 节点                                                  │
 └────────────────────────────────┬───────────────────────────────────────┘
                                  │
                                  ▼
 ┌────────────────────────────── 执行层 (Worker Agents) ─────────────────┐
 │  ┌─────────────────────────────────────────────────────────────────┐ │
-│  │  1. SchemaAgent          - 数据库模式分析 (ReAct + 异步并行)    │ │
-│  │  2. SQLGeneratorAgent    - SQL生成 (ReAct + 样本检索)          │ │
-│  │  3. SQLExecutorAgent     - SQL执行 (ToolNode + 缓存)           │ │
-│  │  4. DataAnalystAgent     - 数据分析洞察 (纯LLM)                │ │
-│  │  5. ChartGeneratorAgent  - 图表配置生成 (规则+LLM)             │ │
-│  │  6. ErrorRecoveryAgent   - 错误恢复 (ReAct + 策略)             │ │
+│  │  1. schema_agent         - 数据库模式分析 (ReAct + 异步并行)    │ │
+│  │  2. clarification        - 查询澄清 (使用 interrupt)            │ │
+│  │  3. sql_generator        - SQL生成 (ReAct + 内置样本检索)       │ │
+│  │  4. sql_executor         - SQL执行 (ToolNode + 缓存)            │ │
+│  │  5. data_analyst         - 数据分析洞察 (ReAct)                 │ │
+│  │  6. chart_generator      - 图表配置生成 (ReAct)                 │ │
+│  │  7. error_recovery       - 错误恢复 (标准节点)                  │ │
+│  │  8. recommendation       - 推荐问题生成 (LLM)                   │ │
+│  │  9. general_chat         - 闲聊处理 (LLM)                       │ │
 │  └─────────────────────────────────────────────────────────────────┘ │
 └────────────────────────────────┬───────────────────────────────────────┘
                                  │
@@ -89,32 +84,34 @@
 ### 架构层次
 
 #### 1. 主图层 (`chat_graph.py`)
-- **IntelligentSQLGraph**: 系统的高级接口类
-- **全局图实例管理**: 单例模式管理图实例
-- **核心节点**:
-  - `intent_router`: 意图路由（闲聊 vs 数据查询）
-  - `load_custom_agent`: 提取连接ID和自定义Agent
-  - `fast_mode_detect`: 快速模式检测
-  - `thread_history_check`: Thread历史缓存（L0）
-  - `cache_check`: 双层缓存检查（L1+L2）
-  - `clarification`: 澄清机制（使用interrupt）
-  - `supervisor`: Supervisor子图
-  - `question_recommendation`: 问题推荐
+**关键实现**: Hub-and-Spoke 模式，没有独立的控制流节点
 
-#### 2. 协调层 (`supervisor_agent.py`)
-- **SupervisorAgent**: 原生LangGraph实现（不使用第三方库）
-- **双模式路由**:
-  - `route_by_stage()`: 状态机路由（快速，无LLM调用）
-  - `route_with_llm()`: LLM智能路由（复杂场景）
-- **死循环检测**: 防止同一阶段重复失败
-- **智能错误恢复**: 传递错误上下文给重试阶段
+- **Entry Point**: `schema_agent` (不是 intent_router)
+- **统一路由函数**: `supervisor_route()` - 所有路由决策都在这里完成
+- **路由职责**:
+  - 意图检测: 闲聊 vs 数据查询
+  - 缓存检查: thread_history_hit, cache_hit
+  - 阶段路由: 基于 current_stage 决策
+  - 错误处理: 重试决策
+  - 完成检测: completed, recommendation_done
+  
+- **Worker Agent 节点**:
+  - `schema_agent_node`: Schema 分析
+  - `clarification_node_wrapper`: 澄清（interrupt）
+  - `sql_generator_node`: SQL 生成
+  - `sql_executor_node`: SQL 执行
+  - `data_analyst_node`: 数据分析
+  - `chart_generator_node`: 图表生成
+  - `error_recovery_node`: 错误恢复
+  - `question_recommendation_node`: 推荐问题
+  - `general_chat_node`: 闲聊
 
-#### 3. 执行层 (各个 Worker Agents)
-- **专业化分工**: 6个Agent各司其职
+#### 2. 执行层 (各个 Worker Agents)
+- **专业化分工**: 9个节点各司其职
 - **工具调用**: 混合模式（ReAct Agent + ToolNode直接调用）
 - **状态更新**: 通过返回字典更新共享状态
 
-#### 4. 服务层 (`services/`)
+#### 3. 服务层 (`services/`)
 - **数据库服务**: 连接管理、查询执行
 - **Schema服务**: 表结构检索、值映射
 - **混合检索服务**: 语义+结构化检索（Milvus+关键词）
@@ -122,7 +119,7 @@
 
 ### 架构特点
 
-1. **分层清晰**: 四层架构，职责明确
+1. **分层清晰**: 三层架构，职责明确
 2. **松耦合**: Agent之间通过共享状态通信，不直接依赖
 3. **可扩展**: 易于添加新的Agent或修改现有Agent
 4. **高性能**: 三级缓存、异步并行、快速模式
@@ -138,41 +135,39 @@
 ```
 1. 用户输入查询
    ↓
-2. [Load Custom Agent] - 检查是否需要加载自定义分析专家 + 提取connection_id
+2. [schema_agent] - 入口节点，分析查询意图，获取相关表结构
    ↓
-3. [Fast Mode Detect] - 检测查询复杂度，决定是否启用快速模式 (2026-01-21 新增)
-   │  ├─ 简单查询 → 设置 skip_sample_retrieval=True, skip_chart_generation=True
-   │  └─ 复杂查询 → 使用完整模式
+3. [supervisor_route()] - 路由决策中心
+   │
+   ├─ 检查意图 (闲聊关键词) → general_chat 节点 → END
+   ├─ 检查缓存 (thread_history_hit, cache_hit) → END
+   └─ 基于 current_stage 路由到相应节点
    ↓
-4. [Clarification] - 检测查询模糊性
+4. [clarification] - 检测查询模糊性 (可选)
    │  ├─ 明确查询 → 继续
    │  └─ 模糊查询 → 使用 interrupt() 暂停，等待用户澄清回复
    ↓
-5. [Cache Check] - 双层缓存检查 (2026-01-19 新增)
-   │  ├─ L1 精确匹配缓存命中 → 返回SQL+结果，结束
-   │  ├─ L2 语义匹配缓存命中 → 直接执行缓存的SQL并返回
-   │  └─ 缓存未命中 → 继续到Supervisor
+5. [sql_generator] - 生成SQL语句 (内置样本检索)
+   │  - 自动检索样本并生成SQL
+   │  - 支持基于缓存SQL模板生成
    ↓
-6. [Supervisor] - 协调Worker Agents
+6. [sql_executor] - 执行SQL
+   │  - 直接执行(带缓存)
+   │  - 工具级缓存 + 并发锁
    ↓
-7. [Schema Agent] - 分析查询意图，获取相关表结构
-   │  ├─ analyze_user_query: 提取关键实体和意图
-   │  └─ retrieve_database_schema: 获取表结构和值映射
+7. 执行结果判断
+   ├─ 成功 → 继续数据分析
+   └─ 失败 → error_recovery 节点 → 重试或终止
    ↓
-8. [SQL Generator Agent] - 生成SQL语句 (内置样本检索)
-   │  ├─ generate_sql_query: 自动检索样本并生成SQL
-   │  └─ generate_sql_with_samples: 基于样本生成(如果有)
-   │  注: explain_sql_query 已移除以提升速度
+8. [data_analyst] - 数据分析 (总是执行)
+   │  - 分析查询结果
+   │  - 生成数据洞察
    ↓
-9. [SQL Executor Agent] - 执行SQL
-   │  └─ execute_sql_query: 直接执行(带缓存)
+9. [chart_generator] - 生成图表(可选，快速模式跳过)
    ↓
-10. [Chart Generator Agent] - 生成图表(可选，快速模式跳过)
-    │  ├─ should_generate_chart: 判断是否需要图表
-    │  ├─ analyze_data_for_chart: 分析数据特征
-    │  └─ 调用MCP Chart工具生成图表
+10. [recommendation] - 推荐相关问题
     ↓
-11. 存储结果到缓存 → 返回结果
+11. 返回最终结果 → END
 ```
 
 ### 错误处理流程
@@ -180,121 +175,116 @@
 ```
 任何阶段出错
    ↓
-[Error Recovery Agent]
-   ├─ analyze_error_pattern: 分析错误模式
-   ├─ generate_recovery_strategy: 制定恢复策略
-   └─ auto_fix_sql_error: 尝试自动修复
+[error_recovery_node]
+   ├─ 分析错误模式
+   ├─ 制定恢复策略
+   └─ 传递错误上下文
    ↓
 判断是否可恢复
-   ├─ 是 → 返回对应阶段重试
+   ├─ 是 → 返回对应阶段重试 (通过 current_stage)
    └─ 否 → 返回错误信息给用户
 ```
+
+### 缓存检查流程
+
+**三级缓存** (在 supervisor_route() 中判断):
+
+1. **L0 - Thread 历史缓存**
+   - 范围：当前对话线程内
+   - 标志：`thread_history_hit = True`
+   - 命中 → 直接返回 END
+
+2. **L1 - 精确匹配缓存**
+   - 范围：全局，所有用户
+   - 匹配：MD5(normalize(query):connection_id)
+   - 标志：`cache_hit = True, cache_hit_type = "exact"`
+   - 命中 → 直接返回 END
+
+3. **L2 - 语义匹配缓存**
+   - 范围：全局，所有用户
+   - 匹配：相似度 >= 0.95
+   - 标志：`cache_hit = True, cache_hit_type = "semantic"`
+   - 命中 → 返回 SQL 模板，继续生成
 
 ---
 
 ## 核心组件详解
 
-### 1. IntelligentSQLGraph (chat_graph.py)
+### 1. Hub-and-Spoke Graph (chat_graph.py)
 
-**职责**: 系统的高级接口和入口点
+**职责**: 系统的核心图结构，协调所有节点执行
 
-**图结构** (2026-01-21 优化):
-```
-START → load_custom_agent → fast_mode_detect → clarification → cache_check → [supervisor | END]
-```
-
-**核心节点**:
-1. `load_custom_agent`: 提取 connection_id/agent_id，加载自定义Agent
-2. `fast_mode_detect`: 检测查询复杂度，决定是否启用快速模式
-3. `clarification`: 使用 interrupt() 实现人机交互澄清
-4. `cache_check`: 双层缓存检查 (L1精确 + L2语义)
-5. `supervisor`: 协调 Worker Agents 完成任务
-
-**核心方法**:
+**关键实现**: 
 ```python
-# 创建图实例
-def __init__(self, active_agent_profiles=None, custom_analyst=None)
+def create_hub_spoke_graph() -> CompiledStateGraph:
+    """创建 Hub-and-Spoke 图"""
+    graph = StateGraph(SQLMessageState)
+    
+    # 添加所有 Worker Agent 节点
+    graph.add_node("schema_agent", schema_agent_node)
+    graph.add_node("clarification", clarification_node_wrapper)
+    graph.add_node("sql_generator", sql_generator_node)
+    graph.add_node("sql_executor", sql_executor_node)
+    graph.add_node("data_analyst", data_analyst_node)
+    graph.add_node("chart_generator", chart_generator_node)
+    graph.add_node("error_recovery", error_recovery_node)
+    graph.add_node("recommendation", question_recommendation_node)
+    graph.add_node("general_chat", general_chat_node)
+    
+    # 设置入口点
+    graph.set_entry_point("schema_agent")
+    
+    # 添加条件边，使用统一的路由函数
+    graph.add_conditional_edges("schema_agent", supervisor_route, {...})
+    graph.add_conditional_edges("sql_generator", supervisor_route, {...})
+    # ...
+    
+    return graph.compile(checkpointer=checkpointer)
+```
 
-# 加载自定义Agent + 提取connection_id
-async def _load_custom_agent_node(self, state)
+**核心节点函数**:
+- `schema_agent_node()`: Schema 分析
+- `clarification_node_wrapper()`: 澄清
+- `sql_generator_node()`: SQL 生成
+- `sql_executor_node()`: SQL 执行
+- `data_analyst_node()`: 数据分析
+- `chart_generator_node()`: 图表生成
+- `error_recovery_node()`: 错误恢复
+- `question_recommendation_node()`: 问题推荐
+- `general_chat_node()`: 闲聊
 
-# 快速模式检测 (2026-01-21 新增)
-async def _fast_mode_detect_node(self, state)
-
-# Supervisor节点包装
-async def _supervisor_node(self, state)
-
-# 存储结果到缓存 (2026-01-19 新增)
-async def _store_result_to_cache(self, original_state, result)
-
-# 处理查询的便捷方法
-async def process_query(self, query, connection_id, thread_id=None)
+**路由决策函数**:
+```python
+def supervisor_route(state: SQLMessageState) -> str:
+    """统一的路由决策函数"""
+    current_stage = state.get("current_stage", "init")
+    
+    # 优先级1: 完成检测
+    if current_stage in ["completed", "recommendation_done"]:
+        return "FINISH"
+    
+    # 优先级2: 意图检测 (仅初始阶段)
+    if current_stage == "init":
+        if is_general_chat(state):
+            return "general_chat"
+    
+    # 优先级3: 缓存检查
+    if state.get("thread_history_hit") or state.get("cache_hit"):
+        return "FINISH"
+    
+    # 优先级4: 错误恢复
+    if current_stage == "error_recovery":
+        return handle_error_recovery(state)
+    
+    # 优先级5: 基于阶段路由
+    return route_by_stage(current_stage)
 ```
 
 **关键特性**:
-- 支持动态加载自定义分析专家
-- 从消息中提取 connection_id 和 agent_id
-- 提供全局单例访问
-- 支持快速模式自动检测
+- 统一的路由决策逻辑
+- 支持 LangGraph interrupt() 机制
 - 集成 Checkpointer 支持多轮对话
-
-### 2. SupervisorAgent (supervisor_agent.py)
-
-**职责**: 协调所有 Worker Agents，智能路由决策
-
-**核心配置**:
-```python
-# Worker Agents列表
-worker_agents = [
-    schema_agent,
-    # sample_retrieval_agent,  # 已禁用，功能集成到sql_generator
-    sql_generator_agent,
-    sql_executor_agent,
-    error_recovery_agent,
-    chart_generator_agent  # 或自定义分析专家
-]
-
-# Supervisor配置 (2026-01-21 更新)
-create_supervisor(
-    model=llm,
-    agents=worker_agents,
-    prompt=supervisor_prompt,
-    add_handoff_back_messages=False,  # ✅ 修复消息重复
-    output_mode="last_message"        # ✅ 只返回最后消息
-)
-```
-
-**路由策略**:
-- 根据 `current_stage` 字段决定下一个Agent
-- 标准流程: schema → sql_generation → sql_execution → [chart_generation] → completed
-- 快速模式: schema → sql_generation → sql_execution → completed (跳过图表)
-- 错误流程: 任何阶段 → error_recovery → 重试或终止
-
-**重要说明**:
-- SQL Validator Agent 已被移除(2026-01-16)
-- Sample Retrieval Agent 已临时禁用(2026-01-19)，功能集成到 sql_generator_agent
-- 原因: 简化流程，避免 ReAct agent 调度延迟（原 2+ 分钟）
-- 备份位置: `backend/backups/agents_backup_20260116_175357`
-
-### 3. Agent Factory (agent_factory.py)
-
-**职责**: 动态创建自定义Agent实例
-
-**核心功能**:
-```python
-def create_custom_analyst_agent(profile, db):
-    """
-    根据AgentProfile创建自定义分析专家
-    - 获取自定义LLM配置
-    - 应用自定义提示词
-    - 返回ChartGeneratorAgent实例
-    """
-```
-
-**使用场景**:
-- 用户创建自定义分析专家
-- 需要特定领域的数据分析能力
-- 替换默认的图表生成Agent
+- 流式事件输出
 
 ---
 
@@ -413,11 +403,13 @@ SQL执行完成
 
 ## Agent详解
 
-### 1. Schema Agent (schema_agent.py)
+### 1. schema_agent (schema_agent.py)
 
 **职责**: 分析用户查询,获取相关数据库模式信息
 
 **实现方式**: ReAct Agent + InjectedState 工具
+
+**节点函数**: `schema_agent_node()`
 
 **工具列表**:
 1. `analyze_user_query`: 使用LLM分析查询意图,提取关键实体
@@ -436,6 +428,7 @@ SQL执行完成
    - 获取表结构、关系、值映射
 4. 发送流式事件 (schema_mapping)
 5. 返回完整的schema_info到状态
+6. 设置 current_stage = "schema_done"
 ```
 
 **关键技术与优化**:
@@ -461,18 +454,6 @@ async def retrieve_relevant_schema_async(
 - **关键词检索**: 补充精确匹配结果
 - **值映射**: 自动映射自然语言到数据库实际值
 
-#### 流式事件输出
-```python
-# 发送 schema_mapping 事件，实时反馈给前端
-StreamWriter.write_event({
-    "event_type": "schema_mapping",
-    "data": {
-        "tables": [...],
-        "columns": [...]
-    }
-})
-```
-
 **输出示例**:
 ```python
 {
@@ -489,37 +470,54 @@ StreamWriter.write_event({
                 "电脑": "computer"
             }
         }
-    }
+    },
+    "current_stage": "schema_done"
 }
 ```
 
-### 2. SQL Generator Agent (sql_generator_agent.py)
+### 2. clarification (clarification_agent.py)
+
+**职责**: 检测查询模糊性，使用 interrupt() 暂停等待用户澄清
+
+**实现方式**: 标准节点 + LangGraph interrupt()
+
+**节点函数**: `clarification_node_wrapper()`
+
+**工作流程**:
+```python
+1. 分析用户查询的模糊性
+2. 判断是否需要澄清
+   - 明确查询 → 继续，设置 current_stage = "clarification_done"
+   - 模糊查询 → 调用 interrupt() 暂停图执行
+3. 等待用户回复
+4. 用户回复后，恢复图执行
+5. 生成增强查询 (enriched_query)
+```
+
+### 3. sql_generator (sql_generator_agent.py)
 
 **职责**: 根据模式信息生成高质量SQL语句
 
 **实现方式**: ReAct Agent + 结构化输出 (with_structured_output)
 
+**节点函数**: `sql_generator_node()`
+
 **工具列表**:
 1. `generate_sql_query`: 基础SQL生成（内置自动样本检索）
 2. `generate_sql_with_samples`: 基于历史样本生成(更高质量)
-3. ~~`explain_sql_query`~~: 已移除以提升速度 (2026-01-18)
 
 **工作流程**:
 ```python
 1. 接收用户查询和schema信息
 2. 自动检索相关样本（除非快速模式跳过）
    - 使用 HybridRetrievalEnginePool.quick_retrieve()
-   - 配置项: QA_SAMPLE_ENABLED, QA_SAMPLE_TOP_K, QA_SAMPLE_MIN_SIMILARITY
    - 快速模式: skip_sample_retrieval=True 时跳过
 3. 选择生成策略:
    - 有高质量样本 → generate_sql_with_samples
    - 无样本或快速模式 → generate_sql_query
    - 缓存命中时: 基于cached_sql_template生成
 4. 生成SQL并清理格式
-   - 移除markdown代码块标记
-   - 移除多余空白
-   - 动态检测数据库类型(MySQL/PostgreSQL/SQLite)
-5. 使用 with_structured_output 确保输出一致性
+5. 设置 current_stage = "sql_generated"
 ```
 
 **生成策略**:
@@ -528,18 +526,11 @@ StreamWriter.write_event({
 - **模板生成**: 基于语义缓存命中的SQL模板生成
 - **错误恢复**: 接收error_recovery_context,包含失败SQL和修复建议
 
-**约束条件**: 
-- 确保语法正确(因为不再有验证步骤)
-- 添加LIMIT限制(防止返回过多数据)
-- 使用正确的值映射(自然语言→数据库值)
-- 避免危险操作(DROP, DELETE, TRUNCATE等)
-- 动态适配数据库类型差异
-
 **关键优化**:
 
-#### 内置样本检索 (2026-01-19)
+#### 内置样本检索
 ```python
-# 避免独立ReAct Agent调度延迟(原2+分钟)
+# 避免独立Agent调度延迟
 samples = await HybridRetrievalEnginePool.quick_retrieve(
     query=state["enriched_query"],
     connection_id=state["connection_id"],
@@ -554,60 +545,22 @@ else:
     use_generate_sql_query()
 ```
 
-#### 快速模式支持 (2026-01-21)
-```python
-# 简单查询跳过样本检索,直接生成
-if state.get("skip_sample_retrieval", False):
-    return generate_sql_query(...)
-```
-
-#### 错误上下文传递
-```python
-# 错误恢复时提供上下文
-if state.get("error_recovery_context"):
-    context = state["error_recovery_context"]
-    # 包含: failed_sql, error_message, fix_suggestions
-    # 帮助LLM生成修复后的SQL
-```
-
-#### 动态数据库类型检测
-```python
-# 根据connection_id获取数据库类型
-db_type = detect_database_type(connection_id)
-# 适配不同数据库的语法差异
-```
-
-**QA样本检索配置**:
-```python
-QA_SAMPLE_ENABLED = True           # 是否启用样本召回
-QA_SAMPLE_TOP_K = 3                # 检索数量
-QA_SAMPLE_MIN_SIMILARITY = 0.6     # 最低相似度
-QA_SAMPLE_TIMEOUT = 10             # 超时时间(秒)
-QA_SAMPLE_FAST_FALLBACK = True     # 失败时快速降级
-```
-
-**重要变更历史**:
-- ✅ 简化流程: SQL生成后直接执行,不再验证 (2026-01-16)
-- ✅ 样本检索集成: 集成到此Agent内部,避免调度延迟 (2026-01-19)
-- ✅ 移除explain: 移除explain_sql_query工具以提升速度 (2026-01-18)
-- ✅ 快速模式: 支持跳过样本检索 (2026-01-21)
-
 **输出示例**:
 ```python
 {
     "generated_sql": "SELECT brand FROM products WHERE category='手机' ORDER BY sales DESC LIMIT 1",
-    "explanation": "查询手机类别中销量最高的品牌",
     "samples_used": 2,
-    "best_sample_score": 0.85,
-    "database_type": "mysql"
+    "current_stage": "sql_generated"
 }
 ```
 
-### 3. SQL Executor Agent (sql_executor_agent.py)
+### 4. sql_executor (sql_executor_agent.py)
 
 **职责**: 安全执行SQL查询并返回结果
 
 **实现方式**: ToolNode 直接调用（不使用ReAct模式）
+
+**节点函数**: `sql_executor_node()`
 
 **工具列表**:
 1. `execute_sql_query`: 执行SQL(带缓存机制)
@@ -620,11 +573,7 @@ QA_SAMPLE_FAST_FALLBACK = True     # 失败时快速降级
 # 原问题: execute_sql_query被重复调用4次
 # 解决方案: 直接调用工具,从4次降到1次
 
-# 方式1: 使用ToolNode包装
 executor_node = ToolNode([execute_sql_query])
-
-# 方式2: 创建兼容ReAct接口的Agent
-# 但内部直接调用工具,不经过LLM推理
 ```
 
 #### 缓存机制（防止重复执行）
@@ -633,119 +582,47 @@ _execution_cache = {}  # 缓存执行结果
 _cache_timestamps = {}  # 缓存时间戳
 _cache_lock = {}        # 并发执行锁
 
-def execute_sql_query(sql_query, connection_id):
-    # 生成缓存键
-    cache_key = f"{connection_id}:{hash(sql_query)}"
-    
-    # 检查缓存
-    if cache_key in _execution_cache:
-        if time.time() - _cache_timestamps[cache_key] < 300:
-            return _execution_cache[cache_key]
-    
-    # 检查执行锁(防止并发重复)
-    if cache_key in _cache_lock:
-        # 等待正在执行的查询完成
-        return wait_for_completion(cache_key)
-    
-    # 加锁执行
-    _cache_lock[cache_key] = True
-    try:
-        result = execute_query(...)
-        _execution_cache[cache_key] = result
-        _cache_timestamps[cache_key] = time.time()
-        return result
-    finally:
-        del _cache_lock[cache_key]
-
 # 缓存策略:
 # - 只缓存查询操作(SELECT)
 # - 缓存有效期: 5分钟
 # - 最大缓存数: 100条
-# - 自动清理旧缓存
-```
-
-#### 并发控制（防止并发重复执行）
-```python
-# 使用执行锁防止相同SQL并发执行
-_cache_lock = {}
-
-if cache_key in _cache_lock:
-    # 等待正在执行的查询完成
-    while cache_key in _cache_lock:
-        await asyncio.sleep(0.1)
-    # 返回已缓存的结果
-    return _execution_cache[cache_key]
-```
-
-#### 流式事件输出
-```python
-# 发送 data_query 事件,实时返回数据给前端
-StreamWriter.write_event({
-    "event_type": "data_query",
-    "data": {
-        "columns": [...],
-        "rows": [...],
-        "row_count": 100
-    }
-})
 ```
 
 **执行流程**:
 ```python
-1. 检查缓存
-   - 命中 → 直接返回(from_cache=True)
-   - 未命中 → 继续
-2. 检查执行锁
-   - 正在执行 → 等待完成,返回结果
-   - 未执行 → 加锁继续
+1. 检查缓存 → 命中则直接返回
+2. 检查执行锁 → 防止并发重复
 3. 获取数据库连接
-   - 使用 DBService 获取连接
-   - 支持连接池管理
-4. 执行SQL查询
-   - 超时控制(默认30秒)
-   - 错误捕获和分类
+4. 执行SQL查询 (超时控制: 30秒)
 5. 格式化结果
-   - 列名列表
-   - 数据行列表
-   - 行数统计
-6. 发送流式事件
-7. 缓存结果(如果是查询)
-8. 释放锁,返回结果
+6. 发送流式事件 (data_query)
+7. 缓存结果
+8. 设置 current_stage = "execution_done"
 ```
-
-**安全特性**:
-- SQL注入防护（参数化查询）
-- 超时控制（防止长时间查询）
-- 错误分类（语法/连接/权限/超时）
-- 只读检查（可选，防止修改操作）
-
-**性能优化效果**:
-- ✅ 工具调用: 从4次降到1次（减少75%）
-- ✅ 缓存命中: 相同查询0ms返回
-- ✅ 并发控制: 防止重复执行
 
 **输出示例**:
 ```python
 {
-    "success": True,
-    "data": {
-        "columns": ["brand", "sales"],
-        "data": [["Apple", 1000], ["Samsung", 800]],
-        "row_count": 2
+    "execution_result": {
+        "success": True,
+        "data": {
+            "columns": ["brand", "sales"],
+            "data": [["Apple", 1000], ["Samsung", 800]],
+            "row_count": 2
+        },
+        "execution_time": 0.05
     },
-    "execution_time": 0.05,
-    "from_cache": False,
-    "connection_id": 1
+    "current_stage": "execution_done"
 }
 ```
 
-### 4. Data Analyst Agent (data_analyst_agent.py)
+### 5. data_analyst (data_analyst_agent.py)
 
 **职责**: 分析查询结果,生成数据洞察和业务建议
 
-**实现方式**: 纯LLM分析（无工具调用）
+**实现方式**: ReAct Agent
 
-**新增时间**: 2026-01-23（职责分离优化）
+**节点函数**: `data_analyst_node()`
 
 **核心功能**:
 1. **直接回答用户问题**: 基于查询结果给出明确答案
@@ -760,18 +637,8 @@ StreamWriter.write_event({
    - 分析数据模式和趋势
    - 提取关键信息
 3. 生成结构化输出
-   - direct_answer: 直接回答
-   - key_insights: 关键洞察列表
-   - business_suggestions: 业务建议列表
-4. 返回分析结果到状态
+4. 设置 current_stage = "analysis_done"
 ```
-
-**职责分离背景**:
-- **分离前**: ChartGeneratorAgent同时负责数据分析和图表生成
-- **分离后**: 
-  - DataAnalystAgent: 专注数据分析和文本洞察
-  - ChartGeneratorAgent: 专注图表配置生成
-- **优势**: 职责更清晰,各自优化更容易
 
 **输出示例**:
 ```python
@@ -779,9 +646,16 @@ StreamWriter.write_event({
     "analyst_insights": {
         "direct_answer": "2024年手机类别销量最高的品牌是Apple,销量达到1000台",
         "key_insights": [
-            "Apple品牌占手机类别总销量的45%,市场占有率领先",
-            "相比去年同期,Apple销量增长了20%",
-            "前三品牌(Apple/Samsung/Huawei)占据80%市场份额"
+            "Apple品牌占手机类别总销量的45%",
+            "相比去年同期,Apple销量增长了20%"
+        ],
+        "business_suggestions": [
+            "建议增加Apple产品库存以满足市场需求"
+        ]
+    },
+    "current_stage": "analysis_done"
+}
+```
         ],
         "business_suggestions": [
             "建议加大Apple产品的库存和营销投入",
@@ -900,16 +774,54 @@ if state.get("skip_chart_generation", False):
 }
 ```
 
-### 6. Error Recovery Agent (error_recovery_agent.py)
+### 6. chart_generator (chart_generator_agent.py)
 
-**职责**: 错误分析、恢复策略生成、自动修复SQL
+**职责**: 生成图表配置，用于数据可视化
 
-**实现方式**: ReAct Agent + 工具
+**实现方式**: ReAct Agent
 
-**工具列表**:
-1. `analyze_error_pattern`: 分析错误模式和根因
-2. `generate_recovery_strategy`: 生成恢复策略
-3. `auto_fix_sql_error`: 自动修复SQL错误
+**节点函数**: `chart_generator_node()`
+
+**工作流程**:
+```python
+1. 接收查询结果和数据分析
+2. 判断是否需要图表
+   - 快速模式 skip_chart_generation=True → 跳过
+   - 非图表类查询 → 跳过
+3. 分析数据特征
+   - 数据维度
+   - 数据类型
+   - 数据量
+4. 推荐图表类型
+   - 使用规则引擎推断
+   - LLM辅助决策
+5. 生成图表配置
+   - Recharts 格式
+   - 包含所有必要属性
+6. 设置 current_stage = "chart_done"
+```
+
+**输出示例**:
+```python
+{
+    "chart_config": {
+        "type": "bar",
+        "data": [...],
+        "xAxis": "brand",
+        "yAxis": "sales",
+        "title": "各品牌销量对比"
+    },
+    "current_stage": "chart_done"
+}
+```
+
+### 7. error_recovery (error_recovery_agent.py)
+
+**职责**: 错误分析、恢复策略生成
+
+**实现方式**: 标准节点（错误处理逻辑）
+
+**节点函数**: `error_recovery_node()`
 
 **错误分类体系**:
 ```python
@@ -917,37 +829,22 @@ error_types = {
     "syntax_error": {
         "description": "SQL语法错误",
         "auto_fixable": True,
-        "confidence": 0.8,
-        "examples": ["未闭合引号", "缺少分号", "关键字拼写错误"]
+        "confidence": 0.8
     },
     "subquery_error": {
         "description": "子查询错误", 
         "auto_fixable": True,
-        "confidence": 0.7,
-        "examples": ["子查询返回多行", "子查询列数不匹配"]
+        "confidence": 0.7
     },
     "connection_error": {
         "description": "数据库连接错误",
         "auto_fixable": False,
-        "confidence": 0.6,
-        "examples": ["连接超时", "认证失败", "网络不可达"]
-    },
-    "permission_error": {
-        "description": "权限不足",
-        "auto_fixable": False,
-        "confidence": 0.7,
-        "examples": ["SELECT权限不足", "访问被拒绝"]
+        "confidence": 0.6
     },
     "timeout_error": {
         "description": "查询超时",
         "auto_fixable": True,
-        "confidence": 0.6,
-        "examples": ["执行时间过长", "锁等待超时"]
-    },
-    "unknown_error": {
-        "description": "未知错误",
-        "auto_fixable": False,
-        "confidence": 0.3
+        "confidence": 0.6
     }
 }
 ```
@@ -956,147 +853,108 @@ error_types = {
 ```python
 strategies = {
     "syntax_error": {
-        "primary_action": "regenerate_sql_with_constraints",
-        "fallback_action": "simplify_query",
-        "retry_stage": "sql_generation",
+        "retry_stage": "sql_generator",
         "context_to_pass": {
             "failed_sql": "...",
             "error_message": "...",
-            "fix_suggestions": [
-                "检查引号是否闭合",
-                "确认关键字拼写"
-            ]
+            "fix_suggestions": [...]
         }
     },
-    "subquery_error": {
-        "primary_action": "fix_subquery_logic",
-        "fallback_action": "convert_to_join",
-        "retry_stage": "sql_generation"
-    },
     "timeout_error": {
-        "primary_action": "optimize_query_performance",
-        "fallback_action": "add_limit_clause",
-        "retry_stage": "sql_generation",
+        "retry_stage": "sql_generator",
         "fix_suggestions": [
-            "添加 LIMIT 子句限制结果集",
-            "优化 JOIN 顺序",
-            "添加索引提示"
+            "添加 LIMIT 子句",
+            "优化 JOIN 顺序"
         ]
     },
     "connection_error": {
-        "primary_action": "check_database_connection",
-        "fallback_action": "notify_user",
         "retry_stage": None  # 不可自动恢复
     }
 }
 ```
 
-**自动修复能力**:
-
-#### SQL语法错误修复
-```python
-# 1. 未闭合引号
-"SELECT * FROM users WHERE name='John" 
-→ "SELECT * FROM users WHERE name='John'"
-
-# 2. 关键字大小写
-"select * form users" 
-→ "SELECT * FROM users"
-
-# 3. 缺少分号
-"SELECT * FROM users"
-→ "SELECT * FROM users;"
-```
-
-#### 性能问题修复
-```python
-# 1. 添加LIMIT子句
-"SELECT * FROM large_table"
-→ "SELECT * FROM large_table LIMIT 1000"
-
-# 2. 优化JOIN顺序
-# 小表在前，大表在后
-```
-
-#### 子查询错误修复 (2026-01改进)
-```python
-# 1. 多行子查询改用IN
-"SELECT * FROM users WHERE id = (SELECT id FROM orders)"
-→ "SELECT * FROM users WHERE id IN (SELECT id FROM orders)"
-
-# 2. 子查询改JOIN
-"SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)"
-→ "SELECT u.* FROM users u INNER JOIN orders o ON u.id = o.user_id"
-```
-
 **工作流程**:
 ```python
 1. 接收错误信息
-   - 错误类型
-   - 错误消息
-   - 失败的SQL
-   - 当前阶段
 2. 分析错误模式
    - 提取关键词匹配错误类型
-   - 分析错误历史，识别重复模式
+   - 分析错误历史
    - 评估错误严重程度
 3. 制定恢复策略
    - 选择主要动作和备选动作
    - 评估自动修复成功率
    - 生成修复建议列表
-4. 尝试自动修复
-   - 应用修复规则
-   - 验证修复结果
-   - 生成error_recovery_context
+4. 生成error_recovery_context
 5. 决定下一步
-   - 修复成功 → 重试对应阶段
-   - 修复失败 → 人工干预
-   - 达到重试上限 → 终止并返回友好错误
+   - 可修复 → 设置 current_stage 到重试阶段
+   - 不可修复 → 返回错误信息
+   - 达到重试上限 → 终止
 ```
 
 **错误上下文传递**:
 ```python
-# 传递给重试阶段的上下文
 error_recovery_context = {
     "failed_sql": "SELECT * FROM users WHERE id = (SELECT...)",
     "error_type": "subquery_error",
     "error_message": "Subquery returns more than 1 row",
     "fix_suggestions": [
         "将 = 改为 IN 或 EXISTS",
-        "在子查询中添加 LIMIT 1",
-        "考虑改用 JOIN"
+        "在子查询中添加 LIMIT 1"
     ],
     "retry_count": 1,
     "max_retries": 3
 }
 ```
 
-**用户友好消息映射**:
-```python
-# 将技术错误转换为用户友好消息
-error_messages = {
-    "syntax_error": "SQL语法有误，正在自动修复...",
-    "connection_error": "数据库连接失败，请检查数据库状态",
-    "permission_error": "权限不足，请联系管理员授权",
-    "timeout_error": "查询超时，正在优化查询...",
-    "subquery_error": "子查询逻辑有误，正在修正..."
-}
-```
+### 8. recommendation (question_recommendation.py)
 
-**关键改进** (2026-01):
-- ✅ 新增子查询错误分类和修复
-- ✅ 改进错误模式识别算法
-- ✅ 增强上下文传递，包含修复建议
-- ✅ 支持多轮重试策略
+**职责**: 根据查询结果推荐相关问题
+
+**实现方式**: LLM调用
+
+**节点函数**: `question_recommendation_node()`
+
+**工作流程**:
+```python
+1. 接收查询结果和分析
+2. 使用LLM生成推荐问题
+3. 返回3-5个相关问题
+4. 设置 current_stage = "recommendation_done"
+```
 
 **输出示例**:
 ```python
 {
-    "error_analysis": {
-        "error_type": "syntax_error",
-        "root_cause": "未闭合的引号",
-        "auto_fixable": True,
-        "confidence": 0.8
+    "recommended_questions": [
+        "各品牌的市场份额占比如何？",
+        "过去6个月销量趋势如何？",
+        "哪些品牌的销量增长最快？"
+    ],
+    "current_stage": "recommendation_done"
+}
+```
+
+### 9. general_chat (内置节点)
+
+**职责**: 处理闲聊类查询
+
+**实现方式**: LLM调用
+
+**节点函数**: `general_chat_node()`
+
+**工作流程**:
+```python
+1. 接收用户消息
+2. 使用LLM生成回复
+3. 设置 current_stage = "completed"
+```
+
+**触发条件** (在 supervisor_route() 中检测):
+```python
+chat_keywords = ["你好", "谢谢", "帮助", "你是谁", "hello", "hi", "thanks"]
+if any(kw in content.lower() for kw in chat_keywords):
+    return "general_chat"
+```
     },
     "recovery_strategy": {
         "primary_action": "regenerate_sql_with_constraints",
