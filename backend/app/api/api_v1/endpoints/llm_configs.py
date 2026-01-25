@@ -1,7 +1,6 @@
 from typing import Any, List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from langchain_openai import ChatOpenAI
 import logging
 
 from app import crud, schemas
@@ -10,6 +9,11 @@ from app.schemas.llm_config import LLMConfigCreate, LLMConfigUpdate
 from app.models.agent_profile import AgentProfile
 from app.models.user import User
 from app.core.llms import create_llm_from_config
+from app.core.model_registry import (
+    create_chat_model,
+    create_embedding_model,
+    get_provider_list_for_frontend,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -114,6 +118,7 @@ def test_llm_connection(
     """
     Test connection to LLM provider.
     Tests the configuration by sending a simple message to the LLM.
+    使用 model_registry 工厂函数，支持所有注册的 Provider。
     """
     try:
         logger.info(
@@ -129,12 +134,14 @@ def test_llm_connection(
         
         # Test based on model type
         if config_in.model_type == 'chat':
-            # Use ChatOpenAI for testing (works with most providers)
-            llm = ChatOpenAI(
-                model=config_in.model_name,
+            # 使用工厂函数创建模型（支持所有 Provider）
+            llm = create_chat_model(
+                provider=config_in.provider,
+                model_name=config_in.model_name,
                 api_key=config_in.api_key,
                 base_url=config_in.base_url,
                 temperature=0,
+                max_tokens=100,
                 max_retries=1,
                 timeout=10.0
             )
@@ -145,12 +152,28 @@ def test_llm_connection(
                 "message": f"连接成功！模型响应: {response.content[:100]}..."
             }
         else:
-            # TODO: Implement embedding test
-            logger.info(f"Embedding test not implemented, returning mock success")
-            return {
-                "success": True,
-                "message": "Embedding 模型测试通过 (模拟)"
-            }
+            # Embedding 模型测试
+            try:
+                embedding = create_embedding_model(
+                    provider=config_in.provider,
+                    model_name=config_in.model_name,
+                    api_key=config_in.api_key,
+                    base_url=config_in.base_url
+                )
+                # 测试嵌入
+                test_result = embedding.embed_query("test")
+                dimension = len(test_result)
+                logger.info(f"Embedding connection test successful: {config_in.provider}/{config_in.model_name}, dimension={dimension}")
+                return {
+                    "success": True,
+                    "message": f"Embedding 模型连接成功！向量维度: {dimension}"
+                }
+            except Exception as e:
+                logger.error(f"Embedding test failed: {e}")
+                return {
+                    "success": False,
+                    "message": f"Embedding 连接失败: {str(e)}"
+                }
     except Exception as e:
         error_msg = str(e)
         logger.error(f"LLM connection test failed: {error_msg}", exc_info=True)
@@ -158,3 +181,14 @@ def test_llm_connection(
             "success": False,
             "message": f"连接失败: {error_msg}"
         }
+
+
+@router.get("/providers", response_model=List[dict])
+def get_supported_providers(
+    current_user: User = Depends(deps.get_current_user),
+) -> Any:
+    """
+    Get list of supported LLM providers.
+    返回所有注册的 Provider 列表，供前端动态显示。
+    """
+    return get_provider_list_for_frontend()

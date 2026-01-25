@@ -444,12 +444,23 @@ const LLMConfigPage: React.FC = () => {
             rules={[{ required: true, message: '请输入提供商名称' }]}
           >
             <Select placeholder="选择或输入提供商" mode="tags" maxTagCount={1}>
+              {/* OpenAI 兼容层 - 国内外主流模型 */}
               <Option value="OpenAI">OpenAI</Option>
+              <Option value="DeepSeek">DeepSeek (深度求索)</Option>
+              <Option value="Aliyun">Aliyun (通义千问)</Option>
+              <Option value="Volcengine">Volcengine (火山引擎/豆包)</Option>
+              <Option value="Moonshot">Moonshot (月之暗面)</Option>
+              <Option value="Zhipu">Zhipu (智谱AI)</Option>
+              <Option value="Baichuan">Baichuan (百川)</Option>
+              <Option value="MiniMax">MiniMax</Option>
+              <Option value="SiliconFlow">SiliconFlow (硅基流动)</Option>
+              {/* 其他平台 */}
               <Option value="Azure">Azure OpenAI</Option>
-              <Option value="Anthropic">Anthropic</Option>
-              <Option value="Ollama">Ollama</Option>
-              <Option value="DeepSeek">DeepSeek</Option>
-              <Option value="Aliyun">Aliyun (阿里云)</Option>
+              <Option value="OpenRouter">OpenRouter (聚合平台)</Option>
+              <Option value="Ollama">Ollama (本地部署)</Option>
+              {/* 需要专用SDK的模型 */}
+              <Option value="Baidu">Baidu (百度千帆)</Option>
+              <Option value="Google">Google (Gemini)</Option>
             </Select>
           </Form.Item>
 

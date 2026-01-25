@@ -1,13 +1,30 @@
-import os
+"""
+LLM 模型管理模块
+
+提供统一的 LLM 模型获取接口，支持：
+- 数据库配置的模型
+- 环境变量配置的模型
+- 实例缓存优化
+
+重构说明 (2026-01-25):
+- 移除硬编码的 Provider 判断逻辑
+- 使用 model_registry 工厂函数动态创建模型
+- 支持所有 OpenAI 兼容的国内外模型
+"""
 import time
 import logging
 from typing import Optional, Dict, Any
-from langchain_deepseek import ChatDeepSeek
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_ollama import OllamaEmbeddings
+
+from langchain_core.language_models import BaseChatModel
+from langchain_core.embeddings import Embeddings
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.model_registry import (
+    create_chat_model,
+    create_embedding_model,
+    get_provider_config,
+)
 from app.db.session import SessionLocal
 from app.models.llm_config import LLMConfiguration
 from app.models.system_config import SystemConfig
@@ -147,7 +164,7 @@ def get_active_llm_config(model_type: str = "chat", use_cache: bool = True) -> O
     finally:
         db.close()
 
-def get_default_model(config_override: Optional[LLMConfiguration] = None, caller: str = None):
+def get_default_model(config_override: Optional[LLMConfiguration] = None, caller: str = None) -> BaseChatModel:
     """
     Get LLM model instance with caching support.
     
@@ -163,6 +180,9 @@ def get_default_model(config_override: Optional[LLMConfiguration] = None, caller
     Raises:
         Exception: 当模型初始化失败时
     """
+    provider = None
+    model_name = None
+    
     try:
         # Try to get from DB if no override
         config = config_override or get_active_llm_config(model_type="chat")
@@ -192,46 +212,17 @@ def get_default_model(config_override: Optional[LLMConfiguration] = None, caller
             
             logger.info(f"Creating LLM from env: {provider}/{model_name}")
 
-        # Common parameters
-        max_tokens = 8192
-        temperature = 0.2
-
-        if provider == "openai" or provider == "aliyun" or provider == "volcengine": 
-            llm = ChatOpenAI(
-                model=model_name,
-                api_key=api_key,
-                base_url=api_base,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                timeout=30.0,
-                max_retries=3
-            )
-        elif provider == "deepseek":
-            os.environ["DEEPSEEK_API_KEY"] = api_key
-            if api_base:
-                os.environ["DEEPSEEK_API_BASE"] = api_base
-            
-            llm = ChatDeepSeek(
-                model=model_name,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                api_key=api_key,
-                api_base=api_base,
-                timeout=30.0,
-                max_retries=3
-            )
-        else:
-            # Default fallback to ChatOpenAI
-            logger.warning(f"Unknown provider '{provider}', falling back to ChatOpenAI")
-            llm = ChatOpenAI(
-                model=model_name,
-                api_key=api_key,
-                base_url=api_base,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                timeout=30.0,
-                max_retries=3
-            )
+        # 使用工厂函数创建模型（消除硬编码）
+        llm = create_chat_model(
+            provider=provider,
+            model_name=model_name,
+            api_key=api_key,
+            base_url=api_base,
+            temperature=0.2,
+            max_tokens=8192,
+            timeout=30.0,
+            max_retries=3
+        )
         
         # 缓存LLM实例
         _llm_cache[cache_key] = llm
@@ -243,8 +234,8 @@ def get_default_model(config_override: Optional[LLMConfiguration] = None, caller
     except Exception as e:
         logger.error(
             f"Failed to initialize LLM model: {e}, "
-            f"provider={provider if 'provider' in locals() else 'unknown'}, "
-            f"model={model_name if 'model_name' in locals() else 'unknown'}",
+            f"provider={provider or 'unknown'}, "
+            f"model={model_name or 'unknown'}",
             exc_info=True
         )
         raise
@@ -288,16 +279,16 @@ def get_default_embedding_config() -> Optional[LLMConfiguration]:
         db.close()
 
 
-def create_embedding_from_config(config: LLMConfiguration):
+def create_embedding_from_config(config: LLMConfiguration) -> Embeddings:
     """
     Create an embedding model instance from LLMConfiguration.
-    Supports multiple providers: OpenAI, Azure, DeepSeek, Aliyun, Ollama.
+    使用 model_registry 工厂函数，支持所有注册的 Provider。
     
     Args:
         config: LLM configuration object with model_type="embedding"
     
     Returns:
-        Embeddings instance (OpenAIEmbeddings or OllamaEmbeddings)
+        Embeddings instance
     
     Raises:
         ValueError: When configuration is invalid
@@ -320,29 +311,13 @@ def create_embedding_from_config(config: LLMConfiguration):
         
         logger.info(f"Creating embedding: {provider}/{model_name}")
         
-        # OpenAI-compatible providers (OpenAI, Azure, DeepSeek, Aliyun, etc.)
-        if provider in ["openai", "azure", "deepseek", "aliyun", "volcengine"]:
-            return OpenAIEmbeddings(
-                model=model_name,
-                api_key=api_key,
-                base_url=base_url
-            )
-        
-        # Ollama
-        elif provider == "ollama":
-            return OllamaEmbeddings(
-                model=model_name,
-                base_url=base_url or settings.OLLAMA_BASE_URL
-            )
-        
-        # Default to OpenAI-compatible for unknown providers
-        else:
-            logger.warning(f"Unknown embedding provider '{provider}', attempting OpenAI-compatible mode")
-            return OpenAIEmbeddings(
-                model=model_name,
-                api_key=api_key,
-                base_url=base_url
-            )
+        # 使用工厂函数创建 Embedding 模型（消除硬编码）
+        return create_embedding_model(
+            provider=provider,
+            model_name=model_name,
+            api_key=api_key,
+            base_url=base_url
+        )
     
     except Exception as e:
         logger.error(f"Failed to create embedding model from config (id={config.id}): {e}", exc_info=True)
@@ -375,10 +350,13 @@ def get_default_embedding_model_v2():
         return get_default_embedding_model()
 
 
-def get_default_embedding_model():
+def get_default_embedding_model() -> Embeddings:
     """
     Get Embedding model instance (Legacy function for backward compatibility).
     Uses environment variables for configuration.
+    
+    Returns:
+        Embeddings instance
     """
     config = get_active_llm_config(model_type="embedding")
     
@@ -392,27 +370,31 @@ def get_default_embedding_model():
     else:
         # Fallback based on VECTOR_SERVICE_TYPE
         if settings.VECTOR_SERVICE_TYPE == "aliyun":
-             api_key = settings.DASHSCOPE_API_KEY
-             api_base = settings.DASHSCOPE_BASE_URL
-             model_name = settings.DASHSCOPE_EMBEDDING_MODEL
+            api_key = settings.DASHSCOPE_API_KEY
+            api_base = settings.DASHSCOPE_BASE_URL
+            model_name = settings.DASHSCOPE_EMBEDDING_MODEL
+            provider = "aliyun"
         else:
-             api_key = settings.OPENAI_API_KEY
-             api_base = settings.OPENAI_API_BASE
-             model_name = "text-embedding-3-small" # Default fallback
+            api_key = settings.OPENAI_API_KEY
+            api_base = settings.OPENAI_API_BASE
+            model_name = "text-embedding-3-small"  # Default fallback
+            provider = "openai"
         
         logger.info(f"Creating embedding from env: {model_name}")
-        
-    return OpenAIEmbeddings(
-        model=model_name,
+    
+    # 使用工厂函数创建 Embedding 模型（消除硬编码）
+    return create_embedding_model(
+        provider=provider,
+        model_name=model_name,
         api_key=api_key,
         base_url=api_base
     )
 
 
-def create_llm_from_config(config: LLMConfiguration):
+def create_llm_from_config(config: LLMConfiguration) -> BaseChatModel:
     """
     根据LLMConfiguration创建LLM实例。
-    这是get_default_model的简化版本，专门用于从配置创建模型。
+    使用 model_registry 工厂函数，支持所有注册的 Provider。
     
     Args:
         config: LLM配置对象
@@ -441,45 +423,17 @@ def create_llm_from_config(config: LLMConfiguration):
             f"provider={provider}, model={model_name}"
         )
         
-        # Common parameters
-        max_tokens = 8192
-        temperature = 0.2
-        
-        if provider == "openai" or provider == "aliyun" or provider == "volcengine":
-            return ChatOpenAI(
-                model=model_name,
-                api_key=api_key,
-                base_url=api_base,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                timeout=30.0,
-                max_retries=3
-            )
-        elif provider == "deepseek":
-            os.environ["DEEPSEEK_API_KEY"] = api_key
-            if api_base:
-                os.environ["DEEPSEEK_API_BASE"] = api_base
-            
-            return ChatDeepSeek(
-                model=model_name,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                api_key=api_key,
-                api_base=api_base,
-                timeout=30.0,
-                max_retries=3
-            )
-        else:
-            logger.warning(f"Unknown provider '{provider}', falling back to ChatOpenAI")
-            return ChatOpenAI(
-                model=model_name,
-                api_key=api_key,
-                base_url=api_base,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                timeout=30.0,
-                max_retries=3
-            )
+        # 使用工厂函数创建模型（消除硬编码）
+        return create_chat_model(
+            provider=provider,
+            model_name=model_name,
+            api_key=api_key,
+            base_url=api_base,
+            temperature=0.2,
+            max_tokens=8192,
+            timeout=30.0,
+            max_retries=3
+        )
     except Exception as e:
         logger.error(
             f"Failed to create LLM from config (id={config.id}): {e}",

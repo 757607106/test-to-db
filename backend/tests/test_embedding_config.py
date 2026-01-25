@@ -150,7 +150,7 @@ class TestEmbeddingConfiguration:
         embedding_model = create_embedding_from_config(config)
         assert embedding_model is not None
         # Check it's an OllamaEmbeddings instance
-        from langchain_community.embeddings import OllamaEmbeddings
+        from langchain_ollama import OllamaEmbeddings
         assert isinstance(embedding_model, OllamaEmbeddings)
         
         # Cleanup

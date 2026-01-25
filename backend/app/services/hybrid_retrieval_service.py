@@ -12,7 +12,6 @@ import time
 from functools import lru_cache
 from neo4j import GraphDatabase
 from pymilvus import MilvusClient, DataType
-from langchain_ollama import OllamaEmbeddings
 from openai import AsyncOpenAI
 
 import numpy as np
@@ -21,6 +20,11 @@ from app.core.config import settings
 from app.models.llm_config import LLMConfiguration
 from sqlalchemy.orm import Session
 from app.core.llms import get_default_embedding_config
+from app.core.model_registry import (
+    is_openai_compatible,
+    get_provider_config,
+    ProviderType,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,14 +145,22 @@ class VectorService:
         self.retry_delay = settings.VECTOR_RETRY_DELAY
 
     def _map_provider_to_service_type(self, provider: str) -> str:
-        """将provider映射到service_type（用于兼容旧代码）"""
+        """
+        将provider映射到service_type（用于兼容旧代码）
+        使用 model_registry 动态判断，消除硬编码
+        """
         provider_lower = provider.lower()
+        
+        # Ollama 特殊处理（使用 LangChain 的 OllamaEmbeddings）
         if provider_lower == "ollama":
             return "ollama"
-        elif provider_lower in ["openai", "azure", "deepseek", "aliyun", "volcengine"]:
-            return "aliyun"  # 使用aliyun的初始化方式（AsyncOpenAI）
-        else:
-            return "aliyun"  # 默认使用OpenAI兼容方式
+        
+        # 使用 model_registry 判断是否为 OpenAI 兼容
+        if is_openai_compatible(provider_lower):
+            return "openai_compatible"  # 使用 AsyncOpenAI 客户端
+        
+        # 默认使用 OpenAI 兼容方式
+        return "openai_compatible"
 
     async def initialize(self):
         """初始化模型"""
@@ -160,11 +172,13 @@ class VectorService:
                 elif self.service_type == "ollama":
                     # Fallback: 使用环境变量配置的 Ollama
                     await self._initialize_ollama()
-                elif self.service_type == "aliyun":
-                    # Fallback: 使用环境变量配置的 Aliyun DashScope
+                elif self.service_type in ["aliyun", "openai_compatible"]:
+                    # Fallback: 使用环境变量配置的 OpenAI 兼容服务
                     await self._initialize_aliyun()
                 else:
-                    raise ValueError(f"Unsupported service_type: {self.service_type}")
+                    # 未知类型，尝试 OpenAI 兼容方式
+                    logger.warning(f"Unknown service_type '{self.service_type}', attempting OpenAI-compatible mode")
+                    await self._initialize_aliyun()
 
                 self._initialized = True
                 logger.info(f"Vector service initialized successfully with provider={self.provider}, model={self.model_name}")
@@ -174,17 +188,27 @@ class VectorService:
                 raise
 
     async def _initialize_from_config(self):
-        """从LLMConfiguration初始化模型"""
+        """
+        从LLMConfiguration初始化模型
+        使用 model_registry 动态判断 Provider 类型，消除硬编码
+        """
         if not self.llm_config:
             raise ValueError("llm_config is required for _initialize_from_config")
         
         provider = self.llm_config.provider.lower()
         logger.info(f"Initializing embedding model from config: provider={provider}, model={self.model_name}")
         
-        # OpenAI兼容的提供商（OpenAI, Azure, DeepSeek, Aliyun等）
-        if provider in ["openai", "azure", "deepseek", "aliyun", "volcengine"]:
+        # 使用 model_registry 判断 Provider 类型
+        if is_openai_compatible(provider):
+            # OpenAI 兼容的提供商（使用 AsyncOpenAI 客户端）
             api_key = self.llm_config.api_key
             base_url = self.llm_config.base_url
+            
+            # 如果没有提供 base_url，尝试从注册表获取默认值
+            if not base_url:
+                provider_config = get_provider_config(provider)
+                if provider_config and provider_config.default_base_url:
+                    base_url = provider_config.default_base_url
             
             if not api_key:
                 raise ValueError(f"API key is required for provider '{provider}'")
@@ -204,8 +228,10 @@ class VectorService:
                 logger.error(f"Failed to connect to {provider}: {e}")
                 raise
         
-        # Ollama
+        # Ollama 特殊处理（使用 LangChain 的 OllamaEmbeddings）
         elif provider == "ollama":
+            from langchain_ollama import OllamaEmbeddings
+            
             base_url = self.llm_config.base_url or settings.OLLAMA_BASE_URL
             
             self.model = OllamaEmbeddings(
@@ -222,7 +248,26 @@ class VectorService:
             logger.info(f"Ollama model loaded: model={self.model_name}, dimension={self.dimension}")
         
         else:
-            raise ValueError(f"Unsupported embedding provider: {provider}")
+            # 未知 Provider，尝试 OpenAI 兼容方式
+            logger.warning(f"Unknown provider '{provider}', attempting OpenAI-compatible mode")
+            api_key = self.llm_config.api_key
+            base_url = self.llm_config.base_url
+            
+            if not api_key:
+                raise ValueError(f"API key is required for provider '{provider}'")
+            
+            self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+            
+            try:
+                response = await self.client.embeddings.create(
+                    model=self.model_name,
+                    input="test"
+                )
+                self.dimension = len(response.data[0].embedding)
+                logger.info(f"Embedding model loaded (OpenAI-compatible): provider={provider}, dimension={self.dimension}")
+            except Exception as e:
+                logger.error(f"Failed to connect to {provider}: {e}")
+                raise
 
     async def _initialize_aliyun(self):
         """初始化阿里云DashScope嵌入模型（Fallback到环境变量）"""
@@ -251,6 +296,7 @@ class VectorService:
 
     async def _initialize_ollama(self):
         """初始化Ollama嵌入模型（Fallback到环境变量）"""
+        from langchain_ollama import OllamaEmbeddings
 
         logger.info(f"Initializing Ollama embedding model: {self.model_name}")
 

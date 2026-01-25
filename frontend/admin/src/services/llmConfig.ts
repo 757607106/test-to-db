@@ -28,6 +28,18 @@ export interface LLMConfigUpdate {
   api_key?: string;
 }
 
+// Provider 信息接口
+export interface ProviderInfo {
+  value: string;
+  label: string;
+  defaultBaseUrl?: string;
+  supportsBaseUrl: boolean;
+  supportsChat: boolean;
+  supportsEmbedding: boolean;
+  providerType: string;
+  extraConfigKeys: string[];
+}
+
 // 获取所有配置
 export const getLLMConfigs = () => api.get<LLMConfig[]>('/llm-configs/');
 
@@ -42,6 +54,9 @@ export const deleteLLMConfig = (id: number) => api.delete<LLMConfig>(`/llm-confi
 
 // 测试连接
 export const testLLMConfig = (data: LLMConfigCreate) => api.post<{success: boolean, message: string}>('/llm-configs/test', data);
+
+// 获取支持的 Provider 列表（动态从后端获取）
+export const getProviders = () => api.get<ProviderInfo[]>('/llm-configs/providers');
 
 // --- Agent Profile 辅助 (暂时放在这里，或移至专门的 agentProfile.ts) ---
 
