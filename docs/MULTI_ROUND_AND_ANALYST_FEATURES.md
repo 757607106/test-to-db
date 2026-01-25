@@ -18,19 +18,17 @@ AI 自动检测用户查询是否存在模糊或不明确之处，并主动向�
 
 #### 1. **Clarification Agent** (`backend/app/agents/agents/clarification_agent.py`)
 - **功能**: 检测查询模糊、生成澄清问题、处理用户回复
-- **工具函数**:
-  - `detect_ambiguity`: 检测查询中的模糊点
-  - `generate_clarification_questions`: 生成澄清问题（选择题或文本题）
-  - `process_user_clarification`: 处理用户回复并生成增强查询
+- **实现方式**: 不使用ReAct Agent，而是直接调用LLM进行检测和问题生成
+- **核心函数**:
+  - `_quick_clarification_check_impl`: 快速检测查询是否需要澄清（内部实现）
+  - `quick_clarification_check`: 供外部调用的wrapper
+  - `process_user_clarification_response`: 处理用户澄清回复
 
-#### 2. **Analyst Agent** (`backend/app/agents/agents/analyst_agent.py`)
+#### 2. **Data Analyst Agent** (`backend/app/agents/agents/data_analyst_agent.py`)
 - **功能**: 智能分析查询结果，生成业务洞察
-- **工具函数**:
-  - `detect_analysis_need`: 智能判断是否需要分析
-  - `generate_data_summary`: 生成数据摘要统计
-  - `analyze_trends`: 时间序列趋势分析
-  - `detect_data_anomalies`: 异常和离群值检测
-  - `generate_business_recommendations`: 生成业务建议
+- **职责**: 专注于数据分析和洞察文本生成（不包括图表配置）
+- **输出格式**: Markdown格式，包含回答、数据洞察、建议
+- **注意**: 原文档提到的 `analyst_agent.py` 实际上是 `data_analyst_agent.py`
 
 #### 3. **分析工具模块** (`backend/app/services/analyst_utils.py`)
 提供统计计算、时间序列检测、增长率计算、异常检测等工具函数。
@@ -66,25 +64,29 @@ AI 自动检测用户查询是否存在模糊或不明确之处，并主动向�
 ```
 用户输入查询
     ↓
-Clarification Agent 检测
+Clarification Agent 检测（如需要，使用interrupt暂停）
     ↓
 需要澄清？
-    ├── 是 → 展示澄清问题 → 用户回答 → 继续
-    └── 否 → 直接进入 Schema Agent
+    ├── 是 → interrupt暂停，展示澄清问题 → 用户回答 → resume继续
+    └── 否 → 直接进入 Cache Check
+    ↓
+Cache Check (三级缓存)
+    ├── Thread历史缓存命中 → 返回结果
+    ├── 精确匹配缓存命中 → 返回结果
+    ├── 语义匹配缓存命中 → 基于模板生成SQL → 执行
+    └── 缓存未命中 → 继续
+    ↓
+Supervisor 协调 Worker Agents
     ↓
 Schema Agent（分析模式）
     ↓
-SQL Generator Agent（生成SQL）
+SQL Generator Agent（生成SQL，内置样本检索）
     ↓
 SQL Executor Agent（执行查询）
     ↓
-Analyst Agent（智能分析）
+Data Analyst Agent（数据分析，总是执行）
     ↓
-需要分析？
-    ├── 是 → 生成洞察（摘要、趋势、异常、建议）
-    └── 否 → 跳过分析
-    ↓
-Chart Generator Agent（可选）
+Chart Generator Agent（可选，快速模式跳过）
     ↓
 返回结果
 ```
@@ -92,39 +94,38 @@ Chart Generator Agent（可选）
 ### 澄清机制详细流程
 
 1. **首次查询**:
-   - Clarification Agent 使用 `detect_ambiguity` 检测模糊点
-   - 如发现模糊（时间范围、字段、条件等），调用 `generate_clarification_questions`
-   - 生成最多 3 个澄清问题（优先选择题）
+   - Clarification Agent 使用 `quick_clarification_check` 快速检测
+   - 如发现模糊（时间范围、字段、条件等），生成最多3个澄清问题
+   - 使用 LangGraph 的 `interrupt()` 暂停执行
+   - 返回澄清问题给前端
 
 2. **用户回复**:
    - 前端收集用户回答
-   - 调用 `/api/v1/query/chat` 时携带 `clarification_responses`
-   - Clarification Agent 使用 `process_user_clarification` 整合信息
+   - 调用 resume API 携带用户回复
+   - Clarification Agent 使用 `process_user_clarification_response` 整合信息
+   - 生成增强查询继续执行
 
-3. **澄清限制**:
-   - 最多 2 轮澄清（可配置）
-   - 超过限制后基于现有信息继续执行
+3. **澄清优化**:
+   - 使用单次LLM调用同时完成检测和问题生成
+   - 禁用流式输出，防止JSON被错误传输
+   - 只处理高/中严重度的模糊性，低严重度忽略
 
 ### 分析师工作流程
 
-1. **触发判断** (智能触发):
-   - SQL 执行成功后自动调用 Analyst Agent
-   - 使用 `detect_analysis_need` 判断是否需要深度分析
-   - 判断依据：
-     - 数据行数（2-1000 行适合深度分析）
-     - 是否包含数值列
-     - 是否包含时间列
-     - 用户查询意图（通过 LLM 判断）
+1. **触发时机**:
+   - SQL 执行成功后自动调用 Data Analyst Agent
+   - 数据分析总是执行（不再有智能判断是否需要）
+   - 职责：生成数据洞察文本（不包括图表配置）
 
-2. **分析执行**:
-   - **数据摘要**: 对所有查询生成基础统计
-   - **趋势分析**: 检测到时间序列时自动执行
-   - **异常检测**: 对数值列进行离群值检测
-   - **业务建议**: 基于分析结果生成可操作建议
+2. **分析内容**:
+   - **回答**: 直接回答用户问题
+   - **数据洞察**: 提取关键信息和趋势
+   - **建议**: 基于数据提供业务建议
 
-3. **结果返回**:
-   - 分析结果存储在 `analyst_insights` 字段
-   - 前端使用 `AnalystInsightsCard` 展示
+3. **输出格式**:
+   - Markdown格式的分析文本
+   - 结构清晰，包含标题和列表
+   - 不包含图表配置（由 Chart Generator Agent 负责）
 
 ---
 

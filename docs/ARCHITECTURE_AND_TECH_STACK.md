@@ -19,20 +19,32 @@
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │  API网关 (FastAPI)                                  │  │
 │  │  - admin_server.py (8000)                           │  │
-│  │  - chat_server.py (2025)                            │  │
+│  │  - chat_server.py (8001)                            │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │  业务逻辑层                                          │  │
 │  │  ┌────────────────────────────────────────────────┐ │  │
-│  │  │ 多代理系统 (LangGraph Supervisor)             │ │  │
-│  │  │ - Schema Agent                                │ │  │
-│  │  │ - Sample Retrieval Agent                      │ │  │
-│  │  │ - SQL Generator Agent                         │ │  │
-│  │  │ - SQL Validator Agent                         │ │  │
-│  │  │ - SQL Executor Agent                          │ │  │
-│  │  │ - Error Recovery Agent                        │ │  │
-│  │  │ - Chart Generator Agent                       │ │  │
+│  │  │ 主图层 (IntelligentSQLGraph)                  │ │  │
+│  │  │ - 意图路由 (闲聊 vs 数据查询)                 │ │  │
+│  │  │ - 三级缓存 (Thread → 精确 → 语义)             │ │  │
+│  │  │ - 澄清机制 (interrupt人机交互)                │ │  │
+│  │  └────────────────────────────────────────────────┘ │  │
+│  │  ┌────────────────────────────────────────────────┐ │  │
+│  │  │ 协调层 (原生 Supervisor)                      │ │  │
+│  │  │ - 双模式路由 (状态机 + LLM智能)               │ │  │
+│  │  │ - Worker Agents 调度                          │ │  │
+│  │  │ - 错误恢复决策                                │ │  │
+│  │  └────────────────────────────────────────────────┘ │  │
+│  │  ┌────────────────────────────────────────────────┐ │  │
+│  │  │ 执行层 (Worker Agents × 7)                    │ │  │
+│  │  │ - Clarification Agent (澄清)                  │ │  │
+│  │  │ - Schema Agent (Schema分析)                   │ │  │
+│  │  │ - SQL Generator Agent (SQL生成)               │ │  │
+│  │  │ - SQL Executor Agent (SQL执行)                │ │  │
+│  │  │ - Data Analyst Agent (数据分析)               │ │  │
+│  │  │ - Chart Generator Agent (图表生成)            │ │  │
+│  │  │ - Error Recovery Agent (错误恢复)             │ │  │
 │  │  └────────────────────────────────────────────────┘ │  │
 │  │                                                      │  │
 │  │  ┌────────────────────────────────────────────────┐ │  │
@@ -48,6 +60,7 @@
 │  │  │ - DB Service                                  │ │  │
 │  │  │ - Schema Service                              │ │  │
 │  │  │ - Text2SQL Service                            │ │  │
+│  │  │ - Query Cache Service                         │ │  │
 │  │  └────────────────────────────────────────────────┘ │  │
 │  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
@@ -177,40 +190,40 @@ LangGraph Supervisor
 ### 3.1 多代理系统架构
 ```
 ┌─────────────────────────────────────────┐
-│    LangGraph Supervisor                 │
-│  (langgraph_supervisor.create_supervisor)│
+│    原生 LangGraph Supervisor            │
+│  (supervisor_subgraph.py - 自主实现)    │
 └─────────────────────────────────────────┘
          ↓
 ┌─────────────────────────────────────────┐
 │    Worker Agents (7个)                  │
 ├─────────────────────────────────────────┤
-│ 1. schema_agent.py                      │
-│    - 分析查询                           │
-│    - 获取Schema                         │
+│ 1. clarification_agent.py               │
+│    - 检测查询模糊性                     │
+│    - 生成澄清问题                       │
 │                                         │
-│ 2. sample_retrieval_agent.py            │
-│    - 混合检索                           │
-│    - 返回样本                           │
+│ 2. schema_agent.py                      │
+│    - 分析查询意图                       │
+│    - 获取相关Schema                     │
 │                                         │
 │ 3. sql_generator_agent.py               │
-│    - 生成SQL                            │
+│    - 生成SQL (内置样本检索)             │
 │    - 应用值映射                         │
 │                                         │
-│ 4. sql_validator_agent.py               │
-│    - 验证SQL                            │
-│    - 检查安全性                         │
+│ 4. sql_executor_agent.py                │
+│    - 执行SQL (带缓存)                   │
+│    - 返回查询结果                       │
 │                                         │
-│ 5. sql_executor_agent.py                │
-│    - 执行SQL                            │
-│    - 获取结果                           │
+│ 5. data_analyst_agent.py                │
+│    - 数据分析和洞察                     │
+│    - 生成业务建议                       │
 │                                         │
-│ 6. error_recovery_agent.py              │
-│    - 分析错误                           │
-│    - 修复SQL                            │
+│ 6. chart_generator_agent.py             │
+│    - 生成图表配置                       │
+│    - 优化数据展示                       │
 │                                         │
-│ 7. chart_generator_agent.py             │
-│    - 生成图表                           │
-│    - 优化展示                           │
+│ 7. error_recovery_agent.py              │
+│    - 分析错误模式                       │
+│    - 自动修复SQL                        │
 └─────────────────────────────────────────┘
 ```
 
@@ -303,11 +316,12 @@ Chat UI (展示结果)
 
 ### 5.1 开发环境
 ```
-localhost:3000   ← Chat UI (Next.js dev server)
-localhost:3001   ← Admin UI (React dev server)
+localhost:3000   ← Admin UI (React dev server)
+localhost:3001   ← Chat UI (Next.js dev server)
 localhost:8000   ← Admin API (FastAPI)
-localhost:2025   ← LangGraph API
+localhost:8001   ← Chat API (FastAPI + LangGraph)
 localhost:3306   ← MySQL
+localhost:5433   ← PostgreSQL (Checkpointer)
 localhost:7687   ← Neo4j
 localhost:19530  ← Milvus
 localhost:11434  ← Ollama
@@ -421,5 +435,5 @@ SQL注入防护 (参数化查询)
 ---
 
 **文档版本**: 1.0
-**最后更新**: 2026-01-11
+**最后更新**: 2026-01-25
 
