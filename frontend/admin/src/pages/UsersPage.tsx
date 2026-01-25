@@ -70,7 +70,7 @@ const UsersPage: React.FC = () => {
       setUsers(response.users);
       setTotal(response.total);
     } catch (error: any) {
-      message.error(error.response?.data?.detail || 'Failed to load users');
+      message.error(error.response?.data?.detail || '加载用户列表失败');
     } finally {
       setLoading(false);
     }
@@ -81,7 +81,7 @@ const UsersPage: React.FC = () => {
       const data = await getCurrentTenant();
       setTenant(data);
     } catch (error: any) {
-      message.error(error.response?.data?.detail || 'Failed to load tenant info');
+      message.error(error.response?.data?.detail || '加载租户信息失败');
     }
   };
 
@@ -90,7 +90,7 @@ const UsersPage: React.FC = () => {
       const data = await getPermissionTemplates();
       setPermissionTemplates(data);
     } catch (error: any) {
-      console.error('Failed to load permission templates:', error);
+      console.error('加载权限模板失败:', error);
     }
   };
 
@@ -110,12 +110,12 @@ const UsersPage: React.FC = () => {
         display_name: values.display_name,
         role: values.role || 'user',
       });
-      message.success('User created successfully');
+      message.success('用户创建成功');
       setCreateModalVisible(false);
       createForm.resetFields();
       fetchUsers();
     } catch (error: any) {
-      message.error(error.response?.data?.detail || 'Failed to create user');
+      message.error(error.response?.data?.detail || '创建用户失败');
     }
   };
 
@@ -136,11 +136,11 @@ const UsersPage: React.FC = () => {
         display_name: values.display_name,
         role: values.role,
       });
-      message.success('User updated successfully');
+      message.success('用户更新成功');
       setEditModalVisible(false);
       fetchUsers();
     } catch (error: any) {
-      message.error(error.response?.data?.detail || 'Failed to update user');
+      message.error(error.response?.data?.detail || '更新用户失败');
     }
   };
 
@@ -165,11 +165,11 @@ const UsersPage: React.FC = () => {
           features: values.features || {},
         },
       });
-      message.success('Permissions updated successfully');
+      message.success('权限更新成功');
       setPermissionModalVisible(false);
       fetchUsers();
     } catch (error: any) {
-      message.error(error.response?.data?.detail || 'Failed to update permissions');
+      message.error(error.response?.data?.detail || '更新权限失败');
     }
   };
 
@@ -177,10 +177,10 @@ const UsersPage: React.FC = () => {
   const handleToggleStatus = async (record: TenantUser) => {
     try {
       await toggleUserStatus(record.id);
-      message.success(`User ${record.is_active ? 'disabled' : 'enabled'} successfully`);
+      message.success(`用户已${record.is_active ? '禁用' : '启用'}`);
       fetchUsers();
     } catch (error: any) {
-      message.error(error.response?.data?.detail || 'Failed to toggle user status');
+      message.error(error.response?.data?.detail || '切换用户状态失败');
     }
   };
 
@@ -188,39 +188,39 @@ const UsersPage: React.FC = () => {
   const handleDelete = async (userId: number) => {
     try {
       await deleteTenantUser(userId);
-      message.success('User deleted successfully');
+      message.success('用户删除成功');
       fetchUsers();
     } catch (error: any) {
-      message.error(error.response?.data?.detail || 'Failed to delete user');
+      message.error(error.response?.data?.detail || '删除用户失败');
     }
   };
 
   const columns: ColumnsType<TenantUser> = [
     {
-      title: 'Username',
+      title: '用户名',
       dataIndex: 'username',
       key: 'username',
       render: (text, record) => (
         <Space>
           <UserOutlined />
           <span>{text}</span>
-          {record.id === user?.id && <Tag color="blue">Me</Tag>}
+          {record.id === user?.id && <Tag color="blue">当前</Tag>}
         </Space>
       ),
     },
     {
-      title: 'Display Name',
+      title: '显示名称',
       dataIndex: 'display_name',
       key: 'display_name',
       render: (text) => text || '-',
     },
     {
-      title: 'Email',
+      title: '邮箱',
       dataIndex: 'email',
       key: 'email',
     },
     {
-      title: 'Role',
+      title: '角色',
       dataIndex: 'role',
       key: 'role',
       render: (role) => {
@@ -230,31 +230,31 @@ const UsersPage: React.FC = () => {
           user: 'blue',
         };
         const labelMap: Record<string, string> = {
-          super_admin: 'Super Admin',
-          tenant_admin: 'Tenant Admin',
-          user: 'User',
+          super_admin: '超级管理员',
+          tenant_admin: '租户管理员',
+          user: '普通用户',
         };
         return <Tag color={colorMap[role] || 'default'}>{labelMap[role] || role}</Tag>;
       },
     },
     {
-      title: 'Status',
+      title: '状态',
       dataIndex: 'is_active',
       key: 'is_active',
       render: (isActive) => (
         <Tag color={isActive ? 'green' : 'red'}>
-          {isActive ? 'Active' : 'Inactive'}
+          {isActive ? '已启用' : '已禁用'}
         </Tag>
       ),
     },
     {
-      title: 'Last Login',
+      title: '最后登录',
       dataIndex: 'last_login_at',
       key: 'last_login_at',
-      render: (date) => (date ? new Date(date).toLocaleString() : 'Never'),
+      render: (date) => (date ? new Date(date).toLocaleString('zh-CN') : '从未登录'),
     },
     {
-      title: 'Actions',
+      title: '操作',
       key: 'actions',
       render: (_, record) => {
         const isCurrentUser = record.id === user?.id;
@@ -262,7 +262,7 @@ const UsersPage: React.FC = () => {
         
         return (
           <Space size="small">
-            <Tooltip title="Edit">
+            <Tooltip title="编辑">
               <Button
                 type="text"
                 icon={<EditOutlined />}
@@ -271,7 +271,7 @@ const UsersPage: React.FC = () => {
             </Tooltip>
             
             {!isAdmin && (
-              <Tooltip title="Permissions">
+              <Tooltip title="权限设置">
                 <Button
                   type="text"
                   icon={<KeyOutlined />}
@@ -282,7 +282,7 @@ const UsersPage: React.FC = () => {
             
             {!isCurrentUser && (
               <>
-                <Tooltip title={record.is_active ? 'Disable' : 'Enable'}>
+                <Tooltip title={record.is_active ? '禁用' : '启用'}>
                   <Switch
                     size="small"
                     checked={record.is_active}
@@ -292,13 +292,13 @@ const UsersPage: React.FC = () => {
                 </Tooltip>
                 
                 <Popconfirm
-                  title="Delete User"
-                  description="Are you sure you want to delete this user?"
+                  title="删除用户"
+                  description="确定要删除此用户吗？"
                   onConfirm={() => handleDelete(record.id)}
-                  okText="Yes"
-                  cancelText="No"
+                  okText="确定"
+                  cancelText="取消"
                 >
-                  <Tooltip title="Delete">
+                  <Tooltip title="删除">
                     <Button
                       type="text"
                       danger
@@ -316,21 +316,21 @@ const UsersPage: React.FC = () => {
   ];
 
   const menuLabels: Record<string, string> = {
-    chat: 'Intelligent Query',
-    connections: 'DB Connections',
-    training: 'Training Center',
-    llm_configs: 'LLM Configuration',
-    agents: 'Agent Profiles',
-    users: 'User Management',
+    chat: '智能查询',
+    connections: '数据库连接',
+    training: '智能训练中心',
+    llm_configs: '模型配置',
+    agents: '智能体配置',
+    users: '用户管理',
   };
 
   const featureLabels: Record<string, string> = {
-    view: 'View',
-    create: 'Create',
-    edit: 'Edit',
-    delete: 'Delete',
-    query: 'Query',
-    publish: 'Publish',
+    view: '查看',
+    create: '创建',
+    edit: '编辑',
+    delete: '删除',
+    query: '查询',
+    publish: '发布',
   };
 
   return (
@@ -338,21 +338,21 @@ const UsersPage: React.FC = () => {
       <Card>
         <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            <Title level={4} style={{ margin: 0 }}>User Management</Title>
+            <Title level={4} style={{ margin: 0 }}>用户管理</Title>
             {tenant && (
-              <Text type="secondary">Company: {tenant.display_name}</Text>
+              <Text type="secondary">所属公司：{tenant.display_name}</Text>
             )}
           </div>
           <Space>
             <Button icon={<ReloadOutlined />} onClick={fetchUsers}>
-              Refresh
+              刷新
             </Button>
             <Button
               type="primary"
               icon={<PlusOutlined />}
               onClick={() => setCreateModalVisible(true)}
             >
-              Add User
+              添加用户
             </Button>
           </Space>
         </div>
@@ -365,14 +365,14 @@ const UsersPage: React.FC = () => {
           pagination={{
             total,
             showSizeChanger: true,
-            showTotal: (total) => `Total ${total} users`,
+            showTotal: (total) => `共 ${total} 个用户`,
           }}
         />
       </Card>
 
       {/* Create User Modal */}
       <Modal
-        title="Add New User"
+        title="添加新用户"
         open={createModalVisible}
         onCancel={() => {
           setCreateModalVisible(false);
@@ -387,53 +387,53 @@ const UsersPage: React.FC = () => {
         >
           <Form.Item
             name="username"
-            label="Username"
+            label="用户名"
             rules={[
-              { required: true, message: 'Please enter username' },
-              { min: 3, message: 'Username must be at least 3 characters' },
+              { required: true, message: '请输入用户名' },
+              { min: 3, message: '用户名至少3个字符' },
             ]}
           >
-            <Input prefix={<UserOutlined />} placeholder="Username" />
+            <Input prefix={<UserOutlined />} placeholder="请输入用户名" />
           </Form.Item>
           
           <Form.Item
             name="email"
-            label="Email"
+            label="邮箱"
             rules={[
-              { required: true, message: 'Please enter email' },
-              { type: 'email', message: 'Please enter a valid email' },
+              { required: true, message: '请输入邮箱' },
+              { type: 'email', message: '请输入有效的邮箱地址' },
             ]}
           >
-            <Input placeholder="Email" />
+            <Input placeholder="请输入邮箱" />
           </Form.Item>
           
           <Form.Item
             name="display_name"
-            label="Display Name"
+            label="显示名称"
           >
-            <Input placeholder="Display Name (optional)" />
+            <Input placeholder="显示名称（选填）" />
           </Form.Item>
           
           <Form.Item
             name="password"
-            label="Password"
+            label="密码"
             rules={[
-              { required: true, message: 'Please enter password' },
-              { min: 6, message: 'Password must be at least 6 characters' },
+              { required: true, message: '请输入密码' },
+              { min: 6, message: '密码至少6个字符' },
             ]}
           >
-            <Input.Password placeholder="Password" />
+            <Input.Password placeholder="请输入密码" />
           </Form.Item>
           
           <Form.Item
             name="role"
-            label="Role"
+            label="角色"
             initialValue="user"
           >
             <Select>
-              <Select.Option value="user">User</Select.Option>
+              <Select.Option value="user">普通用户</Select.Option>
               {user?.role === 'super_admin' && (
-                <Select.Option value="tenant_admin">Tenant Admin</Select.Option>
+                <Select.Option value="tenant_admin">租户管理员</Select.Option>
               )}
             </Select>
           </Form.Item>
@@ -441,13 +441,13 @@ const UsersPage: React.FC = () => {
           <Form.Item>
             <Space>
               <Button type="primary" htmlType="submit">
-                Create
+                创建
               </Button>
               <Button onClick={() => {
                 setCreateModalVisible(false);
                 createForm.resetFields();
               }}>
-                Cancel
+                取消
               </Button>
             </Space>
           </Form.Item>
@@ -456,7 +456,7 @@ const UsersPage: React.FC = () => {
 
       {/* Edit User Modal */}
       <Modal
-        title="Edit User"
+        title="编辑用户"
         open={editModalVisible}
         onCancel={() => {
           setEditModalVisible(false);
@@ -471,19 +471,19 @@ const UsersPage: React.FC = () => {
         >
           <Form.Item
             name="display_name"
-            label="Display Name"
+            label="显示名称"
           >
-            <Input placeholder="Display Name" />
+            <Input placeholder="请输入显示名称" />
           </Form.Item>
           
           <Form.Item
             name="role"
-            label="Role"
+            label="角色"
           >
             <Select disabled={selectedUser?.id === user?.id}>
-              <Select.Option value="user">User</Select.Option>
+              <Select.Option value="user">普通用户</Select.Option>
               {user?.role === 'super_admin' && (
-                <Select.Option value="tenant_admin">Tenant Admin</Select.Option>
+                <Select.Option value="tenant_admin">租户管理员</Select.Option>
               )}
             </Select>
           </Form.Item>
@@ -491,13 +491,13 @@ const UsersPage: React.FC = () => {
           <Form.Item>
             <Space>
               <Button type="primary" htmlType="submit">
-                Save
+                保存
               </Button>
               <Button onClick={() => {
                 setEditModalVisible(false);
                 setSelectedUser(null);
               }}>
-                Cancel
+                取消
               </Button>
             </Space>
           </Form.Item>
@@ -506,13 +506,15 @@ const UsersPage: React.FC = () => {
 
       {/* Permissions Modal */}
       <Modal
-        title={`Edit Permissions - ${selectedUser?.username}`}
+        title={`权限设置 - ${selectedUser?.username}`}
         open={permissionModalVisible}
         onCancel={() => {
           setPermissionModalVisible(false);
           setSelectedUser(null);
         }}
         onOk={handlePermissionsSubmit}
+        okText="保存"
+        cancelText="取消"
         width={600}
       >
         <Form form={permissionForm} layout="vertical">
@@ -520,7 +522,7 @@ const UsersPage: React.FC = () => {
             items={[
               {
                 key: 'menus',
-                label: 'Menu Access',
+                label: '菜单权限',
                 children: (
                   <Form.Item name="menus">
                     <Checkbox.Group style={{ width: '100%' }}>
@@ -537,7 +539,7 @@ const UsersPage: React.FC = () => {
               },
               {
                 key: 'features',
-                label: 'Feature Permissions',
+                label: '功能权限',
                 children: (
                   <div>
                     {permissionTemplates?.available_menus.map((menu) => (

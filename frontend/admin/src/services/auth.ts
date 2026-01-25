@@ -119,3 +119,14 @@ export const logout = (): void => {
 export const isAuthenticated = (): boolean => {
   return !!getToken();
 };
+
+// Session Code API (用于安全的跨域 token 传递)
+export interface SessionCodeResponse {
+  code: string;
+  expires_in: number;
+}
+
+export const createSessionCode = async (): Promise<SessionCodeResponse> => {
+  const response = await api.post('/auth/session-code');
+  return response.data;
+};

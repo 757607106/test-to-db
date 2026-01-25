@@ -7,10 +7,11 @@ class QueryHistory(Base):
     __tablename__ = "query_history"
 
     id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)
+    tenant_id = Column(BigInteger, ForeignKey("tenants.id"), nullable=True, index=True)  # 多租户支持
     query_text = Column(Text, nullable=False)
     embedding = Column(JSON, nullable=True) # Store as JSON list of floats for MySQL compatibility
     connection_id = Column(BigInteger, nullable=True)
-    user_id = Column(BigInteger, ForeignKey("users.id"), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Metadata like execution success, result summary, etc.

@@ -24,6 +24,23 @@ const api = axios.create({
   },
 });
 
+// 请求拦截器 - 添加认证 token
+api.interceptors.request.use(
+  (config) => {
+    // 尝试从 localStorage 获取 token (与 admin 前端共享)
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('auth_token');
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
 // 数据库连接相关API
 // 注意: 统一使用尾部斜杠以匹配 FastAPI 默认行为
 export const getConnections = () => api.get<DBConnection[]>('/connections/');

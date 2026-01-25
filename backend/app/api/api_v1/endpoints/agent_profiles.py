@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 @router.get("/", response_model=List[schemas.AgentProfile])
 def read_agent_profiles(
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.get_optional_current_user),
     skip: int = 0,
     limit: int = 100,
     is_system: Optional[bool] = None,
@@ -25,9 +25,14 @@ def read_agent_profiles(
     """
     获取智能体配置列表 (Retrieve agent profiles).
     返回系统内置智能体和当前租户创建的智能体。
+    If not authenticated, returns profiles for default tenant (tenant_id=1).
     """
-    if not current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    # 如果用户已认证且有租户，按租户过滤
+    if current_user and current_user.tenant_id:
+        tenant_id = current_user.tenant_id
+    else:
+        # 未认证时使用默认租户
+        tenant_id = 1
     
     if is_system is True:
         # 只返回系统智能体
@@ -37,13 +42,13 @@ def read_agent_profiles(
     elif is_system is False:
         # 只返回租户自己的智能体
         profiles = db.query(models.AgentProfile).filter(
-            models.AgentProfile.tenant_id == current_user.tenant_id,
+            models.AgentProfile.tenant_id == tenant_id,
             models.AgentProfile.is_system == False
         ).offset(skip).limit(limit).all()
     else:
         # 返回系统智能体和租户自己的智能体
         profiles = crud.agent_profile.get_multi_for_tenant(
-            db, tenant_id=current_user.tenant_id, skip=skip, limit=limit
+            db, tenant_id=tenant_id, skip=skip, limit=limit
         )
     return profiles
 

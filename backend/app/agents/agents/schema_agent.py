@@ -252,7 +252,8 @@ class SchemaAnalysisAgent:
             user_query = state.get("enriched_query")  # 优先使用增强后的查询
             
             if not user_query:
-                for msg in messages:
+                # 从消息中获取最后一个 HumanMessage（最新的用户查询）
+                for msg in reversed(messages):
                     if hasattr(msg, 'type') and msg.type == 'human':
                         user_query = msg.content
                         if isinstance(user_query, list):

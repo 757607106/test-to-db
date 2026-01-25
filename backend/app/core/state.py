@@ -137,6 +137,7 @@ class SQLMessageState(TypedDict, total=False):
     # 会话相关
     thread_id: Optional[str]
     user_id: Optional[str]
+    tenant_id: Optional[int]  # 多租户支持: 当前用户所属租户ID
     
     # ==========================================
     # 缓存相关字段
@@ -210,7 +211,8 @@ class SQLMessageState(TypedDict, total=False):
 def create_initial_state(
     connection_id: Optional[int] = None,
     thread_id: Optional[str] = None,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
+    tenant_id: Optional[int] = None
 ) -> SQLMessageState:
     """
     创建初始状态
@@ -219,6 +221,7 @@ def create_initial_state(
         connection_id: 数据库连接 ID
         thread_id: 会话线程 ID
         user_id: 用户 ID
+        tenant_id: 租户 ID (多租户隔离)
         
     Returns:
         SQLMessageState: 初始化的状态对象
@@ -236,6 +239,7 @@ def create_initial_state(
         agent_messages={},
         thread_id=thread_id,
         user_id=user_id,
+        tenant_id=tenant_id,  # 多租户支持
         cache_hit=False,
         fast_mode=False,
         skip_sample_retrieval=False,
@@ -292,6 +296,30 @@ def extract_connection_id(state: SQLMessageState) -> Optional[int]:
                 msg_connection_id = message.additional_kwargs.get('connection_id')
                 if msg_connection_id:
                     return msg_connection_id
+    
+    return None
+
+
+def extract_tenant_id(state: SQLMessageState) -> Optional[int]:
+    """
+    从状态中提取租户 ID
+    
+    统一读取逻辑（优先级从高到低）：
+    1. state.tenant_id - 直接存储的值
+    2. state.context.tenantId - 前端通过 context 传递的值
+    
+    多租户安全: 用于确保所有数据操作都在正确的租户范围内
+    """
+    # 1. 优先使用 state 中直接存储的值
+    if state.get("tenant_id"):
+        return state["tenant_id"]
+    
+    # 2. 检查 context 中的 tenantId (前端通过 context 传递)
+    context = state.get("context")
+    if context and isinstance(context, dict):
+        context_tenant_id = context.get("tenantId")
+        if context_tenant_id:
+            return context_tenant_id
     
     return None
 

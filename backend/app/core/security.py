@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
-import bcrypt
-from jose import jwt, JWTError
+# 延迟导入 jose，避免在不需要 JWT 功能的模块中触发导入错误
+# 这样 schema_agent 等模块导入 crud 时不会因为 jose 缺失而失败
+if TYPE_CHECKING:
+    from jose import jwt, JWTError
 
 from app.core.config import settings
 
@@ -14,6 +16,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify password using bcrypt directly."""
     try:
+        import bcrypt  # 延迟导入，仅在需要时加载
         password_bytes = plain_password.encode('utf-8')
         hashed_bytes = hashed_password.encode('utf-8')
         return bcrypt.checkpw(password_bytes, hashed_bytes)
@@ -23,6 +26,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def get_password_hash(password: str) -> str:
     """Hash password using bcrypt directly."""
+    import bcrypt  # 延迟导入，仅在需要时加载
     password_bytes = password.encode('utf-8')
     salt = bcrypt.gensalt()
     hashed = bcrypt.hashpw(password_bytes, salt)
@@ -43,6 +47,8 @@ def create_access_token(
     Returns:
         Encoded JWT token string
     """
+    from jose import jwt  # 延迟导入，仅在需要时加载
+    
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
@@ -63,6 +69,8 @@ def verify_token(token: str) -> Optional[str]:
     Returns:
         Subject (user id) if valid, None otherwise
     """
+    from jose import jwt, JWTError  # 延迟导入，仅在需要时加载
+    
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
         subject: str = payload.get("sub")

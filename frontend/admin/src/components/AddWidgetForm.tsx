@@ -16,6 +16,7 @@ import {
 } from 'antd';
 import { SendOutlined } from '@ant-design/icons';
 import { dashboardService, widgetService } from '../services/dashboardService';
+import { getConnections, executeQuery } from '../services/api';
 import type { WidgetCreate, WidgetQueryConfig } from '../types/dashboard';
 
 const { TextArea } = Input;
@@ -54,12 +55,23 @@ export const AddWidgetForm: React.FC<AddWidgetFormProps> = ({
   const fetchConnections = async () => {
     setLoadingConnections(true);
     try {
-      const response = await fetch('http://localhost:8000/api/connections/');
-      const data = await response.json();
-      setConnections(data);
+      const response = await getConnections();
+      const data = response.data;
+      // 确保 connections 是数组
+      if (Array.isArray(data)) {
+        setConnections(data);
+      } else if (data && Array.isArray(data.items)) {
+        setConnections(data.items);
+      } else if (data && Array.isArray(data.connections)) {
+        setConnections(data.connections);
+      } else {
+        console.warn('Unexpected API response format:', data);
+        setConnections([]);
+      }
     } catch (error) {
-      message.error('获取数据库连接失败');
+      message.error('获取数据库连接失败，请检查登录状态');
       console.error(error);
+      setConnections([]);
     } finally {
       setLoadingConnections(false);
     }
@@ -81,16 +93,12 @@ export const AddWidgetForm: React.FC<AddWidgetFormProps> = ({
 
     setGenerating(true);
     try {
-      const response = await fetch('http://localhost:8000/api/query/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          connection_id: connectionId,
-          natural_language_query: naturalQuery,
-        }),
+      const response = await executeQuery({
+        connection_id: connectionId,
+        natural_language_query: naturalQuery,
       });
 
-      const result = await response.json();
+      const result = response.data;
       
       if (result.sql) {
         setGeneratedSQL(result.sql);

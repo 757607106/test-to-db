@@ -1,5 +1,8 @@
 """Authentication API endpoints for user registration, login, and profile management."""
-from typing import Any
+from typing import Any, Dict
+import secrets
+import time
+from threading import Lock
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -21,6 +24,44 @@ from app.models.user import User
 from app.schemas.tenant import TenantCreate
 
 router = APIRouter()
+
+# ============================================================================
+# Session Code 存储 (内存缓存，生产环境建议使用 Redis)
+# ============================================================================
+_session_codes: Dict[str, Dict[str, Any]] = {}
+_session_codes_lock = Lock()
+SESSION_CODE_TTL = 300  # 5分钟过期
+
+
+def _cleanup_expired_codes():
+    """清理过期的 session codes"""
+    now = time.time()
+    expired = [k for k, v in _session_codes.items() if v["expires_at"] < now]
+    for k in expired:
+        del _session_codes[k]
+
+
+def _store_session_code(code: str, user_id: int, tenant_id: int) -> None:
+    """存储 session code"""
+    with _session_codes_lock:
+        _cleanup_expired_codes()
+        _session_codes[code] = {
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "expires_at": time.time() + SESSION_CODE_TTL
+        }
+
+
+def _get_and_remove_session_code(code: str) -> Dict[str, Any]:
+    """获取并删除 session code (一次性使用)"""
+    with _session_codes_lock:
+        _cleanup_expired_codes()
+        if code not in _session_codes:
+            return None
+        data = _session_codes.pop(code)
+        if data["expires_at"] < time.time():
+            return None
+        return data
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -194,3 +235,79 @@ def change_password(
     db.commit()
     
     return {"message": "Password changed successfully"}
+
+
+# ============================================================================
+# Session Code 端点 (用于安全的跨域 token 传递)
+# ============================================================================
+
+@router.post("/session-code", response_model=dict)
+def create_session_code(
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    创建一次性 Session Code，用于安全地将认证传递给 Chat 页面。
+    
+    安全机制:
+    - Code 是随机生成的，不可预测
+    - 5分钟内有效
+    - 只能使用一次
+    - 不包含敏感信息 (token)
+    
+    使用流程:
+    1. Admin 调用此接口获取 code
+    2. 重定向到 Chat 页面: /chat?code=xxx
+    3. Chat 页面调用 /exchange-code 用 code 换取 token
+    """
+    if not current_user.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is not associated with a tenant"
+        )
+    
+    # 生成安全的随机 code
+    code = secrets.token_urlsafe(32)
+    
+    # 存储 code 与用户信息的映射
+    _store_session_code(code, current_user.id, current_user.tenant_id)
+    
+    return {"code": code, "expires_in": SESSION_CODE_TTL}
+
+
+@router.post("/exchange-code", response_model=Token)
+def exchange_session_code(
+    code: str,
+    db: Session = Depends(deps.get_db),
+) -> Any:
+    """
+    用 Session Code 交换 Access Token。
+    
+    安全机制:
+    - Code 只能使用一次
+    - 过期自动失效
+    - 成功后立即删除 code
+    """
+    # 获取并验证 code
+    code_data = _get_and_remove_session_code(code)
+    
+    if not code_data:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired session code"
+        )
+    
+    # 验证用户仍然有效
+    user = db.query(User).filter(User.id == code_data["user_id"]).first()
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or inactive"
+        )
+    
+    # 更新最后登录时间
+    crud.user.update_last_login(db, user=user)
+    
+    # 创建 access token
+    access_token = create_access_token(subject=user.id)
+    
+    return {"access_token": access_token, "token_type": "bearer"}

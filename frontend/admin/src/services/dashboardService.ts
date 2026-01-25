@@ -21,6 +21,9 @@ import type {
   DashboardInsightRequest,
   DashboardInsightResponse,
   InsightConditions,
+  AIChartRecommendRequest,
+  AIChartRecommendResponse,
+  ChartConfig,
 } from '../types/dashboard';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
@@ -204,6 +207,44 @@ export const widgetService = {
   ): Promise<DashboardInsightResponse> {
     const response = await api.put(`/widgets/${widgetId}/refresh-insights`, { conditions });
     return response.data;
+  },
+
+  // AI 智能推荐图表类型
+  async getAIChartRecommendation(
+    widgetId: number,
+    dataSample?: any,
+    intent?: string
+  ): Promise<AIChartRecommendResponse> {
+    const response = await api.post(`/widgets/${widgetId}/ai-recommend`, {
+      data_sample: dataSample,
+      intent,
+    });
+    return response.data;
+  },
+
+  // 批量刷新所有Widget
+  async batchRefreshWidgets(widgetIds: number[]): Promise<{
+    success: number[];
+    failed: number[];
+    results: Record<number, WidgetRefreshResponse>;
+  }> {
+    const results: Record<number, WidgetRefreshResponse> = {};
+    const success: number[] = [];
+    const failed: number[] = [];
+
+    await Promise.all(
+      widgetIds.map(async (id) => {
+        try {
+          const response = await api.post(`/widgets/${id}/refresh`);
+          results[id] = response.data;
+          success.push(id);
+        } catch (error) {
+          failed.push(id);
+        }
+      })
+    );
+
+    return { success, failed, results };
   },
 };
 

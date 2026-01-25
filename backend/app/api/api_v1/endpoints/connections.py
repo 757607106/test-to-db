@@ -20,9 +20,12 @@ def read_connections(
 ) -> Any:
     """
     Retrieve all database connections for current user's tenant.
+    
+    多租户安全: 必须认证且关联租户才能获取连接列表。
     """
     if not current_user.tenant_id:
         raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    
     connections = crud.db_connection.get_multi_by_tenant(
         db, tenant_id=current_user.tenant_id, skip=skip, limit=limit
     )

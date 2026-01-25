@@ -115,9 +115,61 @@ export interface WidgetCreate {
 
 export interface WidgetUpdate {
   title?: string;
-  chart_config?: any;
+  chart_config?: ChartConfig;
   refresh_interval?: number;
   position_config?: WidgetPositionConfig;
+}
+
+// 图表配置类型
+export interface ChartConfig {
+  chart_type: string;
+  title?: string;
+  color_scheme?: string;
+  custom_colors?: string[];
+  legend?: {
+    show: boolean;
+    position: 'top' | 'bottom' | 'left' | 'right';
+  };
+  axis?: {
+    xAxisName?: string;
+    yAxisName?: string;
+    showGrid?: boolean;
+  };
+  tooltip?: {
+    show: boolean;
+    trigger: 'item' | 'axis';
+  };
+  series_config?: {
+    smooth?: boolean;
+    stack?: boolean;
+    label?: boolean;
+    radius?: [string, string];
+  };
+  data_mapping?: {
+    x_column?: string;
+    y_columns?: string[];
+    category_column?: string;
+  };
+}
+
+// AI 图表推荐请求
+export interface AIChartRecommendRequest {
+  widget_id: number;
+  data_sample?: any;
+  intent?: string;
+}
+
+// AI 图表推荐响应
+export interface AIChartRecommendResponse {
+  recommended_type: string;
+  confidence: number;
+  reasoning: string;
+  chart_config: ChartConfig;
+  alternatives?: Array<{
+    type: string;
+    confidence: number;
+    description: string;
+  }>;
 }
 
 export interface WidgetRefreshResponse {

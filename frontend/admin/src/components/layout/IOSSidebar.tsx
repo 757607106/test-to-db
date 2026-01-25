@@ -12,13 +12,29 @@ import {
   DashboardOutlined,
   ApiOutlined,
   RobotOutlined,
-  TeamOutlined
+  TeamOutlined,
+  MessageOutlined
 } from '@ant-design/icons';
+import { message } from 'antd';
 import { useAuth } from '../../contexts/AuthContext';
+import { createSessionCode } from '../../services/auth';
 
 const IOSSidebar: React.FC = () => {
   const location = useLocation();
   const { user } = useAuth();
+
+  // 跳转到 Chat 页面，使用安全的 session code 机制
+  const handleGoToChat = async () => {
+    try {
+      // 获取一次性 session code
+      const { code } = await createSessionCode();
+      // 使用 code 而非 token 跳转，更安全
+      window.open(`http://localhost:3000?code=${code}`, '_blank');
+    } catch (error) {
+      console.error('获取 session code 失败:', error);
+      message.error('跳转失败，请重试');
+    }
+  };
 
   // Menu permission mapping
   const menuPermissionMap: Record<string, string> = {
@@ -132,6 +148,25 @@ const IOSSidebar: React.FC = () => {
       
       <div style={styles.logoArea}>
         <span style={styles.logoText}>RWX Admin</span>
+      </div>
+
+      {/* 进入智能问答按钮 */}
+      <div style={{ padding: '0 4px', marginBottom: '10px' }}>
+        <button
+          onClick={handleGoToChat}
+          className="macos-sidebar-item"
+          style={{
+            width: '100%',
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            color: 'white',
+            border: 'none',
+            cursor: 'pointer',
+            fontWeight: 600,
+          }}
+        >
+          <MessageOutlined className="sidebar-icon" style={{ fontSize: '18px', color: 'white' }} />
+          <span>进入智能问答</span>
+        </button>
       </div>
 
       <ul style={styles.menuList}>

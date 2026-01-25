@@ -211,6 +211,7 @@ SQL: {sample.get('sql', '')}
 5. 使用正确的值映射
 6. 【重要】避免在子查询的 WHERE 子句中引用外部查询的列别名
 7. 【重要】如果需要关联子查询，确保正确使用表别名
+8. 【MySQL 别名规则】当表使用别名时（如 product AS p），引用列必须使用 p.column_name 格式，绝对禁止使用 database.p.column_name 格式（这是无效语法）
 """
         
         llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
@@ -459,7 +460,7 @@ class SQLGeneratorAgent:
             # 获取用户查询 (优先使用 enriched_query)
             messages = state.get("messages", [])
             user_query = None
-            for msg in messages:
+            for msg in reversed(messages):
                 if hasattr(msg, 'type') and msg.type == 'human':
                     user_query = msg.content
                     if isinstance(user_query, list):
@@ -711,7 +712,8 @@ class SQLGeneratorAgent:
         cached_sql_template: str,
         schema_info: Dict[str, Any],
         value_mappings: Dict[str, Any],
-        sample_qa_pairs: List[Dict[str, Any]]
+        sample_qa_pairs: List[Dict[str, Any]],
+        db_type: str = "mysql"
     ) -> str:
         """
         基于缓存SQL模板生成新SQL
@@ -725,6 +727,7 @@ class SQLGeneratorAgent:
             schema_info: 数据库模式信息
             value_mappings: 值映射信息
             sample_qa_pairs: QA样本对
+            db_type: 数据库类型
             
         Returns:
             str: JSON格式的生成结果
@@ -732,6 +735,8 @@ class SQLGeneratorAgent:
         try:
             # 构建模板增强的生成提示
             prompt = f"""作为 SQL 专家，请基于以下信息修改 SQL 查询：
+
+**数据库类型**: {db_type}
 
 **用户需求**: {user_query}
 
@@ -750,6 +755,12 @@ class SQLGeneratorAgent:
 1. 分析用户需求与参考SQL的差异
 2. 基于参考SQL的结构，修改WHERE条件、字段选择等以满足用户需求
 3. 确保SQL语法正确，字段名与模式一致
+
+**重要规则**:
+- 【MySQL 别名规则】当表使用别名时（如 product AS p），引用列必须使用 p.column_name 格式
+- 绝对禁止使用 database.alias.column_name 格式（如 erp_inventory.p.category_id），这是无效语法
+- 正确格式: p.category_id, o.order_date
+- 错误格式: erp_inventory.p.category_id, db_name.alias.column
 
 **要求**: 只返回修改后的SQL语句，不要其他内容。
 """
@@ -785,7 +796,7 @@ class SQLGeneratorAgent:
                 "state": {},
                 "value_mappings": json.dumps(value_mappings, ensure_ascii=False) if value_mappings else None,
                 "sample_qa_pairs": json.dumps(sample_qa_pairs, ensure_ascii=False) if sample_qa_pairs else None,
-                "db_type": db_type  # ✅ 使用传入的数据库类型
+                "db_type": db_type
             })
     
     def _extract_sql_from_result(self, result: Dict[str, Any]) -> str:

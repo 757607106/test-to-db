@@ -2,13 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { Modal, Steps, Button, Input, Select, Card, Checkbox, message, Spin, Row, Col, Typography, Empty, Space } from 'antd';
 import { DatabaseOutlined, BulbOutlined, CheckCircleOutlined, SearchOutlined } from '@ant-design/icons';
 import { dashboardService } from '../services/dashboardService';
-import axios from 'axios';
+import { getConnections } from '../services/api';
 
 const { Step } = Steps;
 const { TextArea } = Input;
 const { Title, Text } = Typography;
-
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
 
 interface GuidedMiningWizardProps {
   visible: boolean;
@@ -47,10 +45,21 @@ export const GuidedMiningWizard: React.FC<GuidedMiningWizardProps> = ({
 
   const fetchConnections = async () => {
     try {
-      const response = await axios.get(`${API_URL}/connections/`);
-      setConnections(response.data);
+      const response = await getConnections();
+      // 处理响应数据，确保是数组格式
+      const data = response.data;
+      if (Array.isArray(data)) {
+        setConnections(data);
+      } else if (data && Array.isArray(data.items)) {
+        setConnections(data.items);
+      } else {
+        console.warn('Unexpected API response format:', data);
+        setConnections([]);
+      }
     } catch (error) {
       console.error('获取连接失败', error);
+      message.error('获取数据库连接失败，请检查登录状态');
+      setConnections([]);
     }
   };
 

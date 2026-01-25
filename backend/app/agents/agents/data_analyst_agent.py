@@ -215,9 +215,9 @@ class DataAnalystAgent:
         if state.get("enriched_query"):
             return state["enriched_query"]
         
-        # 从消息中提取
+        # 从消息中提取（取最后一个 HumanMessage）
         messages = state.get("messages", [])
-        for msg in messages:
+        for msg in reversed(messages):
             if hasattr(msg, 'type') and msg.type == 'human':
                 content = msg.content
                 if isinstance(content, list):

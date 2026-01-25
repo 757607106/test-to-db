@@ -511,9 +511,9 @@ class SQLExecutorAgent:
         }
     
     def _extract_user_query(self, state: SQLMessageState) -> str:
-        """从状态中提取用户原始查询"""
+        """从状态中提取用户原始查询（取最后一个 HumanMessage）"""
         messages = state.get("messages", [])
-        for msg in messages:
+        for msg in reversed(messages):
             if hasattr(msg, 'type') and msg.type == 'human':
                 content = msg.content
                 if isinstance(content, list):

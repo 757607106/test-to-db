@@ -2927,6 +2927,13 @@
   resolved "https://registry.npmmirror.com/@types/react-dom/-/react-dom-18.3.7.tgz"
   integrity sha512-MEe3UeoENYVFXzoXEWsvcpg6ZvlrFNlOQ7EOsvhI3CfAXwzPfO8Qwuxd40nepsYKqyyVQnTdEfv68q91yLcKrQ==
 
+"@types/react-grid-layout@^1.3.6":
+  version "1.3.6"
+  resolved "https://registry.npmmirror.com/@types/react-grid-layout/-/react-grid-layout-1.3.6.tgz"
+  integrity sha512-Cw7+sb3yyjtmxwwJiXtEXcu5h4cgs+sCGkHwHXsFmPyV30bf14LeD/fa2LwQovuD2HWxCcjIdNhDlcYGj95qGA==
+  dependencies:
+    "@types/react" "*"
+
 "@types/react-syntax-highlighter@^15.5.6":
   version "15.5.13"
   resolved "https://registry.npmmirror.com/@types/react-syntax-highlighter/-/react-syntax-highlighter-15.5.13.tgz"
@@ -2934,14 +2941,7 @@
   dependencies:
     "@types/react" "*"
 
-"@types/react@*":
-  version "19.2.8"
-  resolved "https://registry.npmmirror.com/@types/react/-/react-19.2.8.tgz"
-  integrity sha512-3MbSL37jEchWZz2p2mjntRZtPt837ij10ApxKfgmXCTuHWagYg7iA5bqPw6C8BMPfwidlvfPI/fxOc42HLhcyg==
-  dependencies:
-    csstype "^3.2.2"
-
-"@types/react@^18.0.0", "@types/react@^18.0.28", "@types/react@>=16", "@types/react@>=16.8":
+"@types/react@*", "@types/react@^18.0.0", "@types/react@^18.0.28", "@types/react@>=16", "@types/react@>=16.8":
   version "18.3.27"
   resolved "https://registry.npmmirror.com/@types/react/-/react-18.3.27.tgz"
   integrity sha512-cisd7gxkzjBKU2GgdYrTdtQx1SORymWyaAFhaxQPK9bYO9ot3Y5OikQRvY0VYQtvwjeQnizCINJAenh/V7MK2w==
@@ -4397,6 +4397,11 @@ clone-response@^1.0.2:
   integrity sha512-ROoL94jJH2dUVML2Y/5PEDNaSHgeOdSDicUyS7izcF63G6sTc/FTjLub4b8Il9S8S0beOfYt0TaA5qvFK+w0wA==
   dependencies:
     mimic-response "^1.0.0"
+
+clsx@^2.0.0, clsx@^2.1.1:
+  version "2.1.1"
+  resolved "https://registry.npmmirror.com/clsx/-/clsx-2.1.1.tgz"
+  integrity sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA==
 
 co@^4.6.0:
   version "4.6.0"
@@ -6170,6 +6175,11 @@ fast-deep-equal@^3.1.1, fast-deep-equal@^3.1.3:
   version "3.1.3"
   resolved "https://registry.npmmirror.com/fast-deep-equal/-/fast-deep-equal-3.1.3.tgz"
   integrity sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==
+
+fast-equals@^4.0.3:
+  version "4.0.3"
+  resolved "https://registry.npmmirror.com/fast-equals/-/fast-equals-4.0.3.tgz"
+  integrity sha512-G3BSX9cfKttjr+2o1O22tYMLq0DPluZnYtq1rXumE1SpL/F/SLIfHx08WYQoWSIpeMYf8sRbJ8++71+v6Pnxfg==
 
 fast-glob@^3.2.9, fast-glob@^3.3.2:
   version "3.3.3"
@@ -10590,7 +10600,7 @@ prompts@^2.0.1, prompts@^2.4.2:
     kleur "^3.0.3"
     sisteransi "^1.0.5"
 
-prop-types@^15.0.0, prop-types@^15.8.1, prop-types@15:
+prop-types@^15.0.0, prop-types@^15.8.1, prop-types@15, prop-types@15.x:
   version "15.8.1"
   resolved "https://registry.npmmirror.com/prop-types/-/prop-types-15.8.1.tgz"
   integrity sha512-oj87CgZICdulUohogVAR7AjlC0327U4el4L6eAvOqCeudMDVU0NThNaV+b9Df4dXgSP1gXMTnPdhfe/2qDH5cg==
@@ -11114,13 +11124,21 @@ react-dev-utils@^12.0.1:
     strip-ansi "^6.0.1"
     text-table "^0.2.0"
 
-react-dom@*, react-dom@^18.0.0, react-dom@^18.2.0, react-dom@>=16.0.0, react-dom@>=16.11.0, react-dom@>=16.8, react-dom@>=16.9.0, react-dom@>=17, react-dom@>=18.0.0:
+react-dom@*, react-dom@^18.0.0, react-dom@^18.2.0, "react-dom@>= 16.3", "react-dom@>= 16.3.0", react-dom@>=16.0.0, react-dom@>=16.11.0, react-dom@>=16.8, react-dom@>=16.9.0, react-dom@>=17, react-dom@>=18.0.0:
   version "18.3.1"
   resolved "https://registry.npmmirror.com/react-dom/-/react-dom-18.3.1.tgz"
   integrity sha512-5m4nQKp+rZRb09LNH59GM4BxTh9251/ylbKIbpe7TpGxfJ+9kv6BLkLBXIjjspbgbnIBNqlI23tRnTWT0snUIw==
   dependencies:
     loose-envify "^1.1.0"
     scheduler "^0.23.2"
+
+react-draggable@^4.4.5, react-draggable@^4.5.0:
+  version "4.5.0"
+  resolved "https://registry.npmmirror.com/react-draggable/-/react-draggable-4.5.0.tgz"
+  integrity sha512-VC+HBLEZ0XJxnOxVAZsdRi8rD04Iz3SiiKOoYzamjylUcju/hP9np/aZdLHf/7WOD268WMoNJMvYfB5yAK45cw==
+  dependencies:
+    clsx "^2.1.1"
+    prop-types "^15.8.1"
 
 react-error-overlay@^6.0.11:
   version "6.1.0"
@@ -11138,6 +11156,18 @@ react-force-graph@^1.48.1:
     force-graph "^1.51"
     prop-types "15"
     react-kapsule "^2.5"
+
+react-grid-layout@^1.4.4:
+  version "1.4.4"
+  resolved "https://registry.npmmirror.com/react-grid-layout/-/react-grid-layout-1.4.4.tgz"
+  integrity sha512-7+Lg8E8O8HfOH5FrY80GCIR1SHTn2QnAYKh27/5spoz+OHhMmEhU/14gIkRzJOtympDPaXcVRX/nT1FjmeOUmQ==
+  dependencies:
+    clsx "^2.0.0"
+    fast-equals "^4.0.3"
+    prop-types "^15.8.1"
+    react-draggable "^4.4.5"
+    react-resizable "^3.0.5"
+    resize-observer-polyfill "^1.5.1"
 
 react-is@^16.13.1:
   version "16.13.1"
@@ -11186,6 +11216,14 @@ react-refresh@^0.11.0, "react-refresh@>=0.10.0 <1.0.0":
   version "0.11.0"
   resolved "https://registry.npmmirror.com/react-refresh/-/react-refresh-0.11.0.tgz"
   integrity sha512-F27qZr8uUqwhWZboondsPx8tnC3Ct3SxZA3V5WyEvujRyyNv0VYPhoBg1gZ8/MV5tubQp76Trw8lTv9hzRBa+A==
+
+react-resizable@^3.0.5:
+  version "3.1.3"
+  resolved "https://registry.npmmirror.com/react-resizable/-/react-resizable-3.1.3.tgz"
+  integrity sha512-liJBNayhX7qA4tBJiBD321FDhJxgGTJ07uzH5zSORXoE8h7PyEZ8mLqmosST7ppf6C4zUsbd2gzDMmBCfFp9Lw==
+  dependencies:
+    prop-types "15.x"
+    react-draggable "^4.5.0"
 
 react-router-dom@^6.8.1:
   version "6.30.3"
@@ -11269,7 +11307,7 @@ react-syntax-highlighter@^15.5.0:
     prismjs "^1.30.0"
     refractor "^3.6.0"
 
-react@*, "react@^15.0.0 || >=16.0.0", "react@^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0", react@^18.0.0, react@^18.2.0, react@^18.3.1, "react@>= 0.14.0", "react@>= 16", "react@>= 16.3.0", react@>=16, react@>=16.0.0, react@>=16.11.0, react@>=16.13.1, react@>=16.8, react@>=16.9.0, react@>=17, react@>=18.0.0:
+react@*, "react@^15.0.0 || >=16.0.0", "react@^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0", react@^18.0.0, react@^18.2.0, react@^18.3.1, "react@>= 0.14.0", "react@>= 16", "react@>= 16.3", "react@>= 16.3.0", react@>=16, react@>=16.0.0, react@>=16.11.0, react@>=16.13.1, react@>=16.8, react@>=16.9.0, react@>=17, react@>=18.0.0:
   version "18.3.1"
   resolved "https://registry.npmmirror.com/react/-/react-18.3.1.tgz"
   integrity sha512-wS+hAgJShR0KhEvPJArfuPVN1+Hz1t0Y6n5jLrGQbkb4urgPE/0Rve+1kMB1v/oWgHgm4WIcV+i7F2pTVj+2iQ==

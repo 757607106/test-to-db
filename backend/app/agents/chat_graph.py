@@ -25,7 +25,6 @@ import time
 
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import interrupt, StreamWriter
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -33,18 +32,6 @@ from app.core.state import SQLMessageState
 from app.models.agent_profile import AgentProfile
 
 logger = logging.getLogger(__name__)
-
-# 全局默认 checkpointer
-_default_checkpointer = None
-
-
-def _get_default_checkpointer():
-    """获取默认的内存 checkpointer"""
-    global _default_checkpointer
-    if _default_checkpointer is None:
-        _default_checkpointer = InMemorySaver()
-        logger.info("✓ 初始化默认内存 Checkpointer")
-    return _default_checkpointer
 
 
 # ============================================================================
@@ -527,6 +514,10 @@ async def supervisor_node(state: SQLMessageState) -> Dict[str, Any]:
                     "final_response": None,
                     "cache_hit": False,
                     "thread_history_hit": False,
+                    # 清除查询相关状态，确保使用新的用户查询
+                    "enriched_query": None,
+                    "original_query": None,
+                    "schema_info": None,
                 }
     
     # 如果推荐完成，构造最终响应
@@ -672,8 +663,12 @@ def supervisor_route(state: SQLMessageState) -> str:
 # 图构建
 # ============================================================================
 
-def create_hub_spoke_graph(checkpointer=None) -> CompiledStateGraph:
-    """创建 Hub-and-Spoke 架构的图"""
+def create_hub_spoke_graph() -> CompiledStateGraph:
+    """
+    创建 Hub-and-Spoke 架构的图
+    
+    注意: 不传入 checkpointer，由 LangGraph API 框架在运行时自动管理持久化。
+    """
     logger.info("创建 Hub-and-Spoke 图...")
     
     # 导入推荐节点
@@ -725,11 +720,8 @@ def create_hub_spoke_graph(checkpointer=None) -> CompiledStateGraph:
         }
     )
     
-    # 编译
-    if checkpointer:
-        compiled = graph.compile(checkpointer=checkpointer)
-    else:
-        compiled = graph.compile(checkpointer=_get_default_checkpointer())
+    # 编译 - 不传入 checkpointer，由框架自动管理
+    compiled = graph.compile()
     
     logger.info("✓ Hub-and-Spoke 图创建完成")
     return compiled
@@ -744,24 +736,20 @@ class IntelligentSQLGraph:
     智能 SQL 代理图 - Hub-and-Spoke 架构
     
     保持与原有 Pipeline 架构的 API 兼容
+    
+    注意: 不使用自定义 checkpointer，由 LangGraph API 框架自动管理。
     """
     
     def __init__(
         self, 
         active_agent_profiles: List[AgentProfile] = None, 
-        custom_analyst=None,
-        use_default_checkpointer: bool = True
+        custom_analyst=None
     ):
-        self._use_default_checkpointer = use_default_checkpointer
-        self._checkpointer = None
         self.graph = self._create_graph()
         self._initialized = True
     
     def _create_graph(self):
         """创建图"""
-        if self._use_default_checkpointer:
-            self._checkpointer = _get_default_checkpointer()
-            return create_hub_spoke_graph(checkpointer=self._checkpointer)
         return create_hub_spoke_graph()
     
     async def _ensure_initialized(self):
@@ -774,9 +762,18 @@ class IntelligentSQLGraph:
         self,
         query: str,
         connection_id: Optional[int] = None,
-        thread_id: Optional[str] = None
+        thread_id: Optional[str] = None,
+        tenant_id: Optional[int] = None
     ) -> Dict[str, Any]:
-        """处理 SQL 查询"""
+        """
+        处理 SQL 查询
+        
+        Args:
+            query: 用户查询
+            connection_id: 数据库连接ID
+            thread_id: 会话线程ID
+            tenant_id: 租户ID (多租户隔离)
+        """
         try:
             from uuid import uuid4
             
@@ -788,16 +785,20 @@ class IntelligentSQLGraph:
             else:
                 logger.info(f"使用现有 thread_id: {thread_id}")
             
-            # 初始化状态
+            # 初始化状态 - 包含多租户信息
             initial_state = {
                 "messages": [HumanMessage(content=query)],
                 "connection_id": connection_id,
                 "thread_id": thread_id,
+                "tenant_id": tenant_id,  # 多租户支持
                 "current_stage": "init",
                 "retry_count": 0,
                 "max_retries": 3,
                 "error_history": [],
-                "context": {"connectionId": connection_id}
+                "context": {
+                    "connectionId": connection_id,
+                    "tenantId": tenant_id  # 也在 context 中传递
+                }
             }
             
             config = {"configurable": {"thread_id": thread_id}}

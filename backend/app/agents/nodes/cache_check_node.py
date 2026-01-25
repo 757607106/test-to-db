@@ -304,7 +304,15 @@ async def cache_check_node(state: SQLMessageState, writer: StreamWriter) -> Dict
     
     # 1. 获取消息和连接ID
     messages = state.get("messages", [])
-    connection_id = state.get("connection_id", 15)
+    connection_id = state.get("connection_id")
+    
+    # 多租户安全: 无连接ID则跳过缓存检查
+    if not connection_id:
+        logger.warning("未指定 connection_id，跳过缓存检查")
+        return {
+            "cache_hit": False,
+            "cache_hit_type": None
+        }
     
     # 提取用户查询
     user_query = extract_user_query(messages)
