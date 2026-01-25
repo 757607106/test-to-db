@@ -1,18 +1,8 @@
 """
-SQL 生成代理 
+SQL 生成代理
 
-遵循 LangGraph 官方最佳实践:
-1. 使用 InjectedState 注入状态参数
-2. 工具返回标准 JSON 格式
-3. 使用 with_structured_output 进行结构化输出
-
-优化历史:
-- 2026-01-19: 集成样本检索功能
-- 2026-01-21: 支持快速模式 (Fast Mode)
-- 2026-01-22: 使用 InjectedState 优化工具设计
-- 2026-01-22: 修复异步调用问题，避免嵌套事件循环
-- 2026-01-25: 添加 LLM 调用指数退避重试
-- 2026-01-25: 添加数据库特定语法规则，确保生成兼容目标数据库的 SQL
+基于用户查询和数据库模式信息生成 SQL 语句。
+支持多数据库类型、样本检索、错误恢复上下文。
 """
 from typing import Dict, Any, List, Annotated, Optional
 import logging
@@ -165,11 +155,7 @@ async def _fetch_qa_samples_async(
     schema_info: Dict[str, Any], 
     connection_id: int
 ) -> List[Dict[str, Any]]:
-    """
-    异步获取 QA 样本 (修复异步问题)
-    
-    注意: 使用纯异步实现，避免在异步环境中创建新事件循环
-    """
+    """异步获取 QA 样本"""
     try:
         from app.services.hybrid_retrieval_service import HybridRetrievalEnginePool
         from app.core.config import settings
@@ -229,24 +215,7 @@ def generate_sql_query(
     sample_qa_pairs: Optional[str] = None,
     db_type: str = "mysql"
 ) -> str:
-    """
-    根据用户查询和模式信息生成 SQL 语句（纯同步，无嵌套事件循环）
-    
-    Args:
-        user_query: 用户的自然语言查询
-        schema_info: JSON 格式的数据库模式信息
-        state: 注入的状态 (自动获取 connection_id, skip_sample_retrieval 等)
-        value_mappings: JSON 格式的值映射信息 (可选)
-        sample_qa_pairs: JSON 格式的预获取的 QA 样本 (可选，由 process 方法异步获取后传入)
-        db_type: 数据库类型
-        
-    Returns:
-        str: JSON 格式的生成结果，包含 SQL 语句
-        
-    注意:
-        - 使用 InjectedState 自动获取 connection_id 和快速模式设置
-        - 样本由调用方异步预获取后传入，避免嵌套事件循环问题
-    """
+    """根据用户查询和模式信息生成 SQL 语句"""
     try:
         # 从状态获取配置
         connection_id = state.get("connection_id")
@@ -377,18 +346,7 @@ def generate_sql_with_samples(
     sample_qa_pairs: str,
     value_mappings: Optional[str] = None
 ) -> str:
-    """
-    基于样本生成高质量 SQL 查询
-    
-    Args:
-        user_query: 用户的自然语言查询
-        schema_info: JSON 格式的数据库模式信息
-        sample_qa_pairs: JSON 格式的相关 SQL 问答对样本
-        value_mappings: JSON 格式的值映射信息 (可选)
-        
-    Returns:
-        str: JSON 格式的生成结果
-    """
+    """基于样本生成高质量 SQL 查询"""
     try:
         # 解析输入
         samples = json.loads(sample_qa_pairs) if isinstance(sample_qa_pairs, str) else sample_qa_pairs
@@ -491,13 +449,7 @@ def generate_sql_with_samples(
 # ============================================================================
 
 class SQLGeneratorAgent:
-    """
-    SQL 生成代理 - 使用 InjectedState 优化
-    
-    重要变更:
-    - generate_sql_query 使用 InjectedState 获取 connection_id 和快速模式设置
-    - 支持 with_structured_output 进行结构化输出
-    """
+    """SQL 生成代理"""
     
     def __init__(self):
         self.name = "sql_generator_agent"
@@ -551,17 +503,7 @@ class SQLGeneratorAgent:
 **输出格式**: 只返回工具调用结果，包含生成的 SQL"""
     
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
-        """
-        处理 SQL 生成任务 - 返回标准工具调用格式
-        
-        修复说明 (2026-01-22):
-        - 样本检索在此异步方法中执行，然后传递给同步工具
-        - 避免嵌套事件循环导致的死锁问题
-        
-        缓存模板支持 (2026-01-22):
-        - 如果存在 cached_sql_template，使用它作为参考生成新SQL
-        - 使用 enriched_query (如果存在) 替代原始查询
-        """
+        """处理 SQL 生成任务"""
         from langgraph.config import get_stream_writer
         from app.schemas.stream_events import create_sql_step_event
         
@@ -847,23 +789,7 @@ class SQLGeneratorAgent:
         sample_qa_pairs: List[Dict[str, Any]],
         db_type: str = "mysql"
     ) -> str:
-        """
-        基于缓存SQL模板生成新SQL
-        
-        当语义缓存命中时，使用缓存的SQL作为模板，
-        结合用户澄清后的增强查询生成最终SQL。
-        
-        Args:
-            user_query: 用户的查询（可能是澄清后的增强查询）
-            cached_sql_template: 缓存的SQL模板
-            schema_info: 数据库模式信息
-            value_mappings: 值映射信息
-            sample_qa_pairs: QA样本对
-            db_type: 数据库类型
-            
-        Returns:
-            str: JSON格式的生成结果
-        """
+        """基于缓存 SQL 模板生成新 SQL"""
         try:
             # 获取数据库特定语法规则
             db_rules_prompt = format_database_rules_prompt(db_type)

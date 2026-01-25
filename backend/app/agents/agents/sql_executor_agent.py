@@ -1,14 +1,7 @@
 """
-SQL 执行代理 (优化版本)
+SQL 执行代理
 
-遵循 LangGraph 官方最佳实践:
-1. 使用 ToolNode 替代 ReAct Agent (SQL 执行不需要推理)
-2. 直接执行工具，避免不必要的 LLM 调用
-3. 内置缓存机制防止重复执行
-
-官方文档参考:
-- https://langchain-ai.github.io/langgraph/how-tos/tool-calling
-- https://langchain-ai.github.io/langgraph/reference/prebuilt/#toolnode
+直接执行 SQL 查询，内置缓存机制防止重复执行。
 """
 from typing import Dict, Any, Optional
 import time
@@ -66,22 +59,7 @@ def execute_sql_query(
     connection_id: int,
     timeout: int = 30
 ) -> str:
-    """
-    执行 SQL 查询 - 带缓存防止重复执行
-    
-    Args:
-        sql_query: SQL 查询语句
-        connection_id: 数据库连接 ID
-        timeout: 超时时间（秒）
-        
-    Returns:
-        str: JSON 格式的查询执行结果
-        
-    注意:
-        - 工具返回 JSON 字符串，符合 LangChain 标准
-        - 内置缓存机制，防止重复执行
-        - 只缓存 SELECT 查询，不缓存修改操作
-    """
+    """执行 SQL 查询并返回 JSON 格式结果"""
     # 生成缓存键
     cache_key = f"{connection_id}:{hash(sql_query)}"
     
@@ -186,46 +164,26 @@ def execute_sql_query(
 
 
 # ============================================================================
-# SQL 执行节点 (使用 ToolNode - 官方推荐)
+# SQL 执行节点
 # ============================================================================
 
-# 创建 ToolNode - 官方推荐用于不需要推理的工具调用
 sql_executor_tool_node = ToolNode(
     tools=[execute_sql_query],
-    handle_tool_errors=True  # 自动处理工具错误
+    handle_tool_errors=True
 )
 
 
 class SQLExecutorAgent:
-    """
-    SQL 执行代理 - 使用 ToolNode 实现
-    
-    重要变更 (2026-01):
-    - 移除了 ReAct Agent，改用 ToolNode
-    - SQL 执行不需要推理，直接调用工具即可
-    - 大幅减少 LLM 调用次数
-    
-    官方推荐:
-    - 对于简单的工具调用场景，使用 ToolNode
-    - 只有需要推理的场景才使用 ReAct Agent
-    """
+    """SQL 执行代理"""
     
     def __init__(self):
         self.name = "sql_executor_agent"
         self.tools = [execute_sql_query]
-        # 使用 ToolNode 而不是 ReAct Agent
         self.tool_node = sql_executor_tool_node
-        
-        # 为了兼容现有的 supervisor 接口，创建一个伪 agent
-        # 实际执行时会直接调用工具
         self._create_compatible_agent()
     
     def _create_compatible_agent(self):
-        """
-        创建兼容现有 supervisor 接口的 agent
-        
-        注意: 这是为了向后兼容。在完成 supervisor 重构后可以移除。
-        """
+        """创建兼容现有接口的 agent"""
         from langgraph.prebuilt import create_react_agent
         from app.core.llms import get_default_model
         
@@ -238,7 +196,7 @@ class SQLExecutorAgent:
         )
     
     def _create_system_prompt(self) -> str:
-        """创建系统提示 - 只负责执行，不负责总结"""
+        """创建系统提示"""
         return """你是一个 SQL 执行专家。
 
 **核心职责**: 执行 SQL 查询，返回原始数据
@@ -249,21 +207,10 @@ class SQLExecutorAgent:
 3. **禁止生成查询结果的总结或解读**
 4. **禁止重复调用工具**
 
-**禁止的行为**:
-- ❌ 不要生成"根据查询结果..."这样的总结
-- ❌ 不要解读或分析查询数据
-- ❌ 不要重复调用工具
-- ❌ 不要添加任何额外说明
-
 **你的输出**: 只返回工具调用结果，不添加任何文字"""
     
     async def execute(self, state: SQLMessageState) -> Dict[str, Any]:
-        """
-        执行 SQL 查询 - 直接调用工具，避免 LLM 推理
-        
-        这是推荐的执行方式，不经过 ReAct 循环。
-        执行成功后会调用 LLM 分析结果并生成自然语言回答。
-        """
+        """执行 SQL 查询"""
         import time
         from langgraph.config import get_stream_writer
         from app.schemas.stream_events import create_sql_step_event, create_data_query_event

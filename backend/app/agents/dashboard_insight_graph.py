@@ -1,27 +1,17 @@
 """
-Dashboard洞察分析智能体图 - Hub-and-Spoke (Supervisor) 架构
+Dashboard 洞察分析智能体图
 
-遵循 LangGraph 官方 Supervisor 模式，与 sql_agent 架构一致:
-1. Supervisor 作为中心枢纽，统一决策
-2. 所有 Worker Agent 向 Supervisor 报告
-3. Supervisor 动态路由到下一个 Agent
+Hub-and-Spoke 架构，复用 text-to-sql 的核心节点：
+- sql_generator: 复用 sql_generator_agent
+- sql_executor: 复用 execute_sql_query 工具
+- error_recovery: 复用 error_recovery_agent
 
-架构说明:
-    START → supervisor → [Worker Agents] → supervisor → ... → FINISH
-
-Worker Agents:
-- schema_enricher: Schema增强（元数据、语义类型）
-- data_sampler: 数据采样（真实数据预览）
+Dashboard 独有节点：
+- schema_enricher: Schema 增强
+- data_sampler: 数据采样
 - relationship_analyzer: 图谱关系分析
-- sql_generator: SQL生成（复用 sql_generator_agent）
-- sql_validator: SQL预验证（语法、安全性）
-- sql_executor: SQL执行（复用 sql_executor_agent）
-- insight_analyzer: 洞察分析（数据解读）
-- error_recovery: 错误恢复
-
-优化历史:
-- 2026-01-25: 从 Pipeline 架构重构为 Hub-and-Spoke 架构
-- 2026-01-25: 复用 sql_generator_agent 和 sql_executor_agent，减少代码重复
+- sql_validator: SQL 验证
+- insight_analyzer: 洞察分析
 """
 from typing import Dict, Any, List, Optional, Literal
 from typing_extensions import TypedDict
@@ -49,34 +39,23 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 class DashboardInsightState(TypedDict):
-    """Dashboard洞察分析状态"""
-    # 基础信息
+    """Dashboard 洞察分析状态"""
     dashboard: Any
     connection_id: int
     db_type: str
     user_intent: Optional[str]
-    
-    # Schema与数据
     aggregated_data: Dict[str, Any]
     enriched_schema: Optional[Dict[str, Any]]
     sample_data: Optional[Dict[str, List]]
     relationship_context: Optional[Dict[str, Any]]
-    
-    # SQL相关
     generated_sql: Optional[str]
     sql_validation_result: Optional[Dict[str, Any]]
     execution_result: Optional[Dict[str, Any]]
-    
-    # 分析结果
     insights: Optional[Dict[str, Any]]
     final_response: Optional[Dict[str, Any]]
-    
-    # 流程控制
     current_stage: str
     use_graph_relationships: bool
     analysis_dimensions: Optional[List[str]]
-    
-    # 错误处理
     error: Optional[str]
     error_history: List[Dict[str, Any]]
     retry_count: int
@@ -84,14 +63,43 @@ class DashboardInsightState(TypedDict):
 
 
 # ============================================================================
-# Worker Agent 节点
+# 状态适配层 - 用于复用 text-to-sql 节点
+# ============================================================================
+
+def _adapt_for_sql_generator(state: DashboardInsightState) -> Dict[str, Any]:
+    """将 DashboardInsightState 适配为 sql_generator_agent 所需格式"""
+    from langchain_core.messages import HumanMessage
+    
+    return {
+        "messages": [HumanMessage(content=state.get("user_intent", "自动发现关键业务指标和趋势"))],
+        "schema_info": {"tables": state.get("enriched_schema", {})},
+        "connection_id": state.get("connection_id", 1),
+        "skip_sample_retrieval": False,
+        "error_recovery_context": None,
+    }
+
+
+def _adapt_for_error_recovery(state: DashboardInsightState) -> Dict[str, Any]:
+    """将 DashboardInsightState 适配为 error_recovery_agent 所需格式"""
+    from langchain_core.messages import HumanMessage
+    
+    return {
+        "messages": [HumanMessage(content=state.get("user_intent", ""))],
+        "generated_sql": state.get("generated_sql"),
+        "connection_id": state.get("connection_id", 1),
+        "error_history": state.get("error_history", []),
+        "retry_count": state.get("retry_count", 0),
+        "max_retries": state.get("max_retries", 2),
+        "current_stage": "error_recovery",
+    }
+
+
+# ============================================================================
+# Worker 节点
 # ============================================================================
 
 async def schema_enricher_node(state: DashboardInsightState) -> Dict[str, Any]:
-    """
-    Schema增强 Worker
-    丰富元数据：列统计、样本值、语义类型推断
-    """
+    """Schema 增强：获取表结构、列统计、语义类型"""
     logger.info("[Worker] schema_enricher 开始执行")
     start_time = time.time()
     
@@ -103,11 +111,8 @@ async def schema_enricher_node(state: DashboardInsightState) -> Dict[str, Any]:
         connection_id = state.get("connection_id") or state.get("aggregated_data", {}).get("connection_id", 1)
         
         with get_db_session() as db:
-            # 获取数据库类型
             connection = db.query(DBConnection).filter(DBConnection.id == connection_id).first()
             db_type = connection.db_type.upper() if connection else "MYSQL"
-            
-            # 获取表信息
             tables = crud.schema_table.get_by_connection(db=db, connection_id=connection_id)
             
             enriched_tables = []
@@ -175,10 +180,7 @@ async def schema_enricher_node(state: DashboardInsightState) -> Dict[str, Any]:
 
 
 async def data_sampler_node(state: DashboardInsightState) -> Dict[str, Any]:
-    """
-    数据采样 Worker
-    从主要表中采样少量真实数据
-    """
+    """数据采样：从主要表中采样少量真实数据"""
     logger.info("[Worker] data_sampler 开始执行")
     start_time = time.time()
     
@@ -221,10 +223,7 @@ async def data_sampler_node(state: DashboardInsightState) -> Dict[str, Any]:
         elapsed_ms = int((time.time() - start_time) * 1000)
         logger.info(f"[Worker] data_sampler 完成, 耗时 {elapsed_ms}ms")
         
-        return {
-            "sample_data": sample_data,
-            "current_stage": "sample_done"
-        }
+        return {"sample_data": sample_data, "current_stage": "sample_done"}
         
     except Exception as e:
         logger.error(f"[Worker] data_sampler 失败: {e}")
@@ -232,10 +231,7 @@ async def data_sampler_node(state: DashboardInsightState) -> Dict[str, Any]:
 
 
 async def relationship_analyzer_node(state: DashboardInsightState) -> Dict[str, Any]:
-    """
-    图谱关系分析 Worker
-    查询表间关系
-    """
+    """图谱关系分析：查询表间关系"""
     logger.info("[Worker] relationship_analyzer 开始执行")
     
     if not state.get("use_graph_relationships", False):
@@ -251,16 +247,11 @@ async def relationship_analyzer_node(state: DashboardInsightState) -> Dict[str, 
         
         connection_id = state.get("connection_id", 1)
         relationship_context = graph_relationship_service.query_table_relationships(
-            connection_id,
-            table_names
+            connection_id, table_names
         )
         
         logger.info(f"[Worker] relationship_analyzer 完成, 发现 {relationship_context.get('relationship_count', 0)} 个关系")
-        
-        return {
-            "relationship_context": relationship_context,
-            "current_stage": "relationship_done"
-        }
+        return {"relationship_context": relationship_context, "current_stage": "relationship_done"}
         
     except Exception as e:
         logger.error(f"[Worker] relationship_analyzer 失败: {e}")
@@ -268,54 +259,28 @@ async def relationship_analyzer_node(state: DashboardInsightState) -> Dict[str, 
 
 
 async def sql_generator_node(state: DashboardInsightState) -> Dict[str, Any]:
-    """
-    SQL生成 Worker - 复用 sql_generator_agent
-    
-    通过适配状态格式，复用成熟的 sql_generator_agent 实现，
-    获得样本检索、缓存模板、错误恢复等完整能力。
-    """
-    logger.info("[Worker] sql_generator 开始执行 (复用 sql_generator_agent)")
+    """SQL 生成：复用 sql_generator_agent"""
+    logger.info("[Worker] sql_generator 开始执行")
     start_time = time.time()
     
-    # 如果已有SQL，直接跳过
     if state.get("generated_sql"):
-        logger.info("已有SQL，跳过生成")
+        logger.info("已有 SQL，跳过生成")
         return {"current_stage": "sql_generated"}
     
     try:
         from app.agents.agents.sql_generator_agent import sql_generator_agent
-        from langchain_core.messages import HumanMessage
         
-        enriched_schema = state.get("enriched_schema", {})
-        connection_id = state.get("connection_id", 1)
-        user_intent = state.get("user_intent", "自动发现关键业务指标和趋势")
-        
-        # 构造兼容 SQLMessageState 的状态
-        # sql_generator_agent.process() 需要: messages, schema_info, connection_id
-        adapted_state = {
-            "messages": [HumanMessage(content=user_intent)],
-            "schema_info": {
-                "tables": enriched_schema
-            },
-            "connection_id": connection_id,
-            "skip_sample_retrieval": False,  # 启用样本检索
-        }
-        
-        # 调用复用的 sql_generator_agent
+        adapted_state = _adapt_for_sql_generator(state)
         result = await sql_generator_agent.process(adapted_state)
-        
         generated_sql = result.get("generated_sql", "")
         
         if not generated_sql:
             raise ValueError("sql_generator_agent 未返回 SQL")
         
         elapsed_ms = int((time.time() - start_time) * 1000)
-        logger.info(f"[Worker] sql_generator 完成 (复用), 耗时 {elapsed_ms}ms")
+        logger.info(f"[Worker] sql_generator 完成, 耗时 {elapsed_ms}ms")
         
-        return {
-            "generated_sql": generated_sql,
-            "current_stage": "sql_generated"
-        }
+        return {"generated_sql": generated_sql, "current_stage": "sql_generated"}
         
     except Exception as e:
         logger.error(f"[Worker] sql_generator 失败: {e}")
@@ -330,19 +295,12 @@ async def sql_generator_node(state: DashboardInsightState) -> Dict[str, Any]:
 
 
 async def sql_validator_node(state: DashboardInsightState) -> Dict[str, Any]:
-    """
-    SQL验证 Worker
-    验证SQL语法和安全性
-    """
+    """SQL 验证：检查语法和安全性"""
     logger.info("[Worker] sql_validator 开始执行")
     
     generated_sql = state.get("generated_sql")
-    
     if not generated_sql:
-        return {
-            "sql_validation_result": {"valid": False, "error": "没有SQL"},
-            "current_stage": "validation_done"
-        }
+        return {"sql_validation_result": {"valid": False, "error": "没有SQL"}, "current_stage": "validation_done"}
     
     validation_result = {"valid": True, "warnings": [], "suggestions": []}
     sql_upper = generated_sql.upper()
@@ -356,32 +314,21 @@ async def sql_validator_node(state: DashboardInsightState) -> Dict[str, Any]:
             validation_result["error"] = f"检测到危险操作: {kw}"
             return {"sql_validation_result": validation_result, "current_stage": "validation_done"}
     
-    # 必须是SELECT
     if not sql_upper.strip().startswith("SELECT"):
         validation_result["valid"] = False
         validation_result["error"] = "必须是SELECT语句"
         return {"sql_validation_result": validation_result, "current_stage": "validation_done"}
     
-    # 兼容性警告
     if db_type in ["MYSQL", "MARIADB"] and "FULL OUTER JOIN" in sql_upper:
         validation_result["warnings"].append("MySQL不支持FULL OUTER JOIN")
     
     logger.info(f"[Worker] sql_validator 完成: {'通过' if validation_result['valid'] else '失败'}")
-    
-    return {
-        "sql_validation_result": validation_result,
-        "current_stage": "validation_done"
-    }
+    return {"sql_validation_result": validation_result, "current_stage": "validation_done"}
 
 
 async def sql_executor_node(state: DashboardInsightState) -> Dict[str, Any]:
-    """
-    SQL执行 Worker - 复用 sql_executor_agent
-    
-    通过适配状态格式，复用成熟的 sql_executor_agent 实现，
-    获得执行缓存、结果格式化等能力。
-    """
-    logger.info("[Worker] sql_executor 开始执行 (复用 sql_executor_agent)")
+    """SQL 执行：复用 execute_sql_query 工具"""
+    logger.info("[Worker] sql_executor 开始执行")
     start_time = time.time()
     
     validation = state.get("sql_validation_result", {})
@@ -401,24 +348,20 @@ async def sql_executor_node(state: DashboardInsightState) -> Dict[str, Any]:
         if not sql:
             raise ValueError("没有找到需要执行的 SQL 语句")
         
-        # 直接调用复用的 execute_sql_query 工具
         result_json = execute_sql_query.invoke({
             "sql_query": sql,
             "connection_id": connection_id,
             "timeout": 30
         })
-        
         result = json.loads(result_json)
-        
         elapsed_ms = int((time.time() - start_time) * 1000)
         
         if result.get("success"):
             data = result.get("data", {})
-            # 转换数据格式以匹配 DashboardInsightState 期望的格式
             rows = data.get("data", [])
             columns = data.get("columns", [])
             
-            # 将列表格式转换为字典格式
+            # 转换数据格式
             formatted_data = []
             for row in rows:
                 if isinstance(row, list) and len(row) == len(columns):
@@ -426,8 +369,7 @@ async def sql_executor_node(state: DashboardInsightState) -> Dict[str, Any]:
                 elif isinstance(row, dict):
                     formatted_data.append(row)
             
-            logger.info(f"[Worker] sql_executor 完成 (复用), 耗时 {elapsed_ms}ms, {len(formatted_data)} 条数据")
-            
+            logger.info(f"[Worker] sql_executor 完成, 耗时 {elapsed_ms}ms, {len(formatted_data)} 条数据")
             return {
                 "execution_result": {
                     "success": True, 
@@ -455,10 +397,7 @@ async def sql_executor_node(state: DashboardInsightState) -> Dict[str, Any]:
 
 
 async def insight_analyzer_node(state: DashboardInsightState) -> Dict[str, Any]:
-    """
-    洞察分析 Worker
-    分析数据并生成洞察
-    """
+    """洞察分析：分析数据并生成洞察"""
     logger.info("[Worker] insight_analyzer 开始执行")
     
     try:
@@ -492,11 +431,7 @@ async def insight_analyzer_node(state: DashboardInsightState) -> Dict[str, Any]:
                 "trends": None,
                 "anomalies": [],
                 "correlations": [],
-                "recommendations": [{
-                    "type": "info",
-                    "content": f"成功分析 {row_count} 条数据",
-                    "priority": "medium"
-                }]
+                "recommendations": [{"type": "info", "content": f"成功分析 {row_count} 条数据", "priority": "medium"}]
             }
         else:
             insights = {
@@ -504,19 +439,11 @@ async def insight_analyzer_node(state: DashboardInsightState) -> Dict[str, Any]:
                 "trends": None,
                 "anomalies": [],
                 "correlations": [],
-                "recommendations": [{
-                    "type": "warning",
-                    "content": "数据获取受限，请检查查询",
-                    "priority": "medium"
-                }]
+                "recommendations": [{"type": "warning", "content": "数据获取受限，请检查查询", "priority": "medium"}]
             }
         
         logger.info("[Worker] insight_analyzer 完成")
-        
-        return {
-            "insights": insights,
-            "current_stage": "analysis_done"
-        }
+        return {"insights": insights, "current_stage": "analysis_done"}
         
     except Exception as e:
         logger.error(f"[Worker] insight_analyzer 失败: {e}")
@@ -530,10 +457,7 @@ async def insight_analyzer_node(state: DashboardInsightState) -> Dict[str, Any]:
 
 
 async def error_recovery_node(state: DashboardInsightState) -> Dict[str, Any]:
-    """
-    错误恢复 Worker
-    分析错误并尝试修复
-    """
+    """错误恢复：复用 error_recovery_agent 的智能恢复能力"""
     logger.info("[Worker] error_recovery 开始执行")
     
     retry_count = state.get("retry_count", 0) + 1
@@ -542,29 +466,28 @@ async def error_recovery_node(state: DashboardInsightState) -> Dict[str, Any]:
     if not error_history:
         return {"retry_count": retry_count, "current_stage": "recovery_done"}
     
-    last_error = error_history[-1]
-    error_msg = last_error.get("error", "")
-    failed_sql = last_error.get("sql", "")
-    
-    logger.info(f"尝试恢复 (第 {retry_count} 次)")
-    
-    fixed_sql = failed_sql
-    
-    # 自动修复常见问题
-    if "FULL OUTER JOIN" in failed_sql.upper():
-        import re
-        fixed_sql = re.sub(r'\bFULL\s+OUTER\s+JOIN\b', 'LEFT JOIN', fixed_sql, flags=re.IGNORECASE)
-        logger.info("修复: FULL OUTER JOIN → LEFT JOIN")
-    
-    if "%Y" in failed_sql and "%%Y" not in failed_sql:
-        fixed_sql = fixed_sql.replace("%Y", "%%Y").replace("%m", "%%m").replace("%d", "%%d")
-        logger.info("修复: 日期格式转义")
-    
-    return {
-        "generated_sql": fixed_sql if fixed_sql != failed_sql else None,
-        "retry_count": retry_count,
-        "current_stage": "recovery_done"
-    }
+    try:
+        from app.agents.agents.error_recovery_agent import error_recovery_agent
+        
+        adapted_state = _adapt_for_error_recovery(state)
+        result = await error_recovery_agent.process(adapted_state)
+        
+        # 提取恢复结果
+        fixed_sql = result.get("generated_sql")
+        error_recovery_context = result.get("error_recovery_context")
+        
+        logger.info(f"[Worker] error_recovery 完成 (第 {retry_count} 次)")
+        
+        return {
+            "generated_sql": fixed_sql,
+            "retry_count": retry_count,
+            "error_recovery_context": error_recovery_context,
+            "current_stage": "recovery_done"
+        }
+        
+    except Exception as e:
+        logger.error(f"[Worker] error_recovery 失败: {e}")
+        return {"retry_count": retry_count, "current_stage": "recovery_done"}
 
 
 # ============================================================================
@@ -572,21 +495,10 @@ async def error_recovery_node(state: DashboardInsightState) -> Dict[str, Any]:
 # ============================================================================
 
 async def supervisor_node(state: DashboardInsightState) -> Dict[str, Any]:
-    """
-    Supervisor 中心节点
-    
-    职责:
-    - 决策下一步执行哪个 Worker
-    - 汇总各 Agent 的执行结果
-    - 构造最终响应
-    """
+    """Supervisor 中心节点：决策路由和结果汇总"""
     current_stage = state.get("current_stage", "init")
     
-    # 如果已完成，汇总结果
-    if current_stage == "completed":
-        return _aggregate_final_response(state)
-    
-    if current_stage == "analysis_done":
+    if current_stage in ["completed", "analysis_done"]:
         return _aggregate_final_response(state)
     
     return {}
@@ -616,16 +528,24 @@ def _aggregate_final_response(state: DashboardInsightState) -> Dict[str, Any]:
             final_response["error"] = error_history[-1].get("error")
     
     logger.info("[Supervisor] 结果汇总完成")
-    
-    return {
-        "final_response": final_response,
-        "current_stage": "completed"
-    }
+    return {"final_response": final_response, "current_stage": "completed"}
 
 
 # ============================================================================
 # 路由函数
 # ============================================================================
+
+# 阶段路由映射表
+STAGE_ROUTES = {
+    "init": "schema_enricher",
+    "schema_done": "data_sampler",
+    "sample_done": "relationship_analyzer",
+    "relationship_done": "sql_generator",
+    "sql_generated": "sql_validator",
+    "validation_done": "sql_executor",
+    "execution_done": "insight_analyzer",
+}
+
 
 def supervisor_route(state: DashboardInsightState) -> str:
     """Supervisor 路由决策"""
@@ -633,10 +553,7 @@ def supervisor_route(state: DashboardInsightState) -> str:
     logger.info(f"[Route] 当前阶段: {current_stage}")
     
     # 完成状态
-    if current_stage == "completed":
-        return "FINISH"
-    
-    if current_stage == "analysis_done":
+    if current_stage in ["completed", "analysis_done"]:
         return "FINISH"
     
     # 错误恢复检查
@@ -654,18 +571,7 @@ def supervisor_route(state: DashboardInsightState) -> str:
             return "sql_validator"
         return "insight_analyzer"
     
-    # 基于阶段路由
-    stage_routes = {
-        "init": "schema_enricher",
-        "schema_done": "data_sampler",
-        "sample_done": "relationship_analyzer",
-        "relationship_done": "sql_generator",
-        "sql_generated": "sql_validator",
-        "validation_done": "sql_executor",
-        "execution_done": "insight_analyzer",
-    }
-    
-    next_agent = stage_routes.get(current_stage, "FINISH")
+    next_agent = STAGE_ROUTES.get(current_stage, "FINISH")
     logger.info(f"[Route] {current_stage} → {next_agent}")
     return next_agent
 
@@ -675,12 +581,8 @@ def supervisor_route(state: DashboardInsightState) -> str:
 # ============================================================================
 
 def create_dashboard_insight_graph() -> CompiledStateGraph:
-    """
-    创建 Hub-and-Spoke 架构的洞察分析图
-    
-    注意: 不传入 checkpointer，由 LangGraph API 框架在运行时自动管理持久化。
-    """
-    logger.info("创建 Dashboard Insight Hub-and-Spoke 图...")
+    """创建 Hub-and-Spoke 架构的洞察分析图"""
+    logger.info("创建 Dashboard Insight 图...")
     
     graph = StateGraph(DashboardInsightState)
     
@@ -698,15 +600,11 @@ def create_dashboard_insight_graph() -> CompiledStateGraph:
     # Supervisor 是入口
     graph.set_entry_point("supervisor")
     
-    # 所有 Worker 返回 Supervisor (Hub-and-Spoke 核心)
-    graph.add_edge("schema_enricher", "supervisor")
-    graph.add_edge("data_sampler", "supervisor")
-    graph.add_edge("relationship_analyzer", "supervisor")
-    graph.add_edge("sql_generator", "supervisor")
-    graph.add_edge("sql_validator", "supervisor")
-    graph.add_edge("sql_executor", "supervisor")
-    graph.add_edge("insight_analyzer", "supervisor")
-    graph.add_edge("error_recovery", "supervisor")
+    # 所有 Worker 返回 Supervisor (Hub-and-Spoke)
+    for node in ["schema_enricher", "data_sampler", "relationship_analyzer", 
+                 "sql_generator", "sql_validator", "sql_executor", 
+                 "insight_analyzer", "error_recovery"]:
+        graph.add_edge(node, "supervisor")
     
     # Supervisor 条件路由
     graph.add_conditional_edges(
@@ -725,14 +623,12 @@ def create_dashboard_insight_graph() -> CompiledStateGraph:
         }
     )
     
-    # 编译 - 不传入 checkpointer，由框架自动管理
     compiled = graph.compile()
-    
-    logger.info("✓ Dashboard Insight Hub-and-Spoke 图创建完成")
+    logger.info("Dashboard Insight 图创建完成")
     return compiled
 
 
-# 创建全局图实例 (供 LangGraph API 使用)
+# 全局图实例
 dashboard_insight_graph = create_dashboard_insight_graph()
 
 
@@ -748,9 +644,7 @@ async def analyze_dashboard(
     connection_id: Optional[int] = None,
     user_intent: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    分析Dashboard的便捷函数
-    """
+    """分析 Dashboard 的便捷函数"""
     initial_state = DashboardInsightState(
         dashboard=dashboard,
         connection_id=connection_id or aggregated_data.get("connection_id", 1),
@@ -784,5 +678,5 @@ async def analyze_dashboard(
 
 
 if __name__ == "__main__":
-    print("Dashboard Insight Hub-and-Spoke 图创建成功")
+    print("Dashboard Insight 图创建成功")
     print(f"图节点: {list(dashboard_insight_graph.get_graph().nodes.keys())}")
