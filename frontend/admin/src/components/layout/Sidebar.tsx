@@ -60,6 +60,9 @@ const Sidebar: React.FC = () => {
       display: 'flex',
       flexDirection: 'column' as const,
       gap: '8px',
+      flex: 1,
+      overflowY: 'auto' as const,
+      paddingRight: '4px', // Avoid scrollbar overlapping content
     },
     menuItem: (isActive: boolean) => ({
       display: 'flex',

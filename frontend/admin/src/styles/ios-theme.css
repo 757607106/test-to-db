@@ -194,3 +194,58 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background-color: rgba(120, 120, 120, 0.5);
 }
+
+body.dashboard-fullscreen {
+  overflow: hidden;
+}
+
+body.dashboard-fullscreen .ios-layout {
+  height: 100vh;
+  overflow: hidden;
+}
+
+body.dashboard-fullscreen .ios-layout-sidebar {
+  opacity: 0;
+  transform: translateX(-24px);
+  pointer-events: none;
+}
+
+body.dashboard-fullscreen .ios-layout-topbar {
+  opacity: 0;
+  transform: translateY(-24px);
+  pointer-events: none;
+}
+
+body.dashboard-fullscreen .ios-layout-main {
+  margin-left: 0 !important;
+  height: 100vh;
+}
+
+body.dashboard-fullscreen .ios-layout-content {
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+.dashboard-fullscreen-exit-zone {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 44px;
+  z-index: 2000;
+  pointer-events: auto;
+}
+
+.dashboard-fullscreen-exit-inner {
+  position: absolute;
+  top: 8px;
+  right: 16px;
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.dashboard-fullscreen-exit-zone:hover .dashboard-fullscreen-exit-inner {
+  opacity: 1;
+  transform: translateY(0);
+}

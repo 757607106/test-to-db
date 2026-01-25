@@ -41,11 +41,11 @@ const IOSLayout: React.FC<IOSLayoutProps> = ({ children }) => {
   };
 
   return (
-    <div style={styles.container}>
+    <div style={styles.container} className="ios-layout">
       <IOSSidebar />
-      <div style={styles.mainWrapper}>
+      <div style={styles.mainWrapper} className="ios-layout-main">
         <IOSTopBar />
-        <main style={styles.contentArea} className="page-content-enter">
+        <main style={styles.contentArea} className="page-content-enter ios-layout-content">
           {children}
         </main>
       </div>

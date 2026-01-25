@@ -60,7 +60,7 @@ const IOSTopBar: React.FC = () => {
   };
 
   return (
-    <header style={styles.header}>
+    <header style={styles.header} className="ios-layout-topbar">
       <div style={styles.leftGroup}>
         {/* Navigation History Buttons (Imitation) */}
         <div style={styles.navControls}>

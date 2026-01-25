@@ -41,6 +41,9 @@ import {
   RobotOutlined,
   LockOutlined,
   UnlockOutlined,
+  ColumnHeightOutlined,
+  AppstoreOutlined,
+  BarsOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 // @ts-ignore - WidthProvider 类型定义问题
@@ -48,6 +51,7 @@ import GridLayout, { WidthProvider } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
 import 'react-resizable/css/styles.css';
 import { dashboardService, widgetService } from '../services/dashboardService';
+import { getSchemaMetadata } from '../services/api';
 import type {
   DashboardDetail,
   Widget,
@@ -59,7 +63,7 @@ import type {
 import { DashboardInsightWidget } from '../components/DashboardInsightWidget';
 import { InsightConditionPanel } from '../components/InsightConditionPanel';
 import { AddWidgetForm } from '../components/AddWidgetForm';
-import { SmartChart } from '../components/SmartChart';
+import { SmartChart, SmartChartAction } from '../components/SmartChart';
 import { ChartConfigPanel, ChartConfig } from '../components/ChartConfigPanel';
 import { GuidedMiningWizard } from '../components/GuidedMiningWizard';
 
@@ -85,89 +89,98 @@ const { Option } = Select;
 // 编辑模式类型
 type EditorMode = 'edit' | 'preview';
 
-// 样式定义
+// 样式定义 - 现代化设计系统
 const styles = {
   container: {
-    padding: '16px 24px',
+    padding: '20px 28px',
     minHeight: '100vh',
-    background: 'linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%)',
+    background: 'linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%)',
   },
   header: {
-    marginBottom: 16,
-    background: '#fff',
-    padding: '16px 20px',
-    borderRadius: 12,
-    boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+    marginBottom: 20,
+    background: '#ffffff',
+    padding: '18px 24px',
+    borderRadius: 16,
+    boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.03)',
+    border: '1px solid rgba(0,0,0,0.04)',
   },
   gridContainer: {
-    background: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    minHeight: 'calc(100vh - 200px)',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+    background: '#ffffff',
+    borderRadius: 16,
+    padding: '20px',
+    minHeight: 'calc(100vh - 220px)',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.03)',
+    border: '1px solid rgba(0,0,0,0.04)',
   },
   widgetCard: {
     height: '100%',
-    borderRadius: 8,
+    borderRadius: 12,
     overflow: 'hidden',
-    transition: 'all 0.3s ease',
+    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+    border: '1px solid #e5e7eb',
+    boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
   },
   widgetCardHover: {
-    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
+    borderColor: '#d1d5db',
   },
   dragHandle: {
     cursor: 'move',
     padding: '4px 8px',
     marginRight: 8,
-    borderRadius: 4,
-    background: '#f0f0f0',
+    borderRadius: 6,
+    background: 'linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%)',
     display: 'inline-flex',
     alignItems: 'center',
+    transition: 'all 0.15s ease',
   },
   emptyState: {
     display: 'flex',
     flexDirection: 'column' as const,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 400,
-    background: 'repeating-linear-gradient(45deg, #fafafa, #fafafa 10px, #fff 10px, #fff 20px)',
-    borderRadius: 8,
-    border: '2px dashed #d9d9d9',
+    minHeight: 450,
+    background: 'linear-gradient(135deg, #fafbfc 0%, #f8f9fa 100%)',
+    borderRadius: 12,
+    border: '2px dashed #d1d5db',
   },
   toolbar: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
     flexWrap: 'wrap' as const,
-    gap: 12,
+    gap: 16,
   },
   statusBar: {
     display: 'flex',
     alignItems: 'center',
-    gap: 16,
-    fontSize: 12,
-    color: '#8c8c8c',
+    gap: 20,
+    fontSize: 13,
+    color: '#6b7280',
+    marginTop: 14,
+    paddingTop: 14,
+    borderTop: '1px solid #f3f4f6',
   },
 };
 
-// 默认网格配置
+// 默认网格配置 - 优化后的布局参数
 const GRID_CONFIG = {
   cols: 12,
-  rowHeight: 80,
-  margin: [12, 12] as [number, number],
-  containerPadding: [0, 0] as [number, number],
+  rowHeight: 100, // 增加行高以容纳更大的图表
+  margin: [16, 16] as [number, number], // 增加间距改善视觉分离
+  containerPadding: [4, 4] as [number, number],
   compactType: 'vertical' as const,
   preventCollision: false,
 };
 
-// 默认Widget尺寸
+// 默认Widget尺寸 - 更合理的默认大小
 const DEFAULT_WIDGET_SIZE = {
-  w: 4,
-  h: 4,
-  minW: 2,
-  minH: 2,
+  w: 6, // 默认占据一半宽度
+  h: 4, // 增加默认高度
+  minW: 3,
+  minH: 3,
   maxW: 12,
-  maxH: 10,
+  maxH: 8,
 };
 
 const DashboardEditorPage: React.FC = () => {
@@ -203,6 +216,13 @@ const DashboardEditorPage: React.FC = () => {
   const [miningWizardVisible, setMiningWizardVisible] = useState<boolean>(false);
   const [generatingInsights, setGeneratingInsights] = useState<boolean>(false);
   
+  // 字段映射表 (英文名 -> 中文名)
+  const [fieldMap, setFieldMap] = useState<Record<string, string>>({});
+
+  // Widget 引用
+  const widgetRefs = React.useRef<Record<number, SmartChartAction | null>>({});
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
   const [form] = Form.useForm();
 
   // 加载Dashboard数据
@@ -211,6 +231,71 @@ const DashboardEditorPage: React.FC = () => {
       fetchDashboard();
     }
   }, [dashboardId]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isActive = !!(document.fullscreenElement || (document as any).webkitFullscreenElement);
+      setIsFullscreen(isActive);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    const className = 'dashboard-fullscreen';
+    if (isFullscreen) {
+      document.body.classList.add(className);
+      document.documentElement.classList.add(className);
+    } else {
+      document.body.classList.remove(className);
+      document.documentElement.classList.remove(className);
+    }
+    return () => {
+      document.body.classList.remove(className);
+      document.documentElement.classList.remove(className);
+    };
+  }, [isFullscreen]);
+
+  // 加载Schema元数据以构建字段映射
+  useEffect(() => {
+    if (dashboard?.widgets && dashboard.widgets.length > 0) {
+      const connectionIds = Array.from(new Set(dashboard.widgets.map(w => w.connection_id).filter(Boolean)));
+      
+      const fetchSchemaMetadata = async () => {
+        const newFieldMap: Record<string, string> = {};
+        
+        for (const connId of connectionIds) {
+          try {
+            const response = await getSchemaMetadata(connId);
+            if (response.data && Array.isArray(response.data)) {
+              response.data.forEach((table: any) => {
+                if (table.columns && Array.isArray(table.columns)) {
+                  table.columns.forEach((col: any) => {
+                    if (col.description && col.description.trim() !== '') {
+                      // 优先使用较短的描述，如果有多个表有同名字段，后加载的会覆盖
+                      // 理想情况下应该带上表名，但图表配置通常只知道列名
+                      newFieldMap[col.column_name] = col.description;
+                    }
+                  });
+                }
+              });
+            }
+          } catch (error) {
+            console.error(`Failed to load schema metadata for connection ${connId}:`, error);
+          }
+        }
+        
+        if (Object.keys(newFieldMap).length > 0) {
+          console.log('Loaded field map:', newFieldMap);
+          setFieldMap(prev => ({ ...prev, ...newFieldMap }));
+        }
+      };
+
+      fetchSchemaMetadata();
+    }
+  }, [dashboard?.widgets]);
 
   // 同步Widgets到Layout
   useEffect(() => {
@@ -275,6 +360,68 @@ const DashboardEditorPage: React.FC = () => {
       console.error(error);
     } finally {
       setSaving(false);
+    }
+  };
+
+  // 自动排版功能
+  const handleAutoLayout = (type: 'grid' | 'flow') => {
+    // 过滤掉固定的洞察组件
+    const currentLayouts = [...layouts];
+    const newLayouts = currentLayouts.map((item, index) => {
+      // 保持固定组件位置不变（如果有的话，但通常洞察组件不在 layouts 中管理或被过滤）
+      if (item.static) return item;
+      
+      const newItem = { ...item };
+      
+      if (type === 'grid') {
+        // 网格布局：双列 (12 / 6 = 2)
+        const colWidth = 6;
+        const colIndex = index % 2;
+        const rowIndex = Math.floor(index / 2);
+        
+        newItem.x = colIndex * colWidth;
+        newItem.y = rowIndex * DEFAULT_WIDGET_SIZE.h;
+        newItem.w = colWidth;
+        newItem.h = DEFAULT_WIDGET_SIZE.h;
+      } else if (type === 'flow') {
+        // 流式布局：三列 (12 / 4 = 3)
+        const colWidth = 4;
+        const colIndex = index % 3;
+        const rowIndex = Math.floor(index / 3);
+        
+        newItem.x = colIndex * colWidth;
+        newItem.y = rowIndex * DEFAULT_WIDGET_SIZE.h;
+        newItem.w = colWidth;
+        newItem.h = DEFAULT_WIDGET_SIZE.h;
+      }
+      
+      return newItem;
+    });
+    
+    handleLayoutChange(newLayouts);
+    message.success('已应用自动排版');
+  };
+
+  const handleToggleFullscreen = async () => {
+    try {
+      const doc = document as any;
+      const element = containerRef.current as any;
+      if (document.fullscreenElement || doc.webkitFullscreenElement) {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if (doc.webkitExitFullscreen) {
+          await doc.webkitExitFullscreen();
+        }
+      } else if (element) {
+        if (element.requestFullscreen) {
+          await element.requestFullscreen();
+        } else if (element.webkitRequestFullscreen) {
+          await element.webkitRequestFullscreen();
+        }
+      }
+    } catch (error) {
+      message.error('无法切换全屏模式');
+      console.error(error);
     }
   };
 
@@ -548,7 +695,7 @@ const DashboardEditorPage: React.FC = () => {
                 <DragOutlined />
               </span>
             )}
-            <Text strong ellipsis style={{ maxWidth: 150 }}>
+            <Text strong ellipsis style={{ maxWidth: 180, fontSize: 14, color: '#1f2937' }}>
               {widget.title}
             </Text>
           </Space>
@@ -568,17 +715,33 @@ const DashboardEditorPage: React.FC = () => {
           </Space>
         }
         style={styles.widgetCard}
-        bodyStyle={{ padding: 8, height: 'calc(100% - 57px)', overflow: 'hidden' }}
+        styles={{
+          header: {
+            borderBottom: '1px solid #f3f4f6',
+            padding: '12px 16px',
+            minHeight: 'auto',
+          },
+          body: {
+            padding: '12px 16px',
+            height: 'calc(100% - 52px)',
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+          }
+        }}
         size="small"
+        hoverable
       >
         {widget.data_cache ? (
-          <SmartChart
-            data={widget.data_cache}
-            height={280}
-            chartType={widget.chart_config?.chart_type}
-          />
+          <div style={{ flex: 1, minHeight: 0, height: '100%' }}>
+            <SmartChart
+              data={widget.data_cache}
+              chartType={widget.chart_config?.chart_type}
+              fieldMap={fieldMap}
+            />
+          </div>
         ) : (
-          <Empty description="暂无数据" style={{ marginTop: 60 }} />
+          <Empty description="暂无数据" style={{ margin: 'auto' }} />
         )}
       </Card>
     );
@@ -593,8 +756,9 @@ const DashboardEditorPage: React.FC = () => {
 
   if (loading) {
     return (
-      <div style={{ ...styles.container, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-        <Spin size="large" tip="加载中..." />
+      <div style={{ ...styles.container, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+        <Spin size="large" />
+        <div style={{ marginTop: 16, color: '#6b7280' }}>加载中...</div>
       </div>
     );
   }
@@ -607,10 +771,38 @@ const DashboardEditorPage: React.FC = () => {
     );
   }
 
+  const containerStyle = isFullscreen
+    ? { ...styles.container, padding: 0, background: '#ffffff' }
+    : styles.container;
+  const gridContainerStyle = isFullscreen
+    ? {
+        ...styles.gridContainer,
+        minHeight: '100vh',
+        height: '100vh',
+        borderRadius: 0,
+        padding: '16px',
+        boxShadow: 'none',
+        border: 'none',
+      }
+    : styles.gridContainer;
+
   return (
-    <div style={styles.container}>
-      {/* 头部 */}
-      <div style={styles.header}>
+    <div ref={containerRef} style={containerStyle}>
+      {isFullscreen && (
+        <div className="dashboard-fullscreen-exit-zone">
+          <div className="dashboard-fullscreen-exit-inner">
+            <Button
+              type="primary"
+              icon={<FullscreenExitOutlined />}
+              onClick={handleToggleFullscreen}
+            >
+              退出全屏
+            </Button>
+          </div>
+        </div>
+      )}
+      {!isFullscreen && (
+        <div style={styles.header}>
         <div style={styles.toolbar}>
           <Space>
             <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/dashboards')}>
@@ -649,9 +841,32 @@ const DashboardEditorPage: React.FC = () => {
               <Tooltip title={isFullscreen ? '退出全屏' : '全屏'}>
                 <Button
                   icon={isFullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
-                  onClick={() => setIsFullscreen(!isFullscreen)}
+                  onClick={handleToggleFullscreen}
                 />
               </Tooltip>
+
+              <Dropdown
+                menu={{
+                  items: [
+                    {
+                      key: 'grid',
+                      icon: <AppstoreOutlined />,
+                      label: '网格排列 (双列)',
+                      onClick: () => handleAutoLayout('grid'),
+                    },
+                    {
+                      key: 'flow',
+                      icon: <BarsOutlined />,
+                      label: '流式排列 (三列)',
+                      onClick: () => handleAutoLayout('flow'),
+                    },
+                  ],
+                }}
+              >
+                <Button icon={<AppstoreOutlined />}>
+                  一键排版
+                </Button>
+              </Dropdown>
 
               <Button
                 type="primary"
@@ -709,6 +924,7 @@ const DashboardEditorPage: React.FC = () => {
           {isLayoutDirty && <Badge status="warning" text="布局未保存" />}
         </div>
       </div>
+      )}
 
       {/* 洞察组件区域 */}
       {insightWidgets.length > 0 && (
@@ -722,7 +938,7 @@ const DashboardEditorPage: React.FC = () => {
       )}
 
       {/* Grid布局区域 */}
-      <div style={styles.gridContainer}>
+      <div style={gridContainerStyle}>
         {normalWidgets.length === 0 ? (
           <div style={styles.emptyState}>
             <Empty
@@ -765,19 +981,21 @@ const DashboardEditorPage: React.FC = () => {
       </div>
 
       {/* 浮动按钮 */}
-      <FloatButton.Group shape="circle" style={{ right: 24 }}>
-        <FloatButton
-          icon={<PlusOutlined />}
-          tooltip="添加组件"
-          onClick={() => setAddWidgetModalVisible(true)}
-        />
-        <FloatButton
-          icon={<RobotOutlined />}
-          tooltip="智能挖掘"
-          onClick={() => setMiningWizardVisible(true)}
-        />
-        <FloatButton.BackTop visibilityHeight={200} />
-      </FloatButton.Group>
+      {!isFullscreen && (
+        <FloatButton.Group shape="circle" style={{ right: 24 }}>
+          <FloatButton
+            icon={<PlusOutlined />}
+            tooltip="添加组件"
+            onClick={() => setAddWidgetModalVisible(true)}
+          />
+          <FloatButton
+            icon={<RobotOutlined />}
+            tooltip="智能挖掘"
+            onClick={() => setMiningWizardVisible(true)}
+          />
+          <FloatButton.BackTop visibilityHeight={200} />
+        </FloatButton.Group>
+      )}
 
       {/* Modals */}
       {/* 编辑Widget Modal */}

@@ -3,21 +3,30 @@
  * 支持完整 ECharts 图表库，包括高级图表类型
  * 自动数据分析和图表类型推荐
  */
-import React, { useMemo, useRef, useEffect, useState } from 'react';
+import React, { useMemo, useRef, useEffect, useState, forwardRef, useImperativeHandle } from 'react';
 import ReactECharts from 'echarts-for-react';
 import type { EChartsOption } from 'echarts';
 import { Table, Empty, Alert, Button, Modal, Tooltip, Space, Tag } from 'antd';
-import { BugOutlined, FullscreenOutlined, DownloadOutlined } from '@ant-design/icons';
+import { BugOutlined, FullscreenOutlined, DownloadOutlined, FullscreenExitOutlined } from '@ant-design/icons';
 import type { ChartConfig } from './ChartConfigPanel';
+
+// 对外暴露的方法接口
+export interface SmartChartAction {
+  download: () => void;
+  toggleFullscreen: () => void;
+  toggleDebug: () => void;
+}
 
 interface SmartChartProps {
   data: any;
   title?: string;
-  height?: number;
+  height?: number | string;
   chartType?: string;
   chartConfig?: ChartConfig;
   debug?: boolean;
+  showToolbar?: boolean;
   onConfigChange?: (config: Partial<ChartConfig>) => void;
+  fieldMap?: Record<string, string>;
 }
 
 // 图表类型定义
@@ -27,15 +36,18 @@ type ChartType =
   | 'sunburst' | 'gauge' | 'sankey' | 'graph' 
   | 'map' | 'table';
 
-// 预设配色方案
+// 预设配色方案 - 更现代的配色
 const COLOR_SCHEMES: Record<string, string[]> = {
-  '默认': ['#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de', '#3ba272', '#fc8452', '#9a60b4'],
-  '科技蓝': ['#2196f3', '#03a9f4', '#00bcd4', '#009688', '#4caf50', '#8bc34a', '#cddc39', '#ffeb3b'],
-  '商务灰': ['#37474f', '#455a64', '#546e7a', '#607d8b', '#78909c', '#90a4ae', '#b0bec5', '#cfd8dc'],
-  '暖色调': ['#f44336', '#e91e63', '#ff5722', '#ff9800', '#ffc107', '#ffeb3b', '#ff7043', '#ff8a65'],
-  '冷色调': ['#3f51b5', '#5c6bc0', '#7986cb', '#9fa8da', '#c5cae9', '#8c9eff', '#536dfe', '#304ffe'],
-  '渐变紫': ['#6a1b9a', '#7b1fa2', '#8e24aa', '#9c27b0', '#ab47bc', '#ba68c8', '#ce93d8', '#e1bee7'],
-  '马卡龙': ['#a6cee3', '#1f78b4', '#b2df8a', '#33a02c', '#fb9a99', '#e31a1c', '#fdbf6f', '#ff7f00'],
+  '默认': ['#6366f1', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#84cc16'],
+  '极光': ['#5D8AA8', '#87CEFA', '#00CED1', '#40E0D0', '#48D1CC', '#20B2AA', '#5F9EA0', '#4682B4'],
+  '日落': ['#FF4500', '#FF8C00', '#FFA500', '#FFD700', '#FFFF00', '#F0E68C', '#BDB76B', '#DAA520'],
+  '森林': ['#228B22', '#32CD32', '#90EE90', '#98FB98', '#8FBC8F', '#00FA9A', '#00FF7F', '#3CB371'],
+  '科技蓝': ['#3b82f6', '#0ea5e9', '#06b6d4', '#14b8a6', '#22c55e', '#84cc16', '#eab308', '#f97316'],
+  '商务灰': ['#475569', '#64748b', '#78909c', '#94a3b8', '#a1a1aa', '#d4d4d8', '#e4e4e7', '#f4f4f5'],
+  '暖色调': ['#ef4444', '#f97316', '#f59e0b', '#eab308', '#fbbf24', '#fcd34d', '#fde047', '#fef08a'],
+  '冷色调': ['#4f46e5', '#6366f1', '#818cf8', '#a5b4fc', '#c7d2fe', '#a78bfa', '#8b5cf6', '#7c3aed'],
+  '渐变紫': ['#7c3aed', '#8b5cf6', '#a78bfa', '#c4b5fd', '#ddd6fe', '#ede9fe', '#f5f3ff', '#faf5ff'],
+  '马卡龙': ['#94a3b8', '#6366f1', '#22c55e', '#14b8a6', '#f87171', '#ef4444', '#fbbf24', '#f97316'],
 };
 
 // 数据标准化
@@ -184,10 +196,17 @@ function generateChartOption(
   rows: any[],
   analysis: ColumnAnalysis,
   config?: ChartConfig,
-  title?: string
+  title?: string,
+  fieldMap?: Record<string, string>
 ): EChartsOption | null {
   const { numericColumns, stringColumns, dateColumns } = analysis;
   const colors = COLOR_SCHEMES[config?.color_scheme || '默认'];
+  
+  // 辅助函数：获取字段中文名
+  const getFieldName = (name: string) => {
+    if (!name) return name;
+    return fieldMap?.[name] || name;
+  };
   
   // X轴列选择
   const xColumn = config?.data_mapping?.x_column || dateColumns[0] || stringColumns[0];
@@ -200,38 +219,62 @@ function generateChartOption(
     return null;
   }
 
-  // 基础配置
+  // 基础配置 - 现代化设计
   const baseOption: EChartsOption = {
     color: colors,
     title: title || config?.title ? {
       text: title || config?.title,
       left: 'center',
-      textStyle: { fontSize: 14, fontWeight: 500 },
+      top: 8,
+      textStyle: { 
+        fontSize: 14, 
+        fontWeight: 600,
+        color: '#1f2937',
+      },
     } : undefined,
     tooltip: config?.tooltip?.show !== false ? {
       trigger: config?.tooltip?.trigger || (chartType === 'pie' ? 'item' : 'axis'),
       confine: true,
+      backgroundColor: 'rgba(255, 255, 255, 0.95)',
+      borderColor: 'transparent',
+      borderWidth: 0,
+      padding: [10, 14],
+      textStyle: { color: '#374151', fontSize: 13 },
+      extraCssText: 'box-shadow: 0 4px 20px rgba(0,0,0,0.15); border-radius: 12px; backdrop-filter: blur(8px);',
     } : undefined,
     toolbox: {
+      show: false, // 彻底禁用 ECharts 自带的 toolbox
       feature: {
-        saveAsImage: { title: '保存' },
+        saveAsImage: { title: '保存', iconStyle: { borderColor: '#9ca3af' } },
         ...(chartType !== 'pie' && chartType !== 'radar' && chartType !== 'funnel' && chartType !== 'gauge' 
-          ? { dataZoom: { title: { zoom: '缩放', back: '还原' } } } 
+          ? { dataZoom: { title: { zoom: '缩放', back: '还原' }, iconStyle: { borderColor: '#9ca3af' } } } 
           : {}),
       },
-      right: 10,
-      top: 0,
+      right: 12,
+      top: 4,
+      iconStyle: { borderColor: '#9ca3af' },
+      emphasis: { iconStyle: { borderColor: '#6366f1' } },
     },
     grid: !['pie', 'radar', 'funnel', 'gauge', 'treemap', 'sunburst', 'sankey', 'graph'].includes(chartType)
-      ? { left: '3%', right: '4%', bottom: config?.legend?.show !== false ? '15%' : '3%', containLabel: true }
+      ? { 
+          left: '2%', 
+          right: '4%', 
+          top: title || config?.title ? 60 : 40,
+          bottom: config?.legend?.show !== false ? 40 : 20, 
+          containLabel: true 
+        }
       : undefined,
     legend: config?.legend?.show !== false ? {
       show: true,
       type: 'scroll',
-      ...(config?.legend?.position === 'top' ? { top: 30 } :
+      textStyle: { color: '#6b7280', fontSize: 11 },
+      pageTextStyle: { color: '#9ca3af' },
+      pageIconColor: '#6b7280',
+      pageIconInactiveColor: '#d1d5db',
+      ...(config?.legend?.position === 'top' ? { top: title || config?.title ? 32 : 8 } :
          config?.legend?.position === 'left' ? { left: 10, orient: 'vertical' as const, top: 'middle' } :
          config?.legend?.position === 'right' ? { right: 10, orient: 'vertical' as const, top: 'middle' } :
-         { bottom: 0 })
+         { bottom: 8 })
     } : undefined,
   };
 
@@ -252,17 +295,33 @@ function generateChartOption(
         ...baseOption,
         series: [{
           type: 'pie',
-          radius: config?.series_config?.radius || ['40%', '70%'],
-          center: ['50%', '55%'],
+          radius: config?.series_config?.radius || ['45%', '72%'],
+          center: ['50%', '52%'],
           avoidLabelOverlap: true,
-          itemStyle: { borderRadius: 8, borderColor: '#fff', borderWidth: 2 },
+          itemStyle: { 
+            borderRadius: 8, 
+            borderColor: '#fff', 
+            borderWidth: 3,
+          },
           label: {
             show: config?.series_config?.label !== false,
             formatter: '{b}: {d}%',
+            color: '#4b5563',
+            fontSize: 11,
+          },
+          labelLine: {
+            length: 12,
+            length2: 8,
+            lineStyle: { color: '#d1d5db' }
           },
           emphasis: {
-            label: { show: true, fontSize: 14, fontWeight: 'bold' },
-            itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0,0,0,0.5)' },
+            label: { show: true, fontSize: 13, fontWeight: 600 },
+            itemStyle: { 
+              shadowBlur: 16, 
+              shadowOffsetX: 0, 
+              shadowColor: 'rgba(0,0,0,0.2)',
+            },
+            scaleSize: 8,
           },
           data: displayRows.map((row) => ({
             name: String(row[labelCol] || ''),
@@ -279,20 +338,50 @@ function generateChartOption(
           type: 'category',
           data: xAxisData,
           boundaryGap: false,
-          axisLabel: { interval: 'auto', rotate: xAxisData.length > 10 ? 30 : 0 },
-          name: config?.axis?.xAxisName,
+          axisLabel: { 
+            interval: 'auto', 
+            rotate: xAxisData.length > 10 ? 30 : 0,
+            color: '#6b7280',
+            fontSize: 11,
+          },
+          axisLine: { lineStyle: { color: '#e5e7eb' } },
+          axisTick: { show: false },
+          name: config?.axis?.xAxisName || (xColumn ? getFieldName(xColumn) : undefined),
+          nameTextStyle: { color: '#9ca3af', fontSize: 11 },
         },
         yAxis: {
           type: 'value',
           name: config?.axis?.yAxisName,
-          splitLine: { show: config?.axis?.showGrid !== false },
+          nameTextStyle: { color: '#9ca3af', fontSize: 11 },
+          axisLabel: { color: '#6b7280', fontSize: 11 },
+          axisLine: { show: false },
+          axisTick: { show: false },
+          splitLine: { 
+            show: config?.axis?.showGrid !== false,
+            lineStyle: { color: '#f3f4f6', type: 'dashed' }
+          },
         },
-        series: yColumns.map((col) => ({
-          name: col,
+        series: yColumns.map((col, idx) => ({
+          name: getFieldName(col),
           type: 'line' as const,
           smooth: config?.series_config?.smooth !== false,
+          symbol: 'circle',
+          symbolSize: 6,
           data: displayRows.map((row) => Number(row[col]) || 0),
-          ...(chartType === 'area' ? { areaStyle: { opacity: 0.4 } } : {}),
+          lineStyle: { width: 2.5 },
+          ...(chartType === 'area' ? { 
+            areaStyle: { 
+              opacity: 0.15,
+              color: {
+                type: 'linear',
+                x: 0, y: 0, x2: 0, y2: 1,
+                colorStops: [
+                  { offset: 0, color: colors[idx % colors.length] },
+                  { offset: 1, color: 'rgba(255,255,255,0)' }
+                ]
+              }
+            } 
+          } : {}),
           ...(config?.series_config?.stack ? { stack: 'total' } : {}),
         })),
       };
@@ -307,25 +396,47 @@ function generateChartOption(
             interval: 0,
             rotate: xAxisData.length > 8 ? 30 : 0,
             hideOverlap: true,
+            color: '#6b7280',
+            fontSize: 11,
           },
-          name: config?.axis?.xAxisName,
+          axisLine: { lineStyle: { color: '#e5e7eb' } },
+          axisTick: { show: false },
+          name: config?.axis?.xAxisName || (xColumn ? getFieldName(xColumn) : undefined),
+          nameTextStyle: { color: '#9ca3af', fontSize: 11 },
         },
         yAxis: {
           type: 'value',
           name: config?.axis?.yAxisName,
-          splitLine: { show: config?.axis?.showGrid !== false },
+          nameTextStyle: { color: '#9ca3af', fontSize: 11 },
+          axisLabel: { color: '#6b7280', fontSize: 11 },
+          axisLine: { show: false },
+          axisTick: { show: false },
+          splitLine: { 
+            show: config?.axis?.showGrid !== false,
+            lineStyle: { color: '#f3f4f6', type: 'dashed' }
+          },
         },
         series: yColumns.map((col) => ({
           name: col,
           type: 'bar' as const,
           data: displayRows.map((row) => Number(row[col]) || 0),
-          barMaxWidth: 50,
-          itemStyle: { borderRadius: [4, 4, 0, 0] },
+          barMaxWidth: 40,
+          barMinWidth: 8,
+          itemStyle: { 
+            borderRadius: [6, 6, 0, 0],
+          },
+          emphasis: {
+            itemStyle: { 
+              shadowBlur: 8,
+              shadowColor: 'rgba(0,0,0,0.15)',
+            }
+          },
           ...(config?.series_config?.stack ? { stack: 'total' } : {}),
           label: config?.series_config?.label ? {
             show: true,
             position: 'top',
             fontSize: 10,
+            color: '#6b7280',
           } : undefined,
         })),
       };
@@ -338,12 +449,12 @@ function generateChartOption(
         xAxis: {
           type: 'value',
           scale: true,
-          name: config?.axis?.xAxisName || xNumCol,
+          name: config?.axis?.xAxisName || getFieldName(xNumCol),
         },
         yAxis: {
           type: 'value',
           scale: true,
-          name: config?.axis?.yAxisName || yNumCol,
+          name: config?.axis?.yAxisName || getFieldName(yNumCol),
         },
         series: [{
           type: 'scatter',
@@ -361,7 +472,7 @@ function generateChartOption(
 
     case 'radar':
       const indicators = yColumns.map((col) => ({
-        name: col,
+        name: getFieldName(col),
         max: Math.max(...displayRows.map((row) => Number(row[col]) || 0)) * 1.2 || 100,
       }));
       const categoryCol = stringColumns[0] || xColumn;
@@ -536,7 +647,6 @@ function generateChartOption(
         ...baseOption,
         series: [{
           type: 'sankey',
-          layout: 'none',
           emphasis: { focus: 'adjacency' },
           data: Array.from(nodes).map((name) => ({ name })),
           links: displayRows.map((row) => ({
@@ -553,18 +663,58 @@ function generateChartOption(
   }
 }
 
-export const SmartChart: React.FC<SmartChartProps> = ({
+export const SmartChart = forwardRef<SmartChartAction, SmartChartProps>(({
   data,
   title,
-  height = 350,
+  height,
   chartType: manualChartType,
   chartConfig,
   debug = false,
+  showToolbar = true,
   onConfigChange,
-}) => {
+  fieldMap,
+}, ref) => {
   const chartRef = useRef<ReactECharts>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [debugVisible, setDebugVisible] = useState(false);
   const [fullscreenVisible, setFullscreenVisible] = useState(false);
+  const [containerHeight, setContainerHeight] = useState<number>(typeof height === 'number' ? height : 300);
+
+  // 暴露方法给父组件
+  useImperativeHandle(ref, () => ({
+    download: handleDownload,
+    toggleFullscreen: () => setFullscreenVisible(prev => !prev),
+    toggleDebug: () => setDebugVisible(prev => !prev),
+  }));
+
+  // 处理容器高度变化
+  useEffect(() => {
+    if (!height && containerRef.current) {
+      // 自动填充父容器
+      const resizeObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const newHeight = entry.contentRect.height;
+          if (newHeight > 50) {
+            setContainerHeight(newHeight);
+          }
+        }
+      });
+      resizeObserver.observe(containerRef.current);
+      // 初始化高度
+      const parentHeight = containerRef.current.parentElement?.clientHeight;
+      if (parentHeight && parentHeight > 50) {
+        setContainerHeight(parentHeight);
+      }
+      return () => resizeObserver.disconnect();
+    } else if (typeof height === 'number') {
+      setContainerHeight(height);
+    } else if (typeof height === 'string' && height === '100%' && containerRef.current) {
+      const parentHeight = containerRef.current.parentElement?.clientHeight;
+      if (parentHeight && parentHeight > 50) {
+        setContainerHeight(parentHeight);
+      }
+    }
+  }, [height]);
 
   useEffect(() => {
     return () => {
@@ -609,7 +759,8 @@ export const SmartChart: React.FC<SmartChartProps> = ({
         normalized.rows,
         analysis,
         chartConfig,
-        title
+        title,
+        fieldMap
       );
 
       return {
@@ -628,7 +779,7 @@ export const SmartChart: React.FC<SmartChartProps> = ({
         error: String(e),
       };
     }
-  }, [data, title, manualChartType, chartConfig]);
+  }, [data, title, manualChartType, chartConfig, fieldMap]);
 
   // 下载图表
   const handleDownload = () => {
@@ -647,48 +798,71 @@ export const SmartChart: React.FC<SmartChartProps> = ({
   };
 
   // 工具栏
-  const renderToolbar = () => (
-    <div style={{ position: 'absolute', right: 4, top: 4, zIndex: 10, display: 'flex', gap: 4 }}>
-      {chartOption && (
-        <>
-          <Tooltip title="全屏">
+  const renderToolbar = () => {
+    if (!showToolbar) return null;
+    
+    return (
+      <div 
+        className="nodrag" 
+        style={{ position: 'absolute', right: 4, top: 4, zIndex: 1000, display: 'flex', gap: 4, pointerEvents: 'auto' }}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        {chartOption && (
+          <>
+            <Tooltip title="全屏">
+              <Button
+                className="nodrag"
+                type="text"
+                size="small"
+                icon={<FullscreenOutlined />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFullscreenVisible(true);
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{ opacity: 0.6, backgroundColor: 'rgba(255,255,255,0.8)', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}
+              />
+            </Tooltip>
+            <Tooltip title="下载">
+              <Button
+                className="nodrag"
+                type="text"
+                size="small"
+                icon={<DownloadOutlined />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDownload();
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{ opacity: 0.6, backgroundColor: 'rgba(255,255,255,0.8)', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}
+              />
+            </Tooltip>
+          </>
+        )}
+        {debug && (
+          <Tooltip title="调试">
             <Button
+              className="nodrag"
               type="text"
               size="small"
-              icon={<FullscreenOutlined />}
-              onClick={() => setFullscreenVisible(true)}
-              style={{ opacity: 0.5 }}
+              icon={<BugOutlined />}
+              onClick={(e) => {
+                e.stopPropagation();
+                setDebugVisible(true);
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{ opacity: 0.6, backgroundColor: 'rgba(255,255,255,0.8)', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}
             />
           </Tooltip>
-          <Tooltip title="下载">
-            <Button
-              type="text"
-              size="small"
-              icon={<DownloadOutlined />}
-              onClick={handleDownload}
-              style={{ opacity: 0.5 }}
-            />
-          </Tooltip>
-        </>
-      )}
-      {debug && (
-        <Tooltip title="调试">
-          <Button
-            type="text"
-            size="small"
-            icon={<BugOutlined />}
-            onClick={() => setDebugVisible(true)}
-            style={{ opacity: 0.5 }}
-          />
-        </Tooltip>
-      )}
-    </div>
-  );
+        )}
+      </div>
+    );
+  };
 
   // 错误展示
   if (error) {
     return (
-      <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+      <div ref={containerRef} style={{ height: height || '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
         <Alert message="数据加载失败" description={error} type="error" showIcon />
         {renderToolbar()}
       </div>
@@ -699,7 +873,7 @@ export const SmartChart: React.FC<SmartChartProps> = ({
   if (!chartOption) {
     if (normalizedData.rows.length > 0 && normalizedData.columns.length > 0) {
       const columns = normalizedData.columns.map((col) => ({
-        title: col,
+        title: fieldMap?.[col] || col,
         dataIndex: col,
         key: col,
         ellipsis: true,
@@ -707,7 +881,7 @@ export const SmartChart: React.FC<SmartChartProps> = ({
       }));
 
       return (
-        <div style={{ height, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+        <div ref={containerRef} style={{ height: height || '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
           {title && (
             <div style={{ textAlign: 'center', marginBottom: 8, fontWeight: 500 }}>
               {title}
@@ -718,7 +892,7 @@ export const SmartChart: React.FC<SmartChartProps> = ({
             columns={columns}
             pagination={{ pageSize: 5, size: 'small', simple: true }}
             size="small"
-            scroll={{ y: height - 100 }}
+            scroll={{ y: containerHeight - 100 }}
             style={{ flex: 1, overflow: 'hidden' }}
           />
           {renderToolbar()}
@@ -727,7 +901,7 @@ export const SmartChart: React.FC<SmartChartProps> = ({
     }
 
     return (
-      <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+      <div ref={containerRef} style={{ height: height || '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" />
         {renderToolbar()}
       </div>
@@ -736,11 +910,11 @@ export const SmartChart: React.FC<SmartChartProps> = ({
 
   return (
     <>
-      <div style={{ position: 'relative', height }}>
+      <div ref={containerRef} style={{ position: 'relative', height: height || '100%', width: '100%' }}>
         <ReactECharts
           ref={chartRef}
           option={chartOption}
-          style={{ height: '100%', width: '100%' }}
+          style={{ height: containerHeight, width: '100%' }}
           opts={{ renderer: 'svg', locale: 'ZH' }}
           notMerge={true}
           lazyUpdate={true}
@@ -776,19 +950,47 @@ export const SmartChart: React.FC<SmartChartProps> = ({
         title={title || '图表详情'}
         open={fullscreenVisible}
         onCancel={() => setFullscreenVisible(false)}
-        footer={null}
+        footer={[
+          <Button key="close" onClick={() => setFullscreenVisible(false)}>
+            关闭
+          </Button>
+        ]}
         width="90%"
         style={{ top: 20 }}
       >
-        <ReactECharts
-          option={chartOption}
-          style={{ height: '70vh', width: '100%' }}
-          opts={{ renderer: 'svg', locale: 'ZH' }}
-          notMerge={true}
-        />
+        <div style={{ position: 'relative' }}>
+          <ReactECharts
+            option={chartOption}
+            style={{ height: '80vh', width: '100%' }}
+            opts={{ renderer: 'svg', locale: 'ZH' }}
+            notMerge={true}
+            lazyUpdate={true}
+          />
+          {/* 全屏模式下的工具栏 */}
+          <div style={{ position: 'absolute', right: 4, top: 4, zIndex: 100, display: 'flex', gap: 4 }}>
+            <Tooltip title="退出全屏">
+              <Button
+                type="text"
+                size="small"
+                icon={<FullscreenExitOutlined />}
+                onClick={() => setFullscreenVisible(false)}
+                style={{ opacity: 0.5, backgroundColor: 'rgba(255,255,255,0.5)' }}
+              />
+            </Tooltip>
+            <Tooltip title="下载">
+              <Button
+                type="text"
+                size="small"
+                icon={<DownloadOutlined />}
+                onClick={handleDownload}
+                style={{ opacity: 0.5, backgroundColor: 'rgba(255,255,255,0.5)' }}
+              />
+            </Tooltip>
+          </div>
+        </div>
       </Modal>
     </>
   );
-};
+});
 
 export default SmartChart;

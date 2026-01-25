@@ -53,15 +53,18 @@ export const DashboardInsightWidget: React.FC<DashboardInsightWidgetProps> = ({
       <Card
         className={className}
         style={{
-          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+          background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
           color: 'white',
-          marginBottom: 16,
+          marginBottom: 20,
+          borderRadius: 16,
+          border: 'none',
+          boxShadow: '0 4px 16px rgba(99, 102, 241, 0.25)',
         }}
       >
-        <div style={{ textAlign: 'center', padding: '20px' }}>
-          <BarChartOutlined style={{ fontSize: 48, marginBottom: 16 }} />
-          <Title level={4} style={{ color: 'white' }}>暂无洞察数据</Title>
-          <Text style={{ color: 'rgba(255,255,255,0.8)' }}>请点击"生成洞察"按钮开始分析</Text>
+        <div style={{ textAlign: 'center', padding: '28px 20px' }}>
+          <BarChartOutlined style={{ fontSize: 52, marginBottom: 16, opacity: 0.9 }} />
+          <Title level={4} style={{ color: 'white', marginBottom: 8 }}>暂无洞察数据</Title>
+          <Text style={{ color: 'rgba(255,255,255,0.85)', fontSize: 14 }}>请点击"生成洞察"按钮开始分析</Text>
         </div>
       </Card>
     );
@@ -71,25 +74,27 @@ export const DashboardInsightWidget: React.FC<DashboardInsightWidgetProps> = ({
     <Card
       className={className}
       style={{
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        marginBottom: 16,
+        background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+        marginBottom: 20,
         border: 'none',
+        borderRadius: 16,
+        boxShadow: '0 4px 16px rgba(99, 102, 241, 0.25)',
       }}
       styles={{ body: { padding: 0 } }}
     >
       {/* 头部 */}
       <div
         style={{
-          padding: '16px 20px',
-          borderBottom: '1px solid rgba(255,255,255,0.1)',
+          padding: '18px 24px',
+          borderBottom: '1px solid rgba(255,255,255,0.12)',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <BarChartOutlined style={{ fontSize: 20, color: 'white' }} />
-          <Title level={4} style={{ margin: 0, color: 'white' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <BarChartOutlined style={{ fontSize: 22, color: 'white' }} />
+          <Title level={4} style={{ margin: 0, color: 'white', fontWeight: 600 }}>
             智能数据洞察
           </Title>
         </div>
@@ -100,9 +105,10 @@ export const DashboardInsightWidget: React.FC<DashboardInsightWidgetProps> = ({
               icon={<SettingOutlined />}
               onClick={onOpenConditionPanel}
               style={{
-                background: 'rgba(255,255,255,0.2)',
+                background: 'rgba(255,255,255,0.15)',
                 color: 'white',
-                border: 'none',
+                border: '1px solid rgba(255,255,255,0.2)',
+                borderRadius: 8,
               }}
             >
               调整条件
@@ -115,9 +121,10 @@ export const DashboardInsightWidget: React.FC<DashboardInsightWidgetProps> = ({
               loading={loading}
               onClick={onRefresh}
               style={{
-                background: 'rgba(255,255,255,0.2)',
+                background: 'rgba(255,255,255,0.15)',
                 color: 'white',
-                border: 'none',
+                border: '1px solid rgba(255,255,255,0.2)',
+                borderRadius: 8,
               }}
             >
               刷新
@@ -137,25 +144,31 @@ export const DashboardInsightWidget: React.FC<DashboardInsightWidgetProps> = ({
 
       {/* 内容区域 */}
       {isExpanded && (
-        <div style={{ padding: 20 }}>
+        <div style={{ padding: '20px 24px' }}>
           {loading ? (
-            <div style={{ textAlign: 'center', padding: '40px 0' }}>
+            <div style={{ textAlign: 'center', padding: '48px 0' }}>
               <Spin size="large" />
-              <div style={{ marginTop: 16, color: 'white' }}>正在生成洞察分析...</div>
+              <div style={{ marginTop: 20, color: 'white', fontSize: 14 }}>正在生成洞察分析...</div>
             </div>
           ) : (
-            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Space direction="vertical" size={16} style={{ width: '100%' }}>
               {/* 数据摘要 */}
               {hasSummary && (
                 <Card
                   size="small"
                   title={
-                    <span>
-                      <BarChartOutlined style={{ marginRight: 8 }} />
+                    <span style={{ color: '#4b5563', fontWeight: 600 }}>
+                      <BarChartOutlined style={{ marginRight: 8, color: '#6366f1' }} />
                       数据摘要
                     </span>
                   }
-                  style={{ background: 'rgba(255,255,255,0.95)' }}
+                  style={{ 
+                    background: 'rgba(255,255,255,0.98)', 
+                    borderRadius: 12,
+                    border: 'none',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                  }}
+                  styles={{ header: { borderBottom: '1px solid #f3f4f6' } }}
                 >
                   <Space direction="vertical" size="small" style={{ width: '100%' }}>
                     {insights.summary?.description && (
@@ -188,12 +201,18 @@ export const DashboardInsightWidget: React.FC<DashboardInsightWidgetProps> = ({
                 <Card
                   size="small"
                   title={
-                    <span style={{ color: '#52c41a' }}>
-                      <LineChartOutlined style={{ marginRight: 8 }} />
+                    <span style={{ color: '#4b5563', fontWeight: 600 }}>
+                      <LineChartOutlined style={{ marginRight: 8, color: '#10b981' }} />
                       趋势分析
                     </span>
                   }
-                  style={{ background: 'rgba(255,255,255,0.95)' }}
+                  style={{ 
+                    background: 'rgba(255,255,255,0.98)', 
+                    borderRadius: 12,
+                    border: 'none',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                  }}
+                  styles={{ header: { borderBottom: '1px solid #f3f4f6' } }}
                 >
                   <Space direction="vertical" size="small" style={{ width: '100%' }}>
                     {insights.trends?.description && (
@@ -247,20 +266,26 @@ export const DashboardInsightWidget: React.FC<DashboardInsightWidgetProps> = ({
                 <Card
                   size="small"
                   title={
-                    <span style={{ color: '#fa8c16' }}>
-                      <AlertOutlined style={{ marginRight: 8 }} />
+                    <span style={{ color: '#4b5563', fontWeight: 600 }}>
+                      <AlertOutlined style={{ marginRight: 8, color: '#f59e0b' }} />
                       异常检测
                     </span>
                   }
-                  style={{ background: 'rgba(255,255,255,0.95)' }}
+                  style={{ 
+                    background: 'rgba(255,255,255,0.98)', 
+                    borderRadius: 12,
+                    border: 'none',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                  }}
+                  styles={{ header: { borderBottom: '1px solid #f3f4f6' } }}
                 >
                   <Space direction="vertical" size="small" style={{ width: '100%' }}>
                     {insights.anomalies?.slice(0, 5).map((anomaly: any, index: number) => (
-                      <div key={index} style={{ paddingLeft: 8, borderLeft: '3px solid #fa8c16' }}>
+                      <div key={index} style={{ paddingLeft: 12, borderLeft: '3px solid #f59e0b', borderRadius: 2 }}>
                         {anomaly.metric && (
-                          <Tag color="orange">{anomaly.metric}</Tag>
+                          <Tag color="orange" style={{ borderRadius: 4 }}>{anomaly.metric}</Tag>
                         )}
-                        <Text>{anomaly.description}</Text>
+                        <Text style={{ color: '#4b5563' }}>{anomaly.description}</Text>
                         {anomaly.severity && (
                           <Tag
                             color={
@@ -270,7 +295,7 @@ export const DashboardInsightWidget: React.FC<DashboardInsightWidgetProps> = ({
                                 ? 'orange'
                                 : 'yellow'
                             }
-                            style={{ marginLeft: 8 }}
+                            style={{ marginLeft: 8, borderRadius: 4 }}
                           >
                             {anomaly.severity}
                           </Tag>
@@ -286,31 +311,37 @@ export const DashboardInsightWidget: React.FC<DashboardInsightWidgetProps> = ({
                 <Card
                   size="small"
                   title={
-                    <span style={{ color: '#1890ff' }}>
-                      <LinkOutlined style={{ marginRight: 8 }} />
+                    <span style={{ color: '#4b5563', fontWeight: 600 }}>
+                      <LinkOutlined style={{ marginRight: 8, color: '#3b82f6' }} />
                       关联洞察
                     </span>
                   }
-                  style={{ background: 'rgba(255,255,255,0.95)' }}
+                  style={{ 
+                    background: 'rgba(255,255,255,0.98)', 
+                    borderRadius: 12,
+                    border: 'none',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                  }}
+                  styles={{ header: { borderBottom: '1px solid #f3f4f6' } }}
                 >
                   <Space direction="vertical" size="small" style={{ width: '100%' }}>
                     {insights.correlations?.slice(0, 5).map((correlation: any, index: number) => (
                       <div
                         key={index}
-                        style={{ paddingLeft: 8, borderLeft: '3px solid #1890ff' }}
+                        style={{ paddingLeft: 12, borderLeft: '3px solid #3b82f6', borderRadius: 2 }}
                       >
                         {correlation.entities && correlation.entities.length > 0 && (
-                          <div style={{ marginBottom: 4 }}>
+                          <div style={{ marginBottom: 6 }}>
                             {correlation.entities.map((entity: any, idx: number) => (
-                              <Tag key={idx} color="blue">
+                              <Tag key={idx} color="blue" style={{ borderRadius: 4 }}>
                                 {entity}
                               </Tag>
                             ))}
                           </div>
                         )}
-                        <Text>{correlation.description}</Text>
+                        <Text style={{ color: '#4b5563' }}>{correlation.description}</Text>
                         {correlation.strength !== undefined && (
-                          <Text type="secondary" style={{ marginLeft: 8 }}>
+                          <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
                             (相关度: {(correlation.strength * 100).toFixed(0)}%)
                           </Text>
                         )}
@@ -325,12 +356,18 @@ export const DashboardInsightWidget: React.FC<DashboardInsightWidgetProps> = ({
                 <Card
                   size="small"
                   title={
-                    <span style={{ color: '#722ed1' }}>
-                      <BulbOutlined style={{ marginRight: 8 }} />
+                    <span style={{ color: '#4b5563', fontWeight: 600 }}>
+                      <BulbOutlined style={{ marginRight: 8, color: '#8b5cf6' }} />
                       业务建议
                     </span>
                   }
-                  style={{ background: 'rgba(255,255,255,0.95)' }}
+                  style={{ 
+                    background: 'rgba(255,255,255,0.98)', 
+                    borderRadius: 12,
+                    border: 'none',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                  }}
+                  styles={{ header: { borderBottom: '1px solid #f3f4f6' } }}
                 >
                   <Space direction="vertical" size="small" style={{ width: '100%' }}>
                     {insights.recommendations?.slice(0, 5).map((rec: any, index: number) => (
@@ -339,19 +376,19 @@ export const DashboardInsightWidget: React.FC<DashboardInsightWidgetProps> = ({
                         style={{
                           display: 'flex',
                           alignItems: 'flex-start',
-                          gap: 8,
+                          gap: 10,
                         }}
                       >
-                        <Text strong style={{ color: '#722ed1', minWidth: 20 }}>
+                        <Text strong style={{ color: '#8b5cf6', minWidth: 20 }}>
                           {index + 1}.
                         </Text>
                         <div style={{ flex: 1 }}>
                           {rec.category && (
-                            <Tag color="purple" style={{ marginRight: 8 }}>
+                            <Tag color="purple" style={{ marginRight: 8, borderRadius: 4 }}>
                               {rec.category}
                             </Tag>
                           )}
-                          <Text>{rec.content}</Text>
+                          <Text style={{ color: '#4b5563' }}>{rec.content}</Text>
                           {rec.priority && (
                             <Tag
                               color={
@@ -361,7 +398,7 @@ export const DashboardInsightWidget: React.FC<DashboardInsightWidgetProps> = ({
                                   ? 'orange'
                                   : 'default'
                               }
-                              style={{ marginLeft: 8 }}
+                              style={{ marginLeft: 8, borderRadius: 4 }}
                             >
                               {rec.priority}
                             </Tag>

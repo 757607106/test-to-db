@@ -6,7 +6,8 @@ import {
   Col,
   Button,
   Typography,
-  Space
+  Space,
+  message
 } from 'antd';
 import {
   RocketOutlined,
@@ -15,6 +16,7 @@ import {
   ShareAltOutlined,
   ApiOutlined
 } from '@ant-design/icons';
+import { createSessionCode } from '../services/auth';
 
 const { Title: AntTitle, Paragraph } = Typography;
 
@@ -46,8 +48,16 @@ const HomePage: React.FC = () => {
     }
   ];
 
-  const handleStartChat = () => {
-    window.open('http://localhost:3000', '_blank');
+  const handleStartChat = async () => {
+    try {
+      // 获取一次性 session code
+      const { code } = await createSessionCode();
+      // 使用 code 而非 token 跳转，更安全
+      window.open(`http://localhost:3000?code=${code}`, '_blank');
+    } catch (error) {
+      console.error('获取 session code 失败:', error);
+      message.error('跳转失败，请重试');
+    }
   };
 
   return (
