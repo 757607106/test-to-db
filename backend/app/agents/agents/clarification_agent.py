@@ -88,10 +88,7 @@ CLARIFICATION_UNIFIED_PROMPT = """你是一个专业的数据查询意图分析�
 只返回JSON，不要其他内容。"""
 
 
-# 保留旧的提示词以备向后兼容（但不再使用）
 
-CLARIFICATION_CHECK_PROMPT = CLARIFICATION_UNIFIED_PROMPT
-QUESTION_GENERATION_PROMPT = """已废弃：问题生成已合并到 CLARIFICATION_UNIFIED_PROMPT 中"""
 
 
 # ============================================================================
@@ -298,69 +295,6 @@ def format_clarification_questions(questions: List[Dict[str, Any]]) -> List[Dict
         formatted.append(formatted_q)
     
     return formatted
-
-
-def format_clarification_text(
-    questions: List[Dict[str, Any]], 
-    reason: str = "",
-    round_num: int = 1,
-    max_rounds: int = 2
-) -> str:
-    """
-    将澄清问题格式化为纯文本，用于聊天显示
-    
-    用户可以：
-    - 输入选项对应的数字来选择
-    - 直接输入内容来回答
-    - 输入「跳过」跳过澄清
-    
-    Args:
-        questions: 格式化后的问题列表
-        reason: 需要澄清的原因
-        round_num: 当前澄清轮次 (不再显示)
-        max_rounds: 最大澄清轮次 (不再显示)
-        
-    Returns:
-        格式化的文本消息
-    """
-    lines = []
-    
-    # 标题 - 更自然
-    lines.append("🤔 **需要您补充一点信息**")
-    lines.append("")
-    lines.append("为了为您提供准确的查询结果，我需要确认以下细节：")
-    
-    # 原因（如果有）- 使用引用格式，更柔和
-    if reason:
-        lines.append(f"")
-        lines.append(f"> 💡 {reason}")
-    
-    lines.append("")
-    
-    # 问题列表
-    for i, q in enumerate(questions):
-        question_num = i + 1
-        lines.append(f"**{question_num}. {q['question']}**")
-        
-        if q.get("type") == "choice" and q.get("options"):
-            # 选择题：显示选项
-            for j, option in enumerate(q["options"]):
-                option_num = j + 1
-                lines.append(f"   {option_num}) {option}")
-        else:
-            # 文本题：提示直接输入
-            lines.append(f"   请直接输入您的回答")
-        
-        lines.append("")
-    
-    # 使用提示 - 简化
-    lines.append("---")
-    lines.append("💡 **您可以**：")
-    lines.append("- 输入数字选择对应选项")
-    lines.append("- 直接输入具体要求")
-    lines.append("- 输入「跳过」直接按默认条件查询")
-    
-    return "\n".join(lines)
 
 
 def parse_user_clarification_response(
@@ -621,25 +555,6 @@ def should_skip_clarification(query: str) -> bool:
 
 
 # ============================================================================
-# @tool 包装函数（保留以供代理系统使用）
-# ============================================================================
-
-@tool
-def quick_clarification_check(query: str, connection_id: Optional[int] = None) -> Dict[str, Any]:
-    """快速检测用户查询是否需要澄清（工具版本）"""
-    return _quick_clarification_check_impl(query, connection_id)
-
-
-@tool
-def enrich_query_with_clarification(
-    original_query: str, 
-    clarification_responses: List[Dict[str, str]]
-) -> Dict[str, Any]:
-    """将用户的澄清回复整合到原始查询中（工具版本）"""
-    return _enrich_query_with_clarification_impl(original_query, clarification_responses)
-
-
-# ============================================================================
 # 导出
 # ============================================================================
 
@@ -647,12 +562,8 @@ __all__ = [
     # 内部函数（直接调用，避免流式传输）
     "_quick_clarification_check_impl",
     "_enrich_query_with_clarification_impl",
-    # 工具版本（供代理系统使用）
-    "quick_clarification_check",
-    "enrich_query_with_clarification",
     # 辅助函数
     "format_clarification_questions",
-    "format_clarification_text",
     "parse_user_clarification_response",
     "should_skip_clarification",
 ]

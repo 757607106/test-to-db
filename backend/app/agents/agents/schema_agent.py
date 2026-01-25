@@ -85,8 +85,8 @@ def retrieve_database_schema(
         
         logger.info(f"检索数据库 schema, connection_id={connection_id}")
         
-        db = SessionLocal()
-        try:
+        from app.db.session import get_db_session
+        with get_db_session() as db:
             # 获取相关表结构
             schema_context = retrieve_relevant_schema(
                 db=db,
@@ -103,62 +103,9 @@ def retrieve_database_schema(
                 "value_mappings": value_mappings,
                 "connection_id": connection_id
             }, ensure_ascii=False, default=str)
-        finally:
-            db.close()
             
     except Exception as e:
         logger.error(f"Schema 检索失败: {str(e)}")
-        return json.dumps({
-            "success": False,
-            "error": str(e)
-        }, ensure_ascii=False)
-
-
-@tool
-def validate_schema_completeness(
-    schema_info: str,
-    query_analysis: str
-) -> str:
-    """
-    验证获取的模式信息是否足够完整来回答用户查询
-    
-    Args:
-        schema_info: JSON 格式的模式信息
-        query_analysis: JSON 格式的查询分析结果
-        
-    Returns:
-        str: JSON 格式的验证结果和建议
-    """
-    try:
-        # 解析输入
-        schema_data = json.loads(schema_info) if isinstance(schema_info, str) else schema_info
-        analysis_data = json.loads(query_analysis) if isinstance(query_analysis, str) else query_analysis
-        
-        # 检查是否有足够的表信息
-        required_entities = analysis_data.get("entities", [])
-        schema_context = schema_data.get("schema_context", {})
-        available_tables = list(schema_context.keys()) if isinstance(schema_context, dict) else []
-        
-        missing_entities = []
-        for entity in required_entities:
-            if not any(entity.lower() in table.lower() for table in available_tables):
-                missing_entities.append(entity)
-        
-        is_complete = len(missing_entities) == 0
-        
-        suggestions = []
-        if missing_entities:
-            suggestions.append(f"可能缺少与以下实体相关的表信息: {', '.join(missing_entities)}")
-        
-        return json.dumps({
-            "success": True,
-            "is_complete": is_complete,
-            "missing_entities": missing_entities,
-            "suggestions": suggestions
-        }, ensure_ascii=False)
-        
-    except Exception as e:
-        logger.error(f"Schema 完整性验证失败: {str(e)}")
         return json.dumps({
             "success": False,
             "error": str(e)
@@ -268,8 +215,8 @@ class SchemaAnalysisAgent:
             # ✅ 使用异步并行版本获取 schema（性能优化）
             logger.info(f"异步并行获取 schema 信息, connection_id={connection_id}")
             
-            db = SessionLocal()
-            try:
+            from app.db.session import get_db_session
+            with get_db_session() as db:
                 # 使用异步并行版本
                 schema_context = await retrieve_relevant_schema_async(
                     db=db,
@@ -279,8 +226,6 @@ class SchemaAnalysisAgent:
                 
                 # 获取值映射
                 value_mappings = get_value_mappings(db, schema_context)
-            finally:
-                db.close()
             
             # 计算耗时并发送完成事件（包含详细的表和列信息）
             elapsed_ms = int((time.time() - step_start_time) * 1000)

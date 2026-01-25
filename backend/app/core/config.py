@@ -173,8 +173,8 @@ class Settings(BaseSettings):
     # 是否在快速模式中跳过样本检索
     FAST_MODE_SKIP_SAMPLE_RETRIEVAL: bool = os.getenv("FAST_MODE_SKIP_SAMPLE_RETRIEVAL", "true").lower() == "true"
     
-    # 是否在快速模式中跳过图表生成
-    FAST_MODE_SKIP_CHART_GENERATION: bool = os.getenv("FAST_MODE_SKIP_CHART_GENERATION", "true").lower() == "true"
+    # 是否在快速模式中跳过图表生成（默认不跳过，确保图表正常生成）
+    FAST_MODE_SKIP_CHART_GENERATION: bool = os.getenv("FAST_MODE_SKIP_CHART_GENERATION", "false").lower() == "true"
 
     class Config:
         case_sensitive = True

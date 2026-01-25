@@ -119,7 +119,7 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
         return base_result
     
     # 4. LLM检测是否需要澄清
-    connection_id = state.get("connection_id", 15)
+    connection_id = state.get("connection_id")
     
     try:
         # 如果是语义命中，可以将匹配的原查询作为上下文

@@ -96,57 +96,55 @@ async def schema_enricher_node(state: DashboardInsightState) -> Dict[str, Any]:
     start_time = time.time()
     
     try:
-        from app.db.session import SessionLocal
+        from app.db.session import get_db_session
         from app import crud
         from app.models.db_connection import DBConnection
         
-        db = SessionLocal()
         connection_id = state.get("connection_id") or state.get("aggregated_data", {}).get("connection_id", 1)
         
-        # 获取数据库类型
-        connection = db.query(DBConnection).filter(DBConnection.id == connection_id).first()
-        db_type = connection.db_type.upper() if connection else "MYSQL"
-        
-        # 获取表信息
-        tables = crud.schema_table.get_by_connection(db=db, connection_id=connection_id)
-        
-        enriched_tables = []
-        enriched_columns = []
-        column_statistics = {}
-        
-        for table in tables[:10]:
-            table_info = {
-                "id": table.id,
-                "name": table.table_name,
-                "description": table.description or f"表 {table.table_name}",
-            }
-            enriched_tables.append(table_info)
+        with get_db_session() as db:
+            # 获取数据库类型
+            connection = db.query(DBConnection).filter(DBConnection.id == connection_id).first()
+            db_type = connection.db_type.upper() if connection else "MYSQL"
             
-            columns = crud.schema_column.get_by_table(db=db, table_id=table.id)
-            for col in columns:
-                semantic_type = infer_semantic_type(col.column_name, col.data_type)
-                col_info = {
-                    "id": col.id,
-                    "name": col.column_name,
-                    "type": col.data_type,
-                    "description": col.description or f"{table.table_name}.{col.column_name}",
-                    "is_primary_key": col.is_primary_key,
-                    "is_foreign_key": col.is_foreign_key,
-                    "table_id": table.id,
-                    "table_name": table.table_name,
-                    "semantic_type": semantic_type
+            # 获取表信息
+            tables = crud.schema_table.get_by_connection(db=db, connection_id=connection_id)
+            
+            enriched_tables = []
+            enriched_columns = []
+            column_statistics = {}
+            
+            for table in tables[:10]:
+                table_info = {
+                    "id": table.id,
+                    "name": table.table_name,
+                    "description": table.description or f"表 {table.table_name}",
                 }
-                enriched_columns.append(col_info)
+                enriched_tables.append(table_info)
                 
-                key = f"{table.table_name}.{col.column_name}"
-                column_statistics[key] = {
-                    "data_type": col.data_type,
-                    "semantic_type": semantic_type,
-                    "is_aggregatable": is_aggregatable_type(col.data_type),
-                    "is_groupable": is_groupable_type(col.data_type, col.column_name)
-                }
-        
-        db.close()
+                columns = crud.schema_column.get_by_table(db=db, table_id=table.id)
+                for col in columns:
+                    semantic_type = infer_semantic_type(col.column_name, col.data_type)
+                    col_info = {
+                        "id": col.id,
+                        "name": col.column_name,
+                        "type": col.data_type,
+                        "description": col.description or f"{table.table_name}.{col.column_name}",
+                        "is_primary_key": col.is_primary_key,
+                        "is_foreign_key": col.is_foreign_key,
+                        "table_id": table.id,
+                        "table_name": table.table_name,
+                        "semantic_type": semantic_type
+                    }
+                    enriched_columns.append(col_info)
+                    
+                    key = f"{table.table_name}.{col.column_name}"
+                    column_statistics[key] = {
+                        "data_type": col.data_type,
+                        "semantic_type": semantic_type,
+                        "is_aggregatable": is_aggregatable_type(col.data_type),
+                        "is_groupable": is_groupable_type(col.data_type, col.column_name)
+                    }
         
         elapsed_ms = int((time.time() - start_time) * 1000)
         logger.info(f"[Worker] schema_enricher 完成, 耗时 {elapsed_ms}ms, {len(enriched_tables)} 表")

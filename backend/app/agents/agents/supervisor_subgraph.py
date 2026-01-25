@@ -29,76 +29,6 @@ from app.core.state import SQLMessageState
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# 错误分类辅助函数
-# ============================================================================
-
-def _classify_error(error_msg: str) -> str:
-    """
-    分类错误类型
-    
-    Args:
-        error_msg: 错误消息
-        
-    Returns:
-        错误类型标识
-    """
-    error_lower = error_msg.lower()
-    
-    # SQL 语法/结构错误
-    sql_patterns = [
-        "unknown column", "unknown table", "syntax",
-        "1054", "1146", "operationalerror",
-        "does not exist", "doesn't exist",
-        "ambiguous column", "invalid identifier"
-    ]
-    for pattern in sql_patterns:
-        if pattern in error_lower:
-            return "sql_syntax_error"
-    
-    # 连接错误
-    if any(p in error_lower for p in ["connection", "refused", "timeout", "network"]):
-        return "connection_error"
-    
-    # 权限错误
-    if any(p in error_lower for p in ["permission", "denied", "access"]):
-        return "permission_error"
-    
-    return "unknown_error"
-
-
-def _get_recovery_steps(error_type: str) -> list:
-    """
-    获取错误恢复建议
-    
-    Args:
-        error_type: 错误类型
-        
-    Returns:
-        恢复步骤列表
-    """
-    steps_map = {
-        "sql_syntax_error": [
-            "检查列名和表名是否正确",
-            "避免在子查询中引用外部别名",
-            "使用更简单的 SQL 结构"
-        ],
-        "connection_error": [
-            "检查数据库连接状态",
-            "验证连接参数"
-        ],
-        "permission_error": [
-            "检查用户权限",
-            "尝试简化查询范围"
-        ],
-        "unknown_error": [
-            "简化查询逻辑",
-            "检查数据库状态"
-        ]
-    }
-    return steps_map.get(error_type, steps_map["unknown_error"])
-
-
 def _load_custom_agent_by_id(agent_id: int, agent_type: str = "data_analyst"):
     """
     根据 agent_id 动态加载自定义 Agent
@@ -116,14 +46,11 @@ def _load_custom_agent_by_id(agent_id: int, agent_type: str = "data_analyst"):
         return None
     
     try:
-        from app.db.session import get_db
+        from app.db.session import get_db_session
         from app.crud import agent_profile as crud_agent_profile
         from app.agents.agent_factory import create_custom_analyst_agent
         
-        # 获取数据库会话
-        db = next(get_db())
-        
-        try:
+        with get_db_session() as db:
             # 查询 AgentProfile
             profile = crud_agent_profile.get(db, id=agent_id)
             
@@ -139,9 +66,6 @@ def _load_custom_agent_by_id(agent_id: int, agent_type: str = "data_analyst"):
             
             # 创建自定义 agent
             return create_custom_analyst_agent(profile, db)
-            
-        finally:
-            db.close()
             
     except Exception as e:
         logger.error(f"动态加载自定义 agent 失败: {e}", exc_info=True)
@@ -437,7 +361,9 @@ async def error_handler_node(state: SQLMessageState) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"ErrorRecoveryAgent 执行失败: {e}")
         
-        # 回退到简单逻辑
+        # 回退到简单逻辑 - 使用 error_recovery_agent 的分类函数
+        from app.agents.agents.error_recovery_agent import _classify_error_type
+        
         error_history = state.get("error_history", [])
         last_error = error_history[-1] if error_history else {}
         error_msg = last_error.get("error", "未知错误")
@@ -450,14 +376,15 @@ async def error_handler_node(state: SQLMessageState) -> Dict[str, Any]:
             }
         
         # 简单重试
+        error_type = _classify_error_type(error_msg.lower())
         return {
             "retry_count": retry_count + 1,
             "current_stage": "sql_generation",
             "error_recovery_context": {
-                "error_type": _classify_error(error_msg),
+                "error_type": error_type,
                 "error_message": error_msg,
                 "failed_sql": failed_sql,
-                "recovery_steps": _get_recovery_steps(_classify_error(error_msg)),
+                "recovery_steps": ["简化查询逻辑", "检查数据库状态"],
                 "retry_count": retry_count + 1
             },
             "generated_sql": None,

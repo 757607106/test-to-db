@@ -192,15 +192,12 @@ def _send_cache_hit_stream_events(
     # 获取数据集名称
     dataset_name = "默认数据集"
     try:
-        from app.db.session import SessionLocal
+        from app.db.session import get_db_session
         from app.crud.crud_db_connection import db_connection as crud_connection
-        db = SessionLocal()
-        try:
+        with get_db_session() as db:
             conn = crud_connection.get(db=db, id=connection_id)
             if conn:
                 dataset_name = conn.name or conn.database
-        finally:
-            db.close()
     except Exception:
         pass
     
@@ -491,25 +488,4 @@ async def cache_check_node(state: SQLMessageState, writer: StreamWriter) -> Dict
         }
 
 
-def cache_check_node_sync(state: SQLMessageState, writer: StreamWriter) -> Dict[str, Any]:
-    """
-    缓存检查节点的同步包装器
-    
-    注意: 此包装器主要用于兼容性。在 LangGraph 中建议直接使用异步版本。
-    
-    Args:
-        state: 当前的 SQL 消息状态
-        writer: LangGraph StreamWriter
-    """
-    import asyncio
-    
-    try:
-        loop = asyncio.get_running_loop()
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(
-                lambda: asyncio.run(cache_check_node(state, writer))
-            )
-            return future.result(timeout=10)
-    except RuntimeError:
-        return asyncio.run(cache_check_node(state, writer))
+

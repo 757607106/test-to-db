@@ -11,6 +11,7 @@ SQL 生成代理
 - 2026-01-21: 支持快速模式 (Fast Mode)
 - 2026-01-22: 使用 InjectedState 优化工具设计
 - 2026-01-22: 修复异步调用问题，避免嵌套事件循环
+- 2026-01-25: 添加 LLM 调用指数退避重试
 """
 from typing import Dict, Any, List, Annotated, Optional
 import logging
@@ -25,6 +26,7 @@ from pydantic import BaseModel, Field
 from app.core.state import SQLMessageState
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 from app.core.message_utils import generate_tool_call_id
+from app.agents.utils.retry_utils import retry_with_backoff_sync, RetryConfigs
 
 logger = logging.getLogger(__name__)
 
@@ -214,8 +216,14 @@ SQL: {sample.get('sql', '')}
 8. 【MySQL 别名规则】当表使用别名时（如 product AS p），引用列必须使用 p.column_name 格式，绝对禁止使用 database.p.column_name 格式（这是无效语法）
 """
         
+        # 使用指数退避重试调用 LLM
         llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
-        response = llm.invoke([HumanMessage(content=prompt)])
+        retry_config = RetryConfigs.LLM_CALL
+        response = retry_with_backoff_sync(
+            llm.invoke,
+            [HumanMessage(content=prompt)],
+            **retry_config.to_dict()
+        )
         
         # 提取 SQL 语句
         sql_query = response.content.strip()
@@ -326,8 +334,14 @@ def generate_sql_with_samples(
 要求：只返回 SQL 语句，不要其他内容。
 """
         
+        # 使用指数退避重试调用 LLM
         llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
-        response = llm.invoke([HumanMessage(content=prompt)])
+        retry_config = RetryConfigs.LLM_CALL
+        response = retry_with_backoff_sync(
+            llm.invoke,
+            [HumanMessage(content=prompt)],
+            **retry_config.to_dict()
+        )
         
         # 清理 SQL
         sql_query = response.content.strip()
@@ -765,8 +779,14 @@ class SQLGeneratorAgent:
 **要求**: 只返回修改后的SQL语句，不要其他内容。
 """
             
+            # 使用指数退避重试调用 LLM
             llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
-            response = llm.invoke([HumanMessage(content=prompt)])
+            retry_config = RetryConfigs.LLM_CALL
+            response = retry_with_backoff_sync(
+                llm.invoke,
+                [HumanMessage(content=prompt)],
+                **retry_config.to_dict()
+            )
             
             # 清理 SQL
             sql_query = response.content.strip()

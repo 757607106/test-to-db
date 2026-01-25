@@ -127,6 +127,17 @@ export function DataChartDisplay({ dataQuery }: DataChartDisplayProps) {
   );
 }
 
+// 判断值是否为数值类型（包括字符串形式的数字）
+function isNumericValue(value: any): boolean {
+  if (value === null || value === undefined) return true; // null/undefined 视为兼容
+  if (typeof value === "number") return true;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed !== "" && !isNaN(Number(trimmed));
+  }
+  return false;
+}
+
 // 生成多个图表配置
 function generateChartConfigs(
   data: Record<string, any>[],
@@ -135,9 +146,9 @@ function generateChartConfigs(
 ): ChartConfig[] {
   const configs: ChartConfig[] = [];
   
-  // 分析列类型
+  // 分析列类型（改进：支持字符串形式的数字）
   const numericColumns = columns.filter(col => 
-    data.every(row => typeof row[col] === "number" || row[col] === null)
+    data.every(row => isNumericValue(row[col]))
   );
   
   const categoryColumns = columns.filter(col => 
