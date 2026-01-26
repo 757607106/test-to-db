@@ -55,6 +55,11 @@ export interface IntentAnalysisEvent {
 export interface SQLStepEvent {
   type: "sql_step";
   step: 
+    // P2: 智能规划节点
+    | "intent_analysis"
+    | "query_planning"
+    // P2.1: 多步执行节点
+    | "result_aggregator"
     // 新版 Hub-and-Spoke 节点
     | "schema_agent"
     | "clarification"
@@ -109,6 +114,31 @@ export interface SimilarQuestionsEvent {
 }
 
 /**
+ * 洞察项类型
+ */
+export interface InsightItem {
+  type: "trend" | "anomaly" | "metric" | "comparison";
+  description: string;
+}
+
+/**
+ * 数据洞察事件 - 展示 AI 分析的业务洞察
+ * 
+ * 包含:
+ * - summary: 一句话摘要
+ * - insights: 结构化洞察列表 (趋势/异常/指标/对比)
+ * - recommendations: 业务建议列表
+ */
+export interface InsightEvent {
+  type: "insight";
+  summary: string;                      // 一句话摘要
+  insights: InsightItem[];              // 结构化洞察列表
+  recommendations: string[];            // 业务建议列表
+  raw_content?: string;                 // 原始 Markdown 内容
+  time_ms: number;                      // 分析耗时(毫秒)
+}
+
+/**
  * 所有流式事件的联合类型
  */
 export type StreamEvent = 
@@ -116,7 +146,8 @@ export type StreamEvent =
   | IntentAnalysisEvent 
   | SQLStepEvent 
   | DataQueryEvent 
-  | SimilarQuestionsEvent;
+  | SimilarQuestionsEvent
+  | InsightEvent;
 
 /**
  * 查询上下文 - 聚合所有流式事件数据
@@ -127,6 +158,7 @@ export interface QueryContext {
   sqlSteps: SQLStepEvent[];
   dataQuery?: DataQueryEvent;
   similarQuestions?: SimilarQuestionsEvent;
+  insight?: InsightEvent;                 // 数据洞察
 }
 
 /**
@@ -149,7 +181,8 @@ export function isStreamEvent(event: unknown): event is StreamEvent {
     e.type === "intent_analysis" ||
     e.type === "sql_step" ||
     e.type === "data_query" ||
-    e.type === "similar_questions"
+    e.type === "similar_questions" ||
+    e.type === "insight"
   );
 }
 
@@ -166,6 +199,11 @@ export const CACHE_HIT_LABELS: Record<string, string> = {
  * SQL步骤标签映射 - 包含新旧节点名称
  */
 export const SQL_STEP_LABELS: Record<string, string> = {
+  // P2: 智能规划节点
+  intent_analysis: "意图分析",
+  query_planning: "查询规划",
+  // P2.1: 多步执行节点
+  result_aggregator: "结果聚合",
   // 新版 Hub-and-Spoke 节点
   schema_agent: "Schema 分析",
   clarification: "需求澄清",

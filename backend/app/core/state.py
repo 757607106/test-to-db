@@ -202,6 +202,22 @@ class SQLMessageState(TypedDict, total=False):
     similar_queries: Optional[List[Dict[str, Any]]]
     chart_config: Optional[Dict[str, Any]]
     analysis_result: Optional[Dict[str, Any]]
+    
+    # ==========================================
+    # P2: 智能规划相关字段
+    # ==========================================
+    # 查询规划
+    query_plan: Optional[Dict[str, Any]]  # 查询执行计划
+    query_type: Optional[str]  # 查询类型: simple, aggregate, comparison, trend, multi_step
+    
+    # 多步执行
+    multi_step_mode: bool  # 是否为多步执行模式
+    current_sub_task_index: int  # 当前执行的子任务索引
+    sub_task_results: List[Dict[str, Any]]  # 子任务结果列表
+    multi_step_completed: bool  # 多步执行是否完成
+    
+    # 意图驱动图表
+    analysis_intent: Optional[str]  # 分析意图: trend, structure, comparison, correlation
 
 
 # ============================================================================
@@ -259,6 +275,14 @@ def create_initial_state(
         schema_clarification_round=0,  # Schema 澄清轮次
         schema_clarification_history=[],  # Schema 澄清历史
         needs_analysis=False,
+        # P2: 智能规划初始值
+        query_plan=None,
+        query_type=None,
+        multi_step_mode=False,
+        current_sub_task_index=0,
+        sub_task_results=[],
+        multi_step_completed=False,
+        analysis_intent=None,
     )
 
 

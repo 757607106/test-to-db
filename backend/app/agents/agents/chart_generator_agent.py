@@ -6,6 +6,13 @@
 2. 生成 Recharts 图表配置
 3. 判断数据是否适合可视化
 
+P2.2 升级: 意图驱动可视化
+- 结合 analysis_intent 选择最合适的图表类型
+- trend -> 折线图/面积图
+- structure -> 饼图/堆叠图
+- comparison -> 柱状图/分组柱状图
+- correlation -> 散点图
+
 与 Data Analyst Agent 的边界：
 - Data Analyst: 负责数据解读和洞察生成（文本输出）
 - Chart Generator: 负责图表配置和可视化建议（图表配置输出）
@@ -27,6 +34,17 @@ from app.core.llms import get_default_model
 from app.schemas.stream_events import create_sql_step_event
 
 logger = logging.getLogger(__name__)
+
+
+# P2.2: 意图到图表类型的映射
+INTENT_CHART_MAP = {
+    "trend": ["line", "area"],           # 趋势分析 -> 折线图/面积图
+    "structure": ["pie", "bar"],         # 结构分析 -> 饼图/柱状图
+    "comparison": ["bar", "line"],       # 对比分析 -> 柱状图/折线图
+    "correlation": ["scatter", "line"],  # 相关性分析 -> 散点图/折线图
+    "detail": ["bar", "line"],           # 详情查看 -> 柱状图/折线图
+    "summary": ["bar", "pie"],           # 综合汇总 -> 柱状图/饼图
+}
 
 
 class ChartGeneratorAgent:
@@ -200,20 +218,26 @@ class ChartGeneratorAgent:
         """
         生成 Recharts 图表配置
         
+        P2.2 升级: 支持意图驱动的图表选择
+        
         策略：
-        1. 首先使用规则推断图表类型
-        2. 如果规则无法确定，使用 LLM 推荐
+        1. 首先检查 analysis_intent，优先使用意图推荐
+        2. 然后使用规则推断图表类型
+        3. 如果规则无法确定，使用 LLM 推荐
         """
         # 分析列类型
         column_types = self._analyze_column_types(columns, data)
         
-        # 规则推断图表类型
-        chart_type = self._infer_chart_type(column_types, columns, data)
+        # P2.2: 获取分析意图
+        analysis_intent = state.get("analysis_intent")
+        
+        # 规则推断图表类型（结合意图）
+        chart_type = self._infer_chart_type(column_types, columns, data, analysis_intent)
         
         # 选择 X 轴和 Y 轴
         x_axis, y_axes = self._select_axes(column_types, columns)
         
-        return {
+        config = {
             "type": chart_type,
             "xAxis": x_axis,
             "yAxis": y_axes[0] if y_axes else x_axis,
@@ -222,6 +246,13 @@ class ChartGeneratorAgent:
             "series": [{"dataKey": y, "name": y} for y in y_axes[:3]],  # 最多3个系列
             "legend": len(y_axes) > 1
         }
+        
+        # P2.2: 添加意图信息到配置
+        if analysis_intent:
+            config["intent"] = analysis_intent
+            logger.info(f"意图驱动图表选择: intent={analysis_intent} -> type={chart_type}")
+        
+        return config
     
     def _analyze_column_types(self, columns: List[str], data: List) -> Dict[str, str]:
         """
@@ -268,10 +299,17 @@ class ChartGeneratorAgent:
         self, 
         column_types: Dict[str, str], 
         columns: List[str],
-        data: List
+        data: List,
+        analysis_intent: Optional[str] = None
     ) -> str:
         """
         基于规则推断最合适的图表类型
+        
+        P2.2 升级: 支持意图驱动的图表选择
+        
+        优先级：
+        1. 如果有 analysis_intent，优先使用意图推荐
+        2. 然后根据数据特征进行规则推断
         """
         date_cols = [c for c, t in column_types.items() if t == "date"]
         numeric_cols = [c for c, t in column_types.items() if t == "numeric"]
@@ -279,6 +317,28 @@ class ChartGeneratorAgent:
         
         row_count = len(data)
         
+        # P2.2: 意图驱动的图表选择
+        if analysis_intent and analysis_intent in INTENT_CHART_MAP:
+            preferred_types = INTENT_CHART_MAP[analysis_intent]
+            
+            # 根据数据特征从推荐列表中选择最合适的
+            for chart_type in preferred_types:
+                if chart_type == "line" and (date_cols or row_count > 5):
+                    return "line"
+                if chart_type == "area" and date_cols:
+                    return "area"
+                if chart_type == "bar" and row_count <= 15:
+                    return "bar"
+                if chart_type == "pie" and row_count <= 8 and len(numeric_cols) >= 1:
+                    return "pie"
+                if chart_type == "scatter" and len(numeric_cols) >= 2:
+                    return "scatter"
+            
+            # 如果没有完美匹配，使用推荐列表的第一个
+            logger.info(f"意图 {analysis_intent} 推荐图表: {preferred_types[0]}")
+            return preferred_types[0]
+        
+        # 原有规则推断逻辑
         # 有日期列 → 折线图
         if date_cols and numeric_cols:
             return "line"

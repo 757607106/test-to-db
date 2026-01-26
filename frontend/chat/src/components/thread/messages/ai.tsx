@@ -25,6 +25,7 @@ import {
 import { useArtifact } from "../artifact";
 import { ToolCalls, ToolResult } from "./tool-calls";
 import { DataChartDisplay } from "./DataChartDisplay";
+import { InsightDisplay } from "./InsightDisplay";
 import { Sparkles } from "lucide-react";
 
 /**
@@ -237,6 +238,8 @@ export function AssistantMessage({
   const hasChartConfig = hasQueryData && thread.queryContext?.dataQuery?.chart_config;
   const hasSimilarQuestions = thread.queryContext?.similarQuestions?.questions && 
     thread.queryContext.similarQuestions.questions.length > 0;
+  const hasInsight = thread.queryContext?.insight && 
+    (thread.queryContext.insight.summary || thread.queryContext.insight.insights.length > 0);
 
   // 只有当消息是最后一条消息时，才关联全局的 queryContext
   // 这是因为 queryContext 是 ephemeral (瞬态) 的
@@ -315,6 +318,11 @@ export function AssistantMessage({
                     <ToolCalls toolCalls={message.tool_calls} />
                   ))}
               </div>
+            )}
+
+            {/* 数据洞察 - 放在图表之前 */}
+            {hasInsight && thread.queryContext?.insight && showTransientComponents && (
+              <InsightDisplay insight={thread.queryContext.insight} />
             )}
 
             {/* 数据可视化图表 - 放在分析文本之前 */}

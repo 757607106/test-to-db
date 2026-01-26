@@ -15,6 +15,7 @@
 - sql_step: SQL生成各步骤
 - data_query: 数据查询结果
 - similar_questions: 相似问题推荐
+- insight: 数据洞察分析结果
 """
 from typing import Literal, Optional, Dict, Any, List
 from pydantic import BaseModel, Field
@@ -69,6 +70,29 @@ class SimilarQuestionsEvent(BaseModel):
     """相似问题事件 - 展示推荐的相似问题"""
     type: Literal["similar_questions"] = "similar_questions"
     questions: List[str] = Field(default_factory=list, description="相似问题列表")
+
+
+class InsightItem(BaseModel):
+    """单个洞察项"""
+    type: Literal["trend", "anomaly", "metric", "comparison"] = Field(description="洞察类型")
+    description: str = Field(description="洞察描述")
+
+
+class InsightEvent(BaseModel):
+    """
+    数据洞察事件 - 展示 AI 分析的业务洞察
+    
+    包含:
+    - summary: 一句话摘要
+    - insights: 结构化洞察列表 (趋势/异常/指标/对比)
+    - recommendations: 业务建议列表
+    """
+    type: Literal["insight"] = "insight"
+    summary: str = Field(description="一句话摘要")
+    insights: List[InsightItem] = Field(default_factory=list, description="结构化洞察列表")
+    recommendations: List[str] = Field(default_factory=list, description="业务建议列表")
+    raw_content: Optional[str] = Field(default=None, description="原始 Markdown 内容")
+    time_ms: int = Field(default=0, description="分析耗时(毫秒)")
 
 
 # 辅助函数
@@ -152,5 +176,41 @@ def create_cache_hit_event(
         hit_type=hit_type,
         similarity=similarity,
         original_query=original_query,
+        time_ms=time_ms
+    ).model_dump()
+
+
+def create_insight_event(
+    summary: str,
+    insights: List[Dict[str, str]] = None,
+    recommendations: List[str] = None,
+    raw_content: Optional[str] = None,
+    time_ms: int = 0
+) -> Dict[str, Any]:
+    """
+    创建数据洞察事件
+    
+    Args:
+        summary: 一句话摘要
+        insights: 结构化洞察列表，每项包含 type 和 description
+            - type: trend | anomaly | metric | comparison
+            - description: 洞察描述
+        recommendations: 业务建议列表
+        raw_content: 原始 Markdown 内容
+        time_ms: 分析耗时(毫秒)
+    """
+    insight_items = []
+    if insights:
+        for item in insights:
+            insight_items.append(InsightItem(
+                type=item.get("type", "metric"),
+                description=item.get("description", "")
+            ))
+    
+    return InsightEvent(
+        summary=summary,
+        insights=insight_items,
+        recommendations=recommendations or [],
+        raw_content=raw_content,
         time_ms=time_ms
     ).model_dump()

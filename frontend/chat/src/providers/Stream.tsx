@@ -290,6 +290,14 @@ const StreamSession = ({
               similarQuestions: streamEvent
             }));
             break;
+            
+          case "insight":
+            // 数据洞察事件
+            setQueryContext(prev => ({
+              ...prev,
+              insight: streamEvent
+            }));
+            break;
         }
       }
     },

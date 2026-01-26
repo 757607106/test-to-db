@@ -6,6 +6,10 @@ Schema 分析代理 (优化版本)
 2. 工具返回标准格式 (字符串或 JSON)
 3. 使用 ToolNode 配合 ReAct Agent
 
+集成语义层 (Semantic Layer):
+- 指标库: 从 Neo4j 获取业务指标定义
+- 值域预检索: 获取枚举值、日期范围等
+
 官方文档参考:
 - https://langchain-ai.github.io/langgraph/how-tos/tool-calling
 - https://langchain-ai.github.io/langgraph/reference/agents
@@ -227,6 +231,13 @@ class SchemaAnalysisAgent:
                 # 获取值映射
                 value_mappings = get_value_mappings(db, schema_context)
             
+            # ✅ 集成语义层 (Semantic Layer)
+            semantic_layer_info = await self._fetch_semantic_layer_info(
+                connection_id=connection_id,
+                user_query=user_query,
+                tables_list=schema_context.get("tables", [])
+            )
+            
             # 计算耗时并发送完成事件（包含详细的表和列信息）
             elapsed_ms = int((time.time() - step_start_time) * 1000)
             tables_list = schema_context.get("tables", [])
@@ -273,7 +284,9 @@ class SchemaAnalysisAgent:
             schema_info = {
                 "tables": schema_context,  # 完整的 schema 上下文
                 "value_mappings": value_mappings,
-                "connection_id": connection_id
+                "connection_id": connection_id,
+                # ✅ 语义层信息
+                "semantic_layer": semantic_layer_info
             }
             
             # ✅ 创建标准工具调用消息格式
@@ -367,6 +380,93 @@ class SchemaAnalysisAgent:
                     "retry_count": state.get("retry_count", 0)
                 }]
             }
+    
+    async def _fetch_semantic_layer_info(
+        self,
+        connection_id: int,
+        user_query: str,
+        tables_list: list
+    ) -> Dict[str, Any]:
+        """
+        获取语义层信息（指标、枚举值、日期范围）
+        
+        Args:
+            connection_id: 数据库连接ID
+            user_query: 用户查询
+            tables_list: 相关表列表
+            
+        Returns:
+            语义层信息字典
+        """
+        semantic_info = {
+            "metrics": [],
+            "enum_columns": [],
+            "date_columns": [],
+            "has_semantic_layer": False
+        }
+        
+        try:
+            from app.services.metric_service import metric_service
+            from app.services.value_profiling_service import value_profiling_service
+            
+            # 1. 获取相关业务指标
+            try:
+                metrics = await metric_service.get_metrics_for_query(
+                    user_query=user_query,
+                    connection_id=connection_id
+                )
+                if metrics:
+                    semantic_info["metrics"] = [
+                        {
+                            "name": m.name,
+                            "business_name": m.business_name,
+                            "formula": m.formula,
+                            "description": m.description,
+                            "source_table": m.source_table,
+                            "source_column": m.source_column,
+                            "aggregation": m.aggregation,
+                            "unit": m.unit
+                        }
+                        for m in metrics
+                    ]
+                    semantic_info["has_semantic_layer"] = True
+                    logger.info(f"获取到 {len(metrics)} 个相关指标")
+            except Exception as e:
+                logger.debug(f"获取指标失败（可能未配置指标库）: {e}")
+            
+            # 2. 获取枚举字段（从相关表中）
+            table_names = [t.get("table_name", "") for t in tables_list]
+            for table_name in table_names[:3]:  # 限制只查前3个表
+                try:
+                    enums = await value_profiling_service.get_enum_columns(
+                        connection_id=connection_id,
+                        table_name=table_name
+                    )
+                    if enums:
+                        semantic_info["enum_columns"].extend(enums)
+                except Exception as e:
+                    logger.debug(f"获取表 {table_name} 枚举字段失败: {e}")
+            
+            # 3. 获取日期字段范围
+            for table_name in table_names[:3]:
+                try:
+                    dates = await value_profiling_service.get_date_columns(
+                        connection_id=connection_id,
+                        table_name=table_name
+                    )
+                    if dates:
+                        semantic_info["date_columns"].extend(dates)
+                except Exception as e:
+                    logger.debug(f"获取表 {table_name} 日期字段失败: {e}")
+            
+            if semantic_info["enum_columns"] or semantic_info["date_columns"]:
+                semantic_info["has_semantic_layer"] = True
+                logger.info(f"语义层: {len(semantic_info['enum_columns'])} 个枚举字段, {len(semantic_info['date_columns'])} 个日期字段")
+            
+        except Exception as e:
+            logger.warning(f"语义层获取失败（继续执行）: {e}")
+        
+        return semantic_info
 
 
 # ============================================================================
