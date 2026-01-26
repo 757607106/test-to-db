@@ -141,3 +141,60 @@ class SemanticQueryResult(BaseModel):
     metrics_used: List[str] = Field(..., description="使用的指标")
     dimensions_used: List[str] = Field(..., description="使用的维度")
     explanation: str = Field("", description="SQL 解释")
+
+
+# ===== 指标告警 Schema =====
+
+AlertType = Literal["threshold", "yoy", "mom"]  # 阈值告警、同比告警、环比告警
+AlertCondition = Literal["gt", "lt", "gte", "lte", "eq"]  # 大于、小于、大于等于、小于等于、等于
+
+
+class MetricAlertBase(BaseModel):
+    """指标告警基础属性"""
+    name: str = Field(..., description="告警名称")
+    alert_type: AlertType = Field(..., description="告警类型: threshold/yoy/mom")
+    condition: AlertCondition = Field(..., description="条件: gt/lt/gte/lte/eq")
+    threshold_value: Optional[float] = Field(None, description="阈值（用于threshold类型）")
+    change_percent: Optional[float] = Field(None, description="变化百分比（用于yoy/mom类型）")
+    enabled: bool = Field(True, description="是否启用")
+    notify_channels: List[str] = Field(default_factory=list, description="通知渠道")
+
+
+class MetricAlertCreate(MetricAlertBase):
+    """创建告警请求"""
+    metric_id: str = Field(..., description="关联的指标ID")
+
+
+class MetricAlertUpdate(BaseModel):
+    """更新告警请求"""
+    name: Optional[str] = None
+    alert_type: Optional[AlertType] = None
+    condition: Optional[AlertCondition] = None
+    threshold_value: Optional[float] = None
+    change_percent: Optional[float] = None
+    enabled: Optional[bool] = None
+    notify_channels: Optional[List[str]] = None
+
+
+class MetricAlert(MetricAlertBase):
+    """告警响应模型"""
+    id: str = Field(..., description="告警ID")
+    metric_id: str = Field(..., description="关联的指标ID")
+    created_at: datetime = Field(..., description="创建时间")
+    last_triggered_at: Optional[datetime] = Field(None, description="上次触发时间")
+    trigger_count: int = Field(0, description="触发次数")
+
+    class Config:
+        from_attributes = True
+
+
+class AlertCheckResult(BaseModel):
+    """告警检查结果"""
+    alert_id: str
+    metric_id: str
+    metric_name: str
+    triggered: bool
+    current_value: float
+    threshold_or_change: float
+    message: str
+    checked_at: datetime

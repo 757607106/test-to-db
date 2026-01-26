@@ -31,15 +31,23 @@ class DashboardInsightService:
             # 如果有明确意图，使用检索增强
             schema_context = retrieve_relevant_schema(db, request.connection_id, request.intent)
         else:
-            # 如果没有意图，获取所有表（或者前N个表）
-            # 尝试从数据库缓存获取 Schema
+            # 如果没有意图，获取所有表
             tables = crud.schema_table.get_by_connection(db=db, connection_id=request.connection_id)
+            
+            if not tables:
+                print(f"[Mining] No tables found for connection_id={request.connection_id}")
+                return schemas.MiningResponse(suggestions=[])
+            
+            print(f"[Mining] Found {len(tables)} tables for connection_id={request.connection_id}")
             
             # 构建符合 format_schema_for_prompt 期望格式的 schema_context
             tables_list = []
             columns_list = []
+            table_names = []
             
-            for table in tables[:10]:  # 限制前10个表以防 Prompt 过长
+            # 增加表数量限制到 20 个，确保有足够的数据
+            for table in tables[:20]:
+                table_names.append(table.table_name)
                 tables_list.append({
                     "id": table.id,
                     "name": table.table_name,
@@ -59,11 +67,36 @@ class DashboardInsightService:
                         "table_name": table.table_name
                     })
             
+            # 获取表之间的关系（从 Neo4j 图谱）
+            relationships = []
+            try:
+                relationship_context = graph_relationship_service.query_table_relationships(
+                    connection_id=request.connection_id,
+                    table_names=table_names
+                )
+                if relationship_context.get("direct_relationships"):
+                    for rel in relationship_context["direct_relationships"]:
+                        relationships.append({
+                            "source_table": rel.get("source_table"),
+                            "source_column": rel.get("source_column"),
+                            "target_table": rel.get("target_table"),
+                            "target_column": rel.get("target_column"),
+                            "relationship_type": rel.get("relationship_type", "references")
+                        })
+                    print(f"[Mining] Found {len(relationships)} table relationships")
+            except Exception as e:
+                print(f"[Mining] Failed to get relationships: {e}")
+            
             schema_context = {
                 "tables": tables_list,
                 "columns": columns_list,
-                "relationships": []
+                "relationships": relationships
             }
+        
+        # 检查是否有有效的 Schema
+        if not schema_context.get("tables"):
+            print("[Mining] No tables in schema_context")
+            return schemas.MiningResponse(suggestions=[])
 
         # 2. 格式化 Schema
         schema_str = format_schema_for_prompt(schema_context)
@@ -196,10 +229,46 @@ SQL 语法注意事项（{db_type}）：
 只返回 JSON，不要有其他文字。
 """
         
-        # 4. 调用 LLM（使用 SQL Generator Agent 配置的模型）
+        # 4. 调用 LLM（使用 SQL Generator Agent 配置的模型，增加超时时间）
         try:
             import json
-            llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
+            from app.core.model_registry import create_chat_model
+            from app.models.agent_profile import AgentProfile
+            from app.models.llm_config import LLMConfiguration
+            from app.core.config import settings
+            
+            # 获取 Agent 配置
+            profile = db.query(AgentProfile).filter(AgentProfile.name == CORE_AGENT_SQL_GENERATOR).first()
+            
+            # 构建 LLM 参数
+            api_key = settings.OPENAI_API_KEY
+            api_base = settings.OPENAI_API_BASE
+            model_name = settings.LLM_MODEL
+            provider = settings.LLM_PROVIDER.lower()
+            
+            if profile and profile.llm_config_id:
+                llm_config = db.query(LLMConfiguration).filter(
+                    LLMConfiguration.id == profile.llm_config_id,
+                    LLMConfiguration.is_active == True
+                ).first()
+                if llm_config:
+                    api_key = llm_config.api_key
+                    api_base = llm_config.base_url
+                    model_name = llm_config.model_name
+                    provider = llm_config.provider.lower()
+            
+            # 创建 LLM（增加超时时间到 120 秒）
+            llm = create_chat_model(
+                provider=provider,
+                model_name=model_name,
+                api_key=api_key,
+                base_url=api_base,
+                temperature=0.3,
+                max_tokens=8192,
+                timeout=120.0,  # 挖掘任务需要更长超时
+                max_retries=2
+            )
+            
             response = await llm.ainvoke([
                 SystemMessage(content="你是一个专业的数据分析师。只返回 JSON 格式的响应。"),
                 HumanMessage(content=prompt)

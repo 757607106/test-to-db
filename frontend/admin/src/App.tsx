@@ -19,6 +19,8 @@ import DashboardEditorPage from './pages/DashboardEditorPage';
 import LLMConfigPage from './pages/LLMConfig';
 import AgentProfilePage from './pages/AgentProfile';
 import UsersPage from './pages/UsersPage';
+import MetricsPage from './pages/MetricsPage';
+import JoinRulesPage from './pages/JoinRulesPage';
 
 // Layout wrapper that uses IOSLayout with Outlet
 const ProtectedLayout: React.FC = () => {
@@ -47,6 +49,8 @@ const App: React.FC = () => {
           <Route path="/value-mappings" element={<ValueMappingsPage />} />
           <Route path="/dashboards" element={<DashboardListPage />} />
           <Route path="/dashboards/:id" element={<DashboardEditorPage />} />
+          <Route path="/metrics" element={<MetricsPage />} />
+          <Route path="/join-rules" element={<JoinRulesPage />} />
           <Route path="/llm-config" element={<LLMConfigPage />} />
           <Route path="/agent-profile" element={<AgentProfilePage />} />
           <Route path="/users" element={<UsersPage />} />

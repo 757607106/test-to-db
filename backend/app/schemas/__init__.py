@@ -89,3 +89,30 @@ from app.schemas.prediction import (
     PredictionColumnsResponse,
 )
 
+# 指标库
+from app.schemas.metric import (
+    MetricBase,
+    MetricCreate,
+    MetricUpdate,
+    Metric,
+    MetricWithContext,
+    ColumnProfile,
+    TableProfile,
+    SemanticQuery,
+    SemanticQueryResult,
+    MetricAlertBase,
+    MetricAlertCreate,
+    MetricAlertUpdate,
+    MetricAlert,
+    AlertCheckResult,
+)
+
+# JOIN 规则
+from app.schemas.join_rule import (
+    JoinRuleBase,
+    JoinRuleCreate,
+    JoinRuleUpdate,
+    JoinRule,
+    JoinRuleContext,
+)
+
