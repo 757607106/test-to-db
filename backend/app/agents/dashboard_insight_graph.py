@@ -60,6 +60,8 @@ class DashboardInsightState(TypedDict):
     error_history: List[Dict[str, Any]]
     retry_count: int
     max_retries: int
+    # P0: 数据溯源字段
+    lineage: Optional[Dict[str, Any]]
 
 
 # ============================================================================
@@ -259,7 +261,7 @@ async def relationship_analyzer_node(state: DashboardInsightState) -> Dict[str, 
 
 
 async def sql_generator_node(state: DashboardInsightState) -> Dict[str, Any]:
-    """SQL 生成：复用 sql_generator_agent"""
+    """SQL 生成：复用 sql_generator_agent，收集溯源信息"""
     logger.info("[Worker] sql_generator 开始执行")
     start_time = time.time()
     
@@ -280,7 +282,28 @@ async def sql_generator_node(state: DashboardInsightState) -> Dict[str, Any]:
         elapsed_ms = int((time.time() - start_time) * 1000)
         logger.info(f"[Worker] sql_generator 完成, 耗时 {elapsed_ms}ms")
         
-        return {"generated_sql": generated_sql, "current_stage": "sql_generated"}
+        # P0: 收集SQL生成溯源信息
+        enriched_schema = state.get("enriched_schema", {})
+        source_tables = [t.get("name", "") for t in enriched_schema.get("tables", [])]
+        
+        lineage = state.get("lineage") or {}
+        lineage.update({
+            "source_tables": source_tables,
+            "generated_sql": generated_sql,
+            "sql_generation_trace": {
+                "user_intent": state.get("user_intent"),
+                "schema_tables_used": source_tables,
+                "few_shot_samples_count": result.get("sample_retrieval_result", {}).get("samples_count", 0),
+                "generation_method": "template" if result.get("template_based") else "standard",
+                "generation_time_ms": elapsed_ms,
+            }
+        })
+        
+        return {
+            "generated_sql": generated_sql,
+            "current_stage": "sql_generated",
+            "lineage": lineage
+        }
         
     except Exception as e:
         logger.error(f"[Worker] sql_generator 失败: {e}")
@@ -327,7 +350,7 @@ async def sql_validator_node(state: DashboardInsightState) -> Dict[str, Any]:
 
 
 async def sql_executor_node(state: DashboardInsightState) -> Dict[str, Any]:
-    """SQL 执行：复用 execute_sql_query 工具"""
+    """SQL 执行：复用 execute_sql_query 工具，收集执行元数据"""
     logger.info("[Worker] sql_executor 开始执行")
     start_time = time.time()
     
@@ -356,12 +379,21 @@ async def sql_executor_node(state: DashboardInsightState) -> Dict[str, Any]:
         result = json.loads(result_json)
         elapsed_ms = int((time.time() - start_time) * 1000)
         
+        # P0: 收集执行元数据到 lineage
+        lineage = state.get("lineage") or {}
+        lineage["execution_metadata"] = {
+            "execution_time_ms": elapsed_ms,
+            "from_cache": result.get("from_cache", False),
+            "row_count": result.get("data", {}).get("row_count", 0) if result.get("success") else 0,
+            "db_type": state.get("db_type", "MYSQL"),
+            "connection_id": connection_id,
+        }
+        
         if result.get("success"):
             data = result.get("data", {})
             rows = data.get("data", [])
             columns = data.get("columns", [])
             
-            # 转换数据格式
             formatted_data = []
             for row in rows:
                 if isinstance(row, list) and len(row) == len(columns):
@@ -377,7 +409,8 @@ async def sql_executor_node(state: DashboardInsightState) -> Dict[str, Any]:
                     "row_count": len(formatted_data),
                     "from_cache": result.get("from_cache", False)
                 },
-                "current_stage": "execution_done"
+                "current_stage": "execution_done",
+                "lineage": lineage
             }
         else:
             raise Exception(result.get("error", "SQL 执行失败"))
@@ -505,8 +538,20 @@ async def supervisor_node(state: DashboardInsightState) -> Dict[str, Any]:
 
 
 def _aggregate_final_response(state: DashboardInsightState) -> Dict[str, Any]:
-    """汇总最终响应"""
+    """汇总最终响应，包含数据溯源信息"""
     execution_result = state.get("execution_result", {})
+    lineage = state.get("lineage") or {}
+    
+    # 补充数据转换步骤描述
+    data_transformations = []
+    if lineage.get("source_tables"):
+        data_transformations.append(f"从 {len(lineage['source_tables'])} 个表获取数据")
+    if lineage.get("generated_sql"):
+        data_transformations.append("执行SQL查询")
+    if execution_result.get("success"):
+        data_transformations.append("数据格式化与聚合")
+        data_transformations.append("洞察分析与指标提取")
+    lineage["data_transformations"] = data_transformations
     
     final_response = {
         "success": execution_result.get("success", False),
@@ -515,6 +560,7 @@ def _aggregate_final_response(state: DashboardInsightState) -> Dict[str, Any]:
         "insights": state.get("insights"),
         "enriched_schema": state.get("enriched_schema"),
         "relationship_context": state.get("relationship_context"),
+        "lineage": lineage,
         "metadata": {
             "connection_id": state.get("connection_id"),
             "db_type": state.get("db_type"),
@@ -527,7 +573,7 @@ def _aggregate_final_response(state: DashboardInsightState) -> Dict[str, Any]:
         if error_history:
             final_response["error"] = error_history[-1].get("error")
     
-    logger.info("[Supervisor] 结果汇总完成")
+    logger.info("[Supervisor] 结果汇总完成（含溯源信息）")
     return {"final_response": final_response, "current_stage": "completed"}
 
 
@@ -665,7 +711,8 @@ async def analyze_dashboard(
         error=None,
         error_history=[],
         retry_count=0,
-        max_retries=2
+        max_retries=2,
+        lineage=None
     )
     
     result = await dashboard_insight_graph.ainvoke(initial_state)
@@ -673,6 +720,7 @@ async def analyze_dashboard(
     return result.get("final_response", {
         "insights": result.get("insights"),
         "relationship_context": result.get("relationship_context"),
+        "lineage": result.get("lineage"),
         "error": result.get("error")
     })
 

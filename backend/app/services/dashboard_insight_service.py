@@ -159,23 +159,36 @@ SQL 语法注意事项（{db_type}）：
 数据库结构：
 {schema_str}
 
+挖掘维度要求（请覆盖多个维度）：
+- business（业务数据）：核心业务指标、KPI
+- metric（指标分析）：关键数值的统计分布
+- trend（趋势分析）：时间序列变化
+- semantic（语义关联）：基于字段语义发现的关联分析
+
 要求：
-1. 推荐的 SQL 必须是合法的 {db_type} SELECT 语句。
-2. 图表类型从以下选择：bar, line, pie, scatter, table。
-3. 每个推荐都要有明确的业务价值。
-4. SQL 尽量包含聚合分析（SUM, COUNT, AVG, GROUP BY）。
-5. 不要使用未知的表或列。
-6. 严格遵循 {db_type} 的 SQL 语法规范。
+1. 推荐的 SQL 必须是合法的 {db_type} SELECT 语句
+2. 图表类型从以下选择：bar, line, pie, scatter, table
+3. 每个推荐都要有明确的业务价值和推荐理由
+4. SQL 尽量包含聚合分析（SUM, COUNT, AVG, GROUP BY）
+5. 不要使用未知的表或列
+6. 严格遵循 {db_type} 的 SQL 语法规范
 
 请以 JSON 格式返回，格式如下：
 {{
   "suggestions": [
     {{
       "title": "图表标题",
-      "description": "图表描述和业务价值",
+      "description": "简短描述（一句话）",
+      "reasoning": "详细推荐理由：为什么这个分析对业务有价值，数据逻辑是什么",
+      "mining_dimension": "business|metric|trend|semantic",
+      "confidence": 0.85,
       "chart_type": "bar|line|pie|scatter|table",
       "sql": "SELECT ...",
-      "analysis_intent": "分析意图描述，如：销售趋势分析、客户分布统计等"
+      "source_tables": ["表名1", "表名2"],
+      "key_fields": ["关键字段1", "关键字段2"],
+      "business_value": "这个分析能帮助业务做什么决策",
+      "suggested_actions": ["建议动作1", "建议动作2"],
+      "analysis_intent": "分析意图描述"
     }}
   ]
 }}
@@ -211,7 +224,15 @@ SQL 语法注意事项（{db_type}）：
                     description=s.get("description", ""),
                     chart_type=s.get("chart_type", "bar"),
                     sql=s.get("sql", ""),
-                    analysis_intent=s.get("analysis_intent", s.get("title", "数据分析"))
+                    analysis_intent=s.get("analysis_intent", s.get("title", "数据分析")),
+                    # 增强字段
+                    reasoning=s.get("reasoning", s.get("description", "")),
+                    mining_dimension=s.get("mining_dimension", "business"),
+                    confidence=float(s.get("confidence", 0.8)),
+                    source_tables=s.get("source_tables", []),
+                    key_fields=s.get("key_fields", []),
+                    business_value=s.get("business_value", ""),
+                    suggested_actions=s.get("suggested_actions", [])
                 )
                 for s in parsed.get("suggestions", [])
             ]
@@ -458,9 +479,10 @@ SQL 语法注意事项（{db_type}）：
         conditions: Optional[schemas.InsightConditions],
         use_graph_relationships: bool,
         analyzed_widget_count: int,
-        status: str = "completed"
+        status: str = "completed",
+        lineage: Optional[Dict[str, Any]] = None
     ) -> int:
-        """创建或更新洞察Widget"""
+        """创建或更新洞察Widget，保存溯源信息"""
         existing_widgets = crud.crud_dashboard_widget.get_by_dashboard(db, dashboard_id=dashboard_id)
         
         insight_widget = None
@@ -469,6 +491,7 @@ SQL 语法注意事项（{db_type}）：
                 insight_widget = widget
                 break
         
+        # P0: 将溯源信息合并到 query_config
         query_config = {
             "analysis_scope": "all_widgets",
             "analysis_dimensions": ["summary", "trends", "correlations", "recommendations"],
@@ -476,11 +499,26 @@ SQL 语法注意事项（{db_type}）：
             "last_analysis_at": datetime.utcnow().isoformat(),
             "use_graph_relationships": use_graph_relationships,
             "analyzed_widget_count": analyzed_widget_count,
-            "status": status # 状态
+            "status": status,
         }
         
         if conditions:
             query_config["current_conditions"] = conditions.dict(exclude_none=True)
+        
+        # P0: 保存溯源信息
+        if lineage:
+            query_config["source_tables"] = lineage.get("source_tables", [])
+            query_config["generated_sql"] = lineage.get("generated_sql")
+            query_config["user_intent"] = lineage.get("sql_generation_trace", {}).get("user_intent")
+            query_config["few_shot_samples_count"] = lineage.get("sql_generation_trace", {}).get("few_shot_samples_count", 0)
+            query_config["generation_method"] = lineage.get("sql_generation_trace", {}).get("generation_method", "standard")
+            query_config["execution_time_ms"] = lineage.get("execution_metadata", {}).get("execution_time_ms", 0)
+            query_config["from_cache"] = lineage.get("execution_metadata", {}).get("from_cache", False)
+            query_config["row_count"] = lineage.get("execution_metadata", {}).get("row_count", 0)
+            query_config["db_type"] = lineage.get("execution_metadata", {}).get("db_type")
+            query_config["data_transformations"] = lineage.get("data_transformations", [])
+            query_config["confidence_score"] = lineage.get("confidence_score", 0.8)
+            query_config["analysis_method"] = lineage.get("analysis_method", "auto")
         
         data_cache = insights.dict(exclude_none=True)
         

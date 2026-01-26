@@ -66,6 +66,15 @@ import { AddWidgetForm } from '../components/AddWidgetForm';
 import { SmartChart, SmartChartAction } from '../components/SmartChart';
 import { ChartConfigPanel, ChartConfig } from '../components/ChartConfigPanel';
 import { GuidedMiningWizard } from '../components/GuidedMiningWizard';
+// P0/P1/P2 新功能组件
+import { RefreshControlPanel } from '../components/RefreshControlPanel';
+import { InsightLineagePanel } from '../components/InsightLineagePanel';
+import { PredictionConfigPanel } from '../components/PredictionConfigPanel';
+import { PredictionChart } from '../components/PredictionChart';
+import { useAutoRefresh } from '../hooks/useAutoRefresh';
+import { predictionService } from '../services/predictionService';
+import type { RefreshConfig, GlobalRefreshResponse, InsightLineage, EnhancedInsightResponse } from '../types/dashboard';
+import type { PredictionResult, PredictionRequest, PredictionColumnsResponse } from '../types/prediction';
 
 const ReactGridLayout = WidthProvider(GridLayout);
 
@@ -218,6 +227,24 @@ const DashboardEditorPage: React.FC = () => {
   
   // 字段映射表 (英文名 -> 中文名)
   const [fieldMap, setFieldMap] = useState<Record<string, string>>({});
+  
+  // P1: 刷新配置状态
+  const [refreshConfig, setRefreshConfig] = useState<RefreshConfig>({
+    enabled: false,
+    intervalSeconds: 300,
+    autoRefreshWidgetIds: [],
+  });
+  const [isGlobalRefreshing, setIsGlobalRefreshing] = useState<boolean>(false);
+  
+  // P0: 溯源面板状态
+  const [lineagePanelVisible, setLineagePanelVisible] = useState<boolean>(false);
+  const [currentLineage, setCurrentLineage] = useState<InsightLineage | null>(null);
+  
+  // P2: 预测面板状态
+  const [predictionPanelVisible, setPredictionPanelVisible] = useState<boolean>(false);
+  const [predictionWidget, setPredictionWidget] = useState<Widget | null>(null);
+  const [predictionResult, setPredictionResult] = useState<PredictionResult | null>(null);
+  const [isPredicting, setIsPredicting] = useState<boolean>(false);
 
   // Widget 引用
   const widgetRefs = React.useRef<Record<number, SmartChartAction | null>>({});
@@ -229,8 +256,98 @@ const DashboardEditorPage: React.FC = () => {
   useEffect(() => {
     if (dashboardId) {
       fetchDashboard();
+      fetchRefreshConfig();
     }
   }, [dashboardId]);
+
+  // P1: 加载刷新配置
+  const fetchRefreshConfig = async () => {
+    try {
+      const config = await dashboardService.getRefreshConfig(dashboardId);
+      setRefreshConfig(config);
+    } catch (error) {
+      console.error('获取刷新配置失败:', error);
+    }
+  };
+
+  // P1: 全局刷新处理
+  const handleGlobalRefresh = async (force: boolean): Promise<GlobalRefreshResponse> => {
+    setIsGlobalRefreshing(true);
+    try {
+      const result = await dashboardService.globalRefresh(dashboardId, { force });
+      // 刷新完成后重新加载dashboard数据
+      await fetchDashboard();
+      return result;
+    } finally {
+      setIsGlobalRefreshing(false);
+    }
+  };
+
+  // P1: 更新刷新配置
+  const handleRefreshConfigChange = async (config: RefreshConfig): Promise<void> => {
+    const updatedConfig = await dashboardService.updateRefreshConfig(dashboardId, config);
+    setRefreshConfig(updatedConfig);
+  };
+
+  // P1: 使用自动刷新Hook
+  const {
+    isRefreshing: isAutoRefreshing,
+    lastRefreshTime,
+    nextRefreshIn,
+    manualRefresh,
+    pauseAutoRefresh,
+    resumeAutoRefresh,
+    isPaused,
+  } = useAutoRefresh({
+    dashboardId,
+    config: refreshConfig,
+    onRefresh: async () => {
+      await handleGlobalRefresh(false);
+    },
+    enabled: refreshConfig.enabled,
+  });
+
+  // P0: 获取洞察溯源数据
+  const handleViewLineage = async (widgetId?: number) => {
+    try {
+      const response = await dashboardService.getInsightDetail(dashboardId, widgetId);
+      setCurrentLineage(response.lineage);
+      setLineagePanelVisible(true);
+    } catch (error) {
+      message.error('获取溯源数据失败');
+      console.error(error);
+    }
+  };
+
+  // P2: 打开预测面板
+  const handleOpenPrediction = (widget: Widget) => {
+    setPredictionWidget(widget);
+    setPredictionResult(null);
+    setPredictionPanelVisible(true);
+  };
+
+  // P2: 执行预测
+  const handlePredict = async (config: PredictionRequest) => {
+    setIsPredicting(true);
+    try {
+      const result = await predictionService.createPrediction(dashboardId, config);
+      setPredictionResult(result);
+      message.success('预测分析完成');
+    } catch (error) {
+      message.error('预测分析失败');
+      console.error(error);
+    } finally {
+      setIsPredicting(false);
+    }
+  };
+
+  // P2: 加载预测列
+  const handleLoadPredictionColumns = async (): Promise<PredictionColumnsResponse> => {
+    if (!predictionWidget) {
+      return { dateColumns: [], valueColumns: [] };
+    }
+    return await predictionService.getPredictionColumns(predictionWidget.id);
+  };
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -635,6 +752,7 @@ const DashboardEditorPage: React.FC = () => {
             setCurrentInsightWidget(widget);
             setConditionPanelVisible(true);
           }}
+          onViewLineage={() => handleViewLineage(widget.id)}
         />
       );
     }
@@ -651,6 +769,12 @@ const DashboardEditorPage: React.FC = () => {
         icon: <SettingOutlined />,
         label: '图表配置',
         onClick: () => handleOpenChartConfig(widget),
+      },
+      {
+        key: 'prediction',
+        icon: <BulbOutlined />,
+        label: '数据预测',
+        onClick: () => handleOpenPrediction(widget),
       },
       {
         key: 'detail',
@@ -923,6 +1047,22 @@ const DashboardEditorPage: React.FC = () => {
           <span>更新时间: {new Date(dashboard.updated_at).toLocaleString()}</span>
           {isLayoutDirty && <Badge status="warning" text="布局未保存" />}
         </div>
+
+        {/* P1: 刷新控制面板 */}
+        <div style={{ marginTop: 16 }}>
+          <RefreshControlPanel
+            dashboardId={dashboardId}
+            config={refreshConfig}
+            onConfigChange={handleRefreshConfigChange}
+            onGlobalRefresh={handleGlobalRefresh}
+            isRefreshing={isGlobalRefreshing || isAutoRefreshing}
+            lastRefreshTime={lastRefreshTime}
+            nextRefreshIn={nextRefreshIn}
+            isPaused={isPaused}
+            onPause={pauseAutoRefresh}
+            onResume={resumeAutoRefresh}
+          />
+        </div>
       </div>
       )}
 
@@ -1143,6 +1283,73 @@ const DashboardEditorPage: React.FC = () => {
           fetchDashboard();
         }}
       />
+
+      {/* P0: 数据溯源面板 */}
+      <Modal
+        title="数据溯源"
+        open={lineagePanelVisible}
+        onCancel={() => {
+          setLineagePanelVisible(false);
+          setCurrentLineage(null);
+        }}
+        footer={[
+          <Button key="close" onClick={() => setLineagePanelVisible(false)}>
+            关闭
+          </Button>,
+        ]}
+        width={700}
+      >
+        {currentLineage && (
+          <InsightLineagePanel
+            lineage={currentLineage}
+            onViewTables={(tables) => {
+              message.info(`查看表: ${tables.join(', ')}`);
+            }}
+          />
+        )}
+      </Modal>
+
+      {/* P2: 数据预测面板 */}
+      <Modal
+        title="数据预测分析"
+        open={predictionPanelVisible}
+        onCancel={() => {
+          setPredictionPanelVisible(false);
+          setPredictionWidget(null);
+          setPredictionResult(null);
+        }}
+        footer={null}
+        width={predictionResult ? 1000 : 500}
+        styles={{ body: { maxHeight: '80vh', overflow: 'auto' } }}
+      >
+        <div style={{ display: 'flex', gap: 20 }}>
+          {/* 左侧：配置面板 */}
+          <div style={{ width: predictionResult ? 300 : '100%', flexShrink: 0 }}>
+            {predictionWidget && (
+              <PredictionConfigPanel
+                widgetId={predictionWidget.id}
+                dashboardId={dashboardId}
+                onPredict={handlePredict}
+                onLoadColumns={handleLoadPredictionColumns}
+                isLoading={isPredicting}
+              />
+            )}
+          </div>
+          
+          {/* 右侧：结果图表 */}
+          {predictionResult && (
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <PredictionChart
+                result={predictionResult}
+                showConfidenceInterval={true}
+                onExport={() => {
+                  message.success('导出功能开发中');
+                }}
+              />
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 };

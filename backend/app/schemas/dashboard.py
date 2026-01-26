@@ -116,3 +116,38 @@ class PermissionResponse(PermissionBase):
 class PermissionListResponse(BaseModel):
     """权限列表响应Schema"""
     permissions: List[PermissionResponse]
+
+
+# ===== P1: 动态刷新机制Schema =====
+
+class RefreshConfig(BaseModel):
+    """刷新配置"""
+    enabled: bool = Field(False, description="是否启用自动刷新")
+    interval_seconds: int = Field(300, ge=30, le=86400, description="刷新间隔(秒), 30秒-24小时")
+    auto_refresh_widget_ids: List[int] = Field(default_factory=list, description="启用自动刷新的Widget ID")
+    last_global_refresh: Optional[datetime] = Field(None, description="上次全局刷新时间")
+
+
+class GlobalRefreshRequest(BaseModel):
+    """全局刷新请求"""
+    force: bool = Field(False, description="强制刷新(忽略缓存)")
+    widget_ids: Optional[List[int]] = Field(None, description="指定刷新的Widget ID, 为空则刷新全部")
+
+
+class WidgetRefreshResult(BaseModel):
+    """单个Widget刷新结果"""
+    widget_id: int
+    success: bool
+    duration_ms: int = 0
+    error: Optional[str] = None
+    from_cache: bool = False
+    row_count: int = 0
+
+
+class GlobalRefreshResponse(BaseModel):
+    """全局刷新响应"""
+    success_count: int = Field(..., description="成功刷新的Widget数量")
+    failed_count: int = Field(..., description="刷新失败的Widget数量")
+    results: Dict[int, WidgetRefreshResult] = Field(default_factory=dict, description="各Widget刷新结果")
+    total_duration_ms: int = Field(..., description="总耗时(毫秒)")
+    refresh_timestamp: datetime = Field(default_factory=datetime.utcnow, description="刷新时间戳")

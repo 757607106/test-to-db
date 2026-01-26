@@ -31,7 +31,12 @@ from app.schemas.dashboard import (
     PermissionCreate,
     PermissionUpdate,
     PermissionResponse,
-    PermissionListResponse
+    PermissionListResponse,
+    # P1: 刷新机制
+    RefreshConfig,
+    GlobalRefreshRequest,
+    WidgetRefreshResult,
+    GlobalRefreshResponse,
 )
 from app.schemas.dashboard_widget import (
     WidgetBase,
@@ -63,7 +68,24 @@ from app.schemas.dashboard_insight import (
     MiningRequest,
     MiningResponse,
     MiningSuggestion,
-    ApplyMiningRequest
+    ApplyMiningRequest,
+    MiningDimension,
+    # P0: 数据溯源
+    ExecutionMetadata,
+    SqlGenerationTrace,
+    InsightLineage,
+    EnhancedInsightResponse,
 )
 from app.schemas.agent_message import ToolResponse, SQLGenerationResult
+
+# P2: 预测分析
+from app.schemas.prediction import (
+    PredictionMethod,
+    PredictionRequest,
+    PredictionDataPoint,
+    AccuracyMetrics,
+    TrendAnalysis,
+    PredictionResult,
+    PredictionColumnsResponse,
+)
 

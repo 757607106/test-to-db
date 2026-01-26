@@ -14,6 +14,7 @@ import {
   UpOutlined,
   DownOutlined,
   LinkOutlined,
+  NodeIndexOutlined,
 } from '@ant-design/icons';
 import type { InsightResult } from '../types/dashboard';
 
@@ -26,6 +27,7 @@ interface DashboardInsightWidgetProps {
   loading?: boolean;
   onRefresh?: () => void;
   onOpenConditionPanel?: () => void;
+  onViewLineage?: () => void;
   className?: string;
 }
 
@@ -35,6 +37,7 @@ export const DashboardInsightWidget: React.FC<DashboardInsightWidgetProps> = ({
   loading = false,
   onRefresh,
   onOpenConditionPanel,
+  onViewLineage,
   className,
 }) => {
   const [isExpanded, setIsExpanded] = useState(true);
@@ -99,6 +102,21 @@ export const DashboardInsightWidget: React.FC<DashboardInsightWidgetProps> = ({
           </Title>
         </div>
         <Space>
+          {onViewLineage && (
+            <Button
+              size="small"
+              icon={<NodeIndexOutlined />}
+              onClick={onViewLineage}
+              style={{
+                background: 'rgba(255,255,255,0.15)',
+                color: 'white',
+                border: '1px solid rgba(255,255,255,0.2)',
+                borderRadius: 8,
+              }}
+            >
+              数据溯源
+            </Button>
+          )}
           {onOpenConditionPanel && (
             <Button
               size="small"

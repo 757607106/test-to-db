@@ -24,6 +24,10 @@ import type {
   AIChartRecommendRequest,
   AIChartRecommendResponse,
   ChartConfig,
+  EnhancedInsightResponse,
+  RefreshConfig,
+  GlobalRefreshRequest,
+  GlobalRefreshResponse,
 } from '../types/dashboard';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
@@ -121,16 +125,58 @@ export const dashboardService = {
     return response.data;
   },
 
+  // P0: 获取洞察详情（含数据溯源）
+  async getInsightDetail(
+    dashboardId: number,
+    widgetId?: number
+  ): Promise<EnhancedInsightResponse> {
+    const params = widgetId ? { widget_id: widgetId } : {};
+    const response = await api.get(`/dashboards/${dashboardId}/insights/detail`, { params });
+    // 转换后端snake_case为前端camelCase
+    const data = response.data;
+    return {
+      widgetId: data.widget_id,
+      insights: data.insights,
+      lineage: {
+        sourceTables: data.lineage?.source_tables || [],
+        generatedSql: data.lineage?.generated_sql,
+        sqlGenerationTrace: {
+          userIntent: data.lineage?.sql_generation_trace?.user_intent,
+          schemaTablesUsed: data.lineage?.sql_generation_trace?.schema_tables_used || [],
+          fewShotSamplesCount: data.lineage?.sql_generation_trace?.few_shot_samples_count || 0,
+          generationMethod: data.lineage?.sql_generation_trace?.generation_method || 'standard',
+          generationTimeMs: data.lineage?.sql_generation_trace?.generation_time_ms,
+        },
+        executionMetadata: {
+          executionTimeMs: data.lineage?.execution_metadata?.execution_time_ms || 0,
+          fromCache: data.lineage?.execution_metadata?.from_cache || false,
+          rowCount: data.lineage?.execution_metadata?.row_count || 0,
+          dbType: data.lineage?.execution_metadata?.db_type,
+          connectionId: data.lineage?.execution_metadata?.connection_id,
+        },
+        dataTransformations: data.lineage?.data_transformations || [],
+        schemaContext: data.lineage?.schema_context,
+      },
+      confidenceScore: data.confidence_score || 0.8,
+      analysisMethod: data.analysis_method || 'auto',
+      analyzedWidgetCount: data.analyzed_widget_count || 0,
+      relationshipCount: data.relationship_count || 0,
+      generatedAt: data.generated_at,
+      status: data.status || 'completed',
+    };
+  },
+
   // 生成智能挖掘建议
   async generateMiningSuggestions(
     dashboardId: number,
     connectionId: number,
-    intent?: string
+    intent?: string,
+    limit?: number
   ): Promise<{ suggestions: any[] }> {
     const response = await api.post(`/dashboards/${dashboardId}/mining/suggestions`, {
       connection_id: connectionId,
       intent,
-      limit: 5
+      limit: limit || 10
     });
     return response.data;
   },
@@ -146,6 +192,73 @@ export const dashboardService = {
       suggestions
     });
     return response.data;
+  },
+
+  // P1: 获取刷新配置
+  async getRefreshConfig(dashboardId: number): Promise<RefreshConfig> {
+    const response = await api.get(`/dashboards/${dashboardId}/refresh/config`);
+    const data = response.data;
+    return {
+      enabled: data.enabled || false,
+      intervalSeconds: data.interval_seconds || 300,
+      autoRefreshWidgetIds: data.auto_refresh_widget_ids || [],
+      lastGlobalRefresh: data.last_global_refresh,
+    };
+  },
+
+  // P1: 更新刷新配置
+  async updateRefreshConfig(
+    dashboardId: number,
+    config: RefreshConfig
+  ): Promise<RefreshConfig> {
+    const response = await api.put(`/dashboards/${dashboardId}/refresh/config`, {
+      enabled: config.enabled,
+      interval_seconds: config.intervalSeconds,
+      auto_refresh_widget_ids: config.autoRefreshWidgetIds,
+    });
+    const data = response.data;
+    return {
+      enabled: data.enabled || false,
+      intervalSeconds: data.interval_seconds || 300,
+      autoRefreshWidgetIds: data.auto_refresh_widget_ids || [],
+      lastGlobalRefresh: data.last_global_refresh,
+    };
+  },
+
+  // P1: 全局刷新
+  async globalRefresh(
+    dashboardId: number,
+    request: GlobalRefreshRequest
+  ): Promise<GlobalRefreshResponse> {
+    const response = await api.post(`/dashboards/${dashboardId}/refresh/global`, {
+      force: request.force,
+      widget_ids: request.widgetIds,
+    });
+    const data = response.data;
+    
+    // 转换results中的key和value
+    const results: Record<number, any> = {};
+    if (data.results) {
+      for (const [key, value] of Object.entries(data.results)) {
+        const v = value as any;
+        results[parseInt(key)] = {
+          widgetId: v.widget_id,
+          success: v.success,
+          durationMs: v.duration_ms || 0,
+          error: v.error,
+          fromCache: v.from_cache || false,
+          rowCount: v.row_count || 0,
+        };
+      }
+    }
+    
+    return {
+      successCount: data.success_count || 0,
+      failedCount: data.failed_count || 0,
+      results,
+      totalDurationMs: data.total_duration_ms || 0,
+      refreshTimestamp: data.refresh_timestamp,
+    };
   },
 };
 

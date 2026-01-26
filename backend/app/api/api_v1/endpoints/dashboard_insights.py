@@ -1,13 +1,85 @@
 """Dashboard洞察分析API端点"""
-from typing import Any
+from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.api import deps
-from app import schemas
+from app import schemas, crud
 from app.services.dashboard_insight_service import dashboard_insight_service
 
 router = APIRouter()
+
+
+@router.get("/dashboards/{dashboard_id}/insights/detail")
+def get_insight_detail(
+    *,
+    db: Session = Depends(deps.get_db),
+    dashboard_id: int,
+    widget_id: Optional[int] = None,
+    current_user_id: int = 1
+) -> Any:
+    """获取洞察详情（含数据溯源）- P0功能"""
+    try:
+        # 检查权限
+        has_permission = crud.crud_dashboard.check_permission(
+            db, dashboard_id=dashboard_id, user_id=current_user_id, required_level="viewer"
+        )
+        if not has_permission:
+            raise HTTPException(status_code=403, detail="No permission to view this dashboard")
+        
+        # 获取洞察Widget
+        widgets = crud.crud_dashboard_widget.get_by_dashboard(db, dashboard_id=dashboard_id)
+        insight_widgets = [w for w in widgets if w.widget_type == "insight_analysis"]
+        
+        if widget_id:
+            insight_widgets = [w for w in insight_widgets if w.id == widget_id]
+        
+        if not insight_widgets:
+            raise HTTPException(status_code=404, detail="Insight widget not found")
+        
+        widget = insight_widgets[0]
+        data_cache = widget.data_cache or {}
+        query_config = widget.query_config or {}
+        
+        # 构建溯源信息
+        lineage = {
+            "source_tables": query_config.get("source_tables", []),
+            "generated_sql": query_config.get("generated_sql"),
+            "sql_generation_trace": {
+                "user_intent": query_config.get("user_intent"),
+                "schema_tables_used": query_config.get("source_tables", []),
+                "few_shot_samples_count": query_config.get("few_shot_samples_count", 0),
+                "generation_method": query_config.get("generation_method", "standard"),
+            },
+            "execution_metadata": {
+                "execution_time_ms": query_config.get("execution_time_ms", 0),
+                "from_cache": query_config.get("from_cache", False),
+                "row_count": query_config.get("row_count", 0),
+                "db_type": query_config.get("db_type"),
+                "connection_id": widget.connection_id,
+            },
+            "data_transformations": query_config.get("data_transformations", []),
+            "schema_context": query_config.get("schema_context"),
+        }
+        
+        return {
+            "widget_id": widget.id,
+            "insights": data_cache,
+            "lineage": lineage,
+            "confidence_score": query_config.get("confidence_score", 0.8),
+            "analysis_method": query_config.get("analysis_method", "auto"),
+            "analyzed_widget_count": query_config.get("analyzed_widget_count", 0),
+            "relationship_count": query_config.get("relationship_count", 0),
+            "generated_at": widget.last_refresh_at,
+            "status": query_config.get("status", "completed"),
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取洞察详情失败: {str(e)}")
 
 
 @router.post("/dashboards/{dashboard_id}/insights", response_model=schemas.DashboardInsightResponse)

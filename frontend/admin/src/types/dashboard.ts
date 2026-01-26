@@ -7,6 +7,78 @@ export interface UserSimple {
   avatar_url?: string;
 }
 
+// ===== P0: 数据溯源类型定义 =====
+
+export interface ExecutionMetadata {
+  executionTimeMs: number;
+  fromCache: boolean;
+  rowCount: number;
+  dbType?: string;
+  connectionId?: number;
+}
+
+export interface SqlGenerationTrace {
+  userIntent?: string;
+  schemaTablesUsed: string[];
+  fewShotSamplesCount: number;
+  generationMethod: 'standard' | 'template' | 'cache';
+  generationTimeMs?: number;
+}
+
+export interface InsightLineage {
+  sourceTables: string[];
+  generatedSql?: string;
+  sqlGenerationTrace: SqlGenerationTrace;
+  executionMetadata: ExecutionMetadata;
+  dataTransformations: string[];
+  schemaContext?: Record<string, any>;
+}
+
+export interface EnhancedInsightResponse {
+  widgetId: number;
+  insights: InsightResult;
+  lineage: InsightLineage;
+  confidenceScore: number;
+  analysisMethod: string;
+  analyzedWidgetCount: number;
+  relationshipCount: number;
+  generatedAt: string;
+  status: 'processing' | 'completed' | 'failed';
+}
+
+// ===== P1: 动态刷新类型定义 =====
+
+export interface RefreshConfig {
+  enabled: boolean;
+  intervalSeconds: number;
+  autoRefreshWidgetIds: number[];
+  lastGlobalRefresh?: string;
+}
+
+export interface GlobalRefreshRequest {
+  force: boolean;
+  widgetIds?: number[];
+}
+
+export interface WidgetRefreshResult {
+  widgetId: number;
+  success: boolean;
+  durationMs: number;
+  error?: string;
+  fromCache: boolean;
+  rowCount: number;
+}
+
+export interface GlobalRefreshResponse {
+  successCount: number;
+  failedCount: number;
+  results: Record<number, WidgetRefreshResult>;
+  totalDurationMs: number;
+  refreshTimestamp: string;
+}
+
+// ===== Dashboard 基础类型 =====
+
 export interface Dashboard {
   id: number;
   name: string;

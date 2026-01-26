@@ -7,9 +7,11 @@ from app.api import deps
 from app.schemas.dashboard import (
     DashboardCreate, DashboardUpdate,
     DashboardListResponse, DashboardDetail,
-    LayoutUpdateRequest
+    LayoutUpdateRequest,
+    RefreshConfig, GlobalRefreshRequest, GlobalRefreshResponse
 )
 from app.services.dashboard_service import dashboard_service
+from app.services.dashboard_refresh_service import dashboard_refresh_service
 
 router = APIRouter()
 
@@ -150,3 +152,81 @@ def update_dashboard_layout(
         raise HTTPException(status_code=404, detail="Dashboard not found or no permission")
     
     return {"message": "Layout updated successfully"}
+
+
+# ===== P1: 动态刷新机制API =====
+
+@router.get("/{dashboard_id}/refresh/config", response_model=RefreshConfig)
+def get_refresh_config(
+    *,
+    db: Session = Depends(deps.get_db),
+    dashboard_id: int,
+    current_user_id: int = 1
+) -> Any:
+    """获取Dashboard的刷新配置"""
+    from app import crud
+    
+    # 检查权限
+    has_permission = crud.crud_dashboard.check_permission(
+        db, dashboard_id=dashboard_id, user_id=current_user_id, required_level="viewer"
+    )
+    if not has_permission:
+        raise HTTPException(status_code=403, detail="No permission")
+    
+    return dashboard_refresh_service.get_refresh_config(db, dashboard_id)
+
+
+@router.put("/{dashboard_id}/refresh/config", response_model=RefreshConfig)
+def update_refresh_config(
+    *,
+    db: Session = Depends(deps.get_db),
+    dashboard_id: int,
+    config: RefreshConfig,
+    current_user_id: int = 1
+) -> Any:
+    """更新Dashboard的刷新配置"""
+    from app import crud
+    
+    # 检查权限(需要编辑权限)
+    has_permission = crud.crud_dashboard.check_permission(
+        db, dashboard_id=dashboard_id, user_id=current_user_id, required_level="editor"
+    )
+    if not has_permission:
+        raise HTTPException(status_code=403, detail="No permission to edit")
+    
+    try:
+        return dashboard_refresh_service.update_refresh_config(db, dashboard_id, config)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{dashboard_id}/refresh/global", response_model=GlobalRefreshResponse)
+async def global_refresh(
+    *,
+    db: Session = Depends(deps.get_db),
+    dashboard_id: int,
+    request: GlobalRefreshRequest,
+    current_user_id: int = 1
+) -> Any:
+    """全局刷新Dashboard的所有Widget"""
+    from app import crud
+    
+    # 检查权限
+    has_permission = crud.crud_dashboard.check_permission(
+        db, dashboard_id=dashboard_id, user_id=current_user_id, required_level="viewer"
+    )
+    if not has_permission:
+        raise HTTPException(status_code=403, detail="No permission")
+    
+    try:
+        result = await dashboard_refresh_service.global_refresh(
+            db,
+            dashboard_id=dashboard_id,
+            force=request.force,
+            widget_ids=request.widget_ids
+        )
+        return result
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"刷新失败: {str(e)}")
