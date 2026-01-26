@@ -73,3 +73,28 @@ class UserSimple(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# AI 图表推荐请求 Schema
+class AIChartRecommendRequest(BaseModel):
+    """AI图表推荐请求Schema"""
+    data_sample: Optional[Dict[str, Any]] = Field(None, description="数据样本")
+    intent: Optional[str] = Field(None, description="用户意图")
+
+
+# AI 图表推荐备选项
+class ChartAlternative(BaseModel):
+    """图表备选项"""
+    type: str
+    confidence: float
+    description: str
+
+
+# AI 图表推荐响应 Schema
+class AIChartRecommendResponse(BaseModel):
+    """AI图表推荐响应Schema"""
+    recommended_type: str = Field(..., description="推荐的图表类型")
+    confidence: float = Field(..., description="置信度 0-1")
+    reasoning: str = Field(..., description="推荐理由")
+    chart_config: Dict[str, Any] = Field(..., description="推荐的图表配置")
+    alternatives: Optional[list[ChartAlternative]] = Field(None, description="备选方案")
