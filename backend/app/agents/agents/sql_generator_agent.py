@@ -310,6 +310,15 @@ SQL: {sample.get('sql', '')}
         # 获取数据库特定语法规则
         db_rules_prompt = format_database_rules_prompt(db_type)
         
+        # 提取表名列表用于强约束
+        available_tables = []
+        if isinstance(schema_data, dict):
+            if "tables" in schema_data:
+                available_tables = [t.get("name") or t.get("table_name", "") for t in schema_data.get("tables", [])]
+            else:
+                available_tables = list(schema_data.keys())
+        available_tables_str = ", ".join(available_tables) if available_tables else "未知"
+        
         # 构建 SQL 生成提示
         prompt = f"""
 基于以下信息生成 SQL 查询：
@@ -322,15 +331,21 @@ SQL: {sample.get('sql', '')}
 {db_rules_prompt}
 {error_recovery_hint}
 
+【严格约束 - 必须遵守】
+⚠️ 只能使用以下表: {available_tables_str}
+⚠️ 禁止使用任何未在上述列表中的表名
+⚠️ 如果用户需要的数据在提供的表中不存在，请使用最接近的可用表
+
 请生成一个准确、高效的 SQL 查询语句。要求：
 1. 只返回 SQL 语句，不要其他解释
-2. 【最重要】必须严格遵守上述 {db_type.upper()} 数据库的语法规则
-3. 确保语法在目标数据库中完全有效
-4. 使用适当的连接和过滤条件
-5. 限制结果数量（除非用户明确要求全部数据）
-6. 使用正确的值映射
-7. 避免在子查询的 WHERE 子句中引用外部查询的列别名
-8. 如果需要关联子查询，确保正确使用表别名
+2. 【最重要】只能使用上面提供的表和字段，禁止虚构表名
+3. 【最重要】必须严格遵守上述 {db_type.upper()} 数据库的语法规则
+4. 确保语法在目标数据库中完全有效
+5. 使用适当的连接和过滤条件
+6. 限制结果数量（除非用户明确要求全部数据）
+7. 使用正确的值映射
+8. 避免在子查询的 WHERE 子句中引用外部查询的列别名
+9. 如果需要关联子查询，确保正确使用表别名
 """
         
         # 使用指数退避重试调用 LLM
@@ -602,7 +617,8 @@ class SQLGeneratorAgent:
             # 提取表名列表用于日志
             tables_data = schema_info.get("tables", {})
             if isinstance(tables_data, dict) and "tables" in tables_data:
-                table_names = [t.get("name", "") for t in tables_data.get("tables", [])]
+                # 兼容 "name" 和 "table_name" 两种键名
+                table_names = [t.get("name") or t.get("table_name", "") for t in tables_data.get("tables", [])]
             else:
                 table_names = list(tables_data.keys()) if isinstance(tables_data, dict) else []
             logger.info(f"使用 schema 信息生成 SQL, tables={table_names[:5]}{'...' if len(table_names) > 5 else ''}")

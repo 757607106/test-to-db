@@ -266,9 +266,10 @@ class SchemaAnalysisAgent:
                     if table_name not in table_columns_map:
                         table_columns_map[table_name] = []
                     table_columns_map[table_name].append({
-                        "name": col.get("column_name", ""),
-                        "type": col.get("data_type", ""),
-                        "comment": col.get("column_comment", "")
+                        # 兼容多种键名格式
+                        "name": col.get("name") or col.get("column_name", ""),
+                        "type": col.get("type") or col.get("data_type", ""),
+                        "comment": col.get("description") or col.get("column_comment", "")
                     })
                 
                 for table in tables_list:
@@ -330,17 +331,19 @@ class SchemaAnalysisAgent:
                     if table_name not in table_columns_map:
                         table_columns_map[table_name] = []
                     table_columns_map[table_name].append({
-                        "name": col.get("column_name", ""),
-                        "type": col.get("data_type", ""),
-                        "comment": col.get("column_comment", "")
+                        # 兼容多种键名格式
+                        "name": col.get("name") or col.get("column_name", ""),
+                        "type": col.get("type") or col.get("data_type", ""),
+                        "comment": col.get("description") or col.get("column_comment", "")
                     })
                 
                 # 构建表信息列表
                 for table in tables_list:
-                    table_name = table.get("table_name", "")
+                    # 兼容 "name" 和 "table_name" 两种键名
+                    table_name = table.get("name") or table.get("table_name", "")
                     schema_detail["tables"].append({
                         "name": table_name,
-                        "comment": table.get("table_comment", ""),
+                        "comment": table.get("description") or table.get("table_comment", ""),
                         "columns": table_columns_map.get(table_name, [])
                     })
                 

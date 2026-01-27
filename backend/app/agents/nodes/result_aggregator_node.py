@@ -60,6 +60,7 @@ async def result_aggregator_node(state: SQLMessageState) -> Dict[str, Any]:
             return {
                 "current_stage": "execution_done",
                 "multi_step_completed": True,
+                "multi_step_mode": False,  # 关键：关闭多步模式，防止无限循环
             }
         
         logger.info(f"开始聚合 {len(sub_task_results)} 个子任务结果")
@@ -101,6 +102,7 @@ async def result_aggregator_node(state: SQLMessageState) -> Dict[str, Any]:
             "aggregated_summary": summary,
             "current_stage": "execution_done",  # 进入 data_analyst
             "multi_step_completed": True,
+            "multi_step_mode": False,  # 关键：关闭多步模式，防止无限循环
             # 保存各子任务的 SQL 供展示
             "multi_step_sqls": [r.get("sql") for r in sub_task_results if r.get("sql")],
         }
@@ -126,11 +128,13 @@ async def result_aggregator_node(state: SQLMessageState) -> Dict[str, Any]:
                 "execution_result": last_result.get("execution_result"),
                 "current_stage": "execution_done",
                 "multi_step_completed": True,
+                "multi_step_mode": False,  # 关键：关闭多步模式，防止无限循环
             }
         
         return {
             "current_stage": "execution_done",
             "multi_step_completed": True,
+            "multi_step_mode": False,  # 关键：关闭多步模式，防止无限循环
         }
 
 
@@ -212,7 +216,8 @@ async def _generate_aggregation_summary(
     ]
     
     for ts in task_summaries:
-        summary_parts.append(f"  - {ts['task_id']}: {ts['task_query'][:50]}... ({ts['row_count']} 行)")
+        task_query = ts.get('task_query') or "未知任务"
+        summary_parts.append(f"  - {ts['task_id']}: {task_query[:50]}... ({ts['row_count']} 行)")
     
     summary_parts.append(f"总计: {aggregated_result.get('total_rows', 0)} 行数据")
     
