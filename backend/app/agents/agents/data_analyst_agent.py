@@ -248,19 +248,31 @@ class DataAnalystAgent:
     def _extract_result_data(self, execution_result) -> Dict[str, Any]:
         """从执行结果中提取数据"""
         if not execution_result:
+            logger.warning("execution_result 为空")
             return {"columns": [], "data": [], "row_count": 0}
         
+        # 支持 SQLExecutionResult 对象
         if hasattr(execution_result, 'data'):
             result_data = execution_result.data
+            logger.debug(f"从 SQLExecutionResult 提取数据, data 类型: {type(result_data)}")
         elif isinstance(execution_result, dict):
             result_data = execution_result.get("data", {})
+            logger.debug(f"从 dict 提取数据, data 类型: {type(result_data)}")
         else:
+            logger.warning(f"未知的 execution_result 类型: {type(execution_result)}")
             result_data = {}
         
         if isinstance(result_data, dict):
             columns = result_data.get("columns", [])
             raw_data = result_data.get("data", [])
             row_count = result_data.get("row_count", 0)
+            
+            # 如果 row_count 为 0 但 raw_data 有数据，使用 raw_data 的长度
+            if row_count == 0 and raw_data:
+                row_count = len(raw_data)
+                logger.info(f"row_count 为0但数据非空，使用实际数据长度: {row_count}")
+            
+            logger.info(f"数据提取完成: columns={len(columns)}, raw_data={len(raw_data)}, row_count={row_count}")
             
             # 将值列表转换为字典列表（如果需要）
             data = []
@@ -281,6 +293,7 @@ class DataAnalystAgent:
                 "row_count": row_count
             }
         
+        logger.warning(f"result_data 不是字典类型: {type(result_data)}")
         return {"columns": [], "data": [], "row_count": 0}
     
     def _precompute_statistics(self, columns: List[str], data: List[Dict]) -> Dict[str, Any]:

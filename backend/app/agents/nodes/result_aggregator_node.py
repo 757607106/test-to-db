@@ -88,10 +88,14 @@ async def result_aggregator_node(state: SQLMessageState) -> Dict[str, Any]:
         
         logger.info(f"结果聚合完成 [{elapsed_ms}ms]")
         
-        # 构建聚合后的执行结果
+        # 构建聚合后的执行结果 - 使用标准数据结构
         execution_result = SQLExecutionResult(
             success=True,
-            data=aggregated_result.get("merged_data", []),
+            data={
+                "columns": aggregated_result.get("columns", []),
+                "data": aggregated_result.get("merged_data", []),
+                "row_count": aggregated_result.get("total_rows", 0)
+            },
             error=None,
             execution_time=elapsed_ms / 1000,
             rows_affected=aggregated_result.get("total_rows", 0)
@@ -155,27 +159,42 @@ def _aggregate_results(sub_task_results: List[Dict[str, Any]]) -> Dict[str, Any]
         if not exec_result:
             continue
         
-        # 提取数据
-        data = None
-        if isinstance(exec_result, dict):
-            data = exec_result.get("data", [])
-        elif hasattr(exec_result, 'data'):
-            data = getattr(exec_result, 'data', [])
+        # 提取数据 - 支持多种结构
+        data_list = []
+        data_columns = []
         
-        if not data:
+        # 获取原始 data 字段
+        raw_data = None
+        if isinstance(exec_result, dict):
+            raw_data = exec_result.get("data", {})
+        elif hasattr(exec_result, 'data'):
+            raw_data = getattr(exec_result, 'data', {})
+        
+        # 解析 data 结构
+        if isinstance(raw_data, dict):
+            # 标准结构: {"columns": [...], "data": [...], "row_count": N}
+            data_columns = raw_data.get("columns", [])
+            data_list = raw_data.get("data", [])
+            # 如果 data_list 中的元素是值列表，转换为字典
+            if data_list and data_columns and isinstance(data_list[0], list):
+                data_list = [dict(zip(data_columns, row)) for row in data_list]
+        elif isinstance(raw_data, list):
+            # 直接是数据列表
+            data_list = raw_data
+            if data_list and isinstance(data_list[0], dict):
+                data_columns = list(data_list[0].keys())
+        
+        if not data_list:
             continue
         
         # 收集列名
-        if data and isinstance(data, list) and data:
-            first_row = data[0]
-            if isinstance(first_row, dict):
-                columns_set.update(first_row.keys())
+        columns_set.update(data_columns)
         
         # 添加任务标识
         task_id = result.get("task_id", "unknown")
         task_query = result.get("task_query", "")
         
-        for row in data:
+        for row in data_list:
             if isinstance(row, dict):
                 row_with_task = {**row, "_task_id": task_id}
                 all_data.append(row_with_task)
@@ -185,7 +204,7 @@ def _aggregate_results(sub_task_results: List[Dict[str, Any]]) -> Dict[str, Any]
         task_summaries.append({
             "task_id": task_id,
             "task_query": task_query,
-            "row_count": len(data) if data else 0,
+            "row_count": len(data_list),
         })
     
     return {
