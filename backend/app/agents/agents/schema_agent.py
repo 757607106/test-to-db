@@ -216,69 +216,143 @@ class SchemaAnalysisAgent:
             
             connection_id = state.get("connection_id")
             
-            # ✅ 使用异步并行版本获取 schema（性能优化）
-            logger.info(f"异步并行获取 schema 信息, connection_id={connection_id}")
+            # ==========================================
+            # P3: Skills-SQL-Assistant 集成
+            # 如果已选中 Skill，优先使用 Skill 限定的 Schema
+            # ==========================================
+            skill_mode_enabled = state.get("skill_mode_enabled", False)
+            loaded_skill_content = state.get("loaded_skill_content")
             
-            from app.db.session import get_db_session
-            with get_db_session() as db:
-                # 使用异步并行版本
-                schema_context = await retrieve_relevant_schema_async(
-                    db=db,
+            if skill_mode_enabled and loaded_skill_content:
+                # 使用 Skill 预加载的 Schema（Progressive Disclosure）
+                logger.info(f"使用 Skill 限定的 Schema: {state.get('selected_skill_name')}")
+                
+                schema_context = {
+                    "tables": loaded_skill_content.get("tables", []),
+                    "columns": loaded_skill_content.get("columns", []),
+                    "relationships": loaded_skill_content.get("relationships", [])
+                }
+                
+                # 从 Skill 内容获取语义层信息
+                semantic_layer_info = {
+                    "metrics": loaded_skill_content.get("metrics", []),
+                    "join_rules": loaded_skill_content.get("join_rules", []),
+                    "enum_columns": loaded_skill_content.get("enum_columns", [])
+                }
+                
+                # 值映射从 enum_columns 提取
+                value_mappings = {}
+                for enum_col in loaded_skill_content.get("enum_columns", []):
+                    if isinstance(enum_col, dict):
+                        key = f"{enum_col.get('table_name', '')}.{enum_col.get('column_name', '')}"
+                        value_mappings[key] = enum_col.get("values", [])
+                
+                tables_list = schema_context.get("tables", [])
+                columns_list = schema_context.get("columns", [])
+                
+                elapsed_ms = int((time.time() - step_start_time) * 1000)
+                
+                # 发送完成事件
+                schema_detail = {
+                    "summary": f"[Skill模式] 获取到 {len(tables_list)} 个相关表, {len(columns_list)} 个列",
+                    "skill_name": state.get("selected_skill_name"),
+                    "tables": []
+                }
+                
+                # 按表组织列信息
+                table_columns_map = {}
+                for col in columns_list:
+                    table_name = col.get("table_name", "unknown")
+                    if table_name not in table_columns_map:
+                        table_columns_map[table_name] = []
+                    table_columns_map[table_name].append({
+                        "name": col.get("column_name", ""),
+                        "type": col.get("data_type", ""),
+                        "comment": col.get("column_comment", "")
+                    })
+                
+                for table in tables_list:
+                    table_name = table.get("table_name", "")
+                    schema_detail["tables"].append({
+                        "name": table_name,
+                        "comment": table.get("table_comment", ""),
+                        "columns": table_columns_map.get(table_name, [])
+                    })
+                
+                if writer:
+                    writer(create_sql_step_event(
+                        step="schema_mapping",
+                        status="completed",
+                        result=json.dumps(schema_detail, ensure_ascii=False),
+                        time_ms=elapsed_ms
+                    ))
+                
+                logger.info(f"Skill Schema 获取成功: {len(tables_list)} 个表, {len(columns_list)} 个列 [{elapsed_ms}ms]")
+            
+            else:
+                # ✅ 默认模式：使用异步并行版本获取 schema（性能优化）
+                logger.info(f"异步并行获取 schema 信息, connection_id={connection_id}")
+            
+                from app.db.session import get_db_session
+                with get_db_session() as db:
+                    # 使用异步并行版本
+                    schema_context = await retrieve_relevant_schema_async(
+                        db=db,
+                        connection_id=connection_id,
+                        query=user_query
+                    )
+                    
+                    # 获取值映射
+                    value_mappings = get_value_mappings(db, schema_context)
+                
+                # ✅ 集成语义层 (Semantic Layer)
+                semantic_layer_info = await self._fetch_semantic_layer_info(
                     connection_id=connection_id,
-                    query=user_query
+                    user_query=user_query,
+                    tables_list=schema_context.get("tables", [])
                 )
                 
-                # 获取值映射
-                value_mappings = get_value_mappings(db, schema_context)
-            
-            # ✅ 集成语义层 (Semantic Layer)
-            semantic_layer_info = await self._fetch_semantic_layer_info(
-                connection_id=connection_id,
-                user_query=user_query,
-                tables_list=schema_context.get("tables", [])
-            )
-            
-            # 计算耗时并发送完成事件（包含详细的表和列信息）
-            elapsed_ms = int((time.time() - step_start_time) * 1000)
-            tables_list = schema_context.get("tables", [])
-            columns_list = schema_context.get("columns", [])
-            
-            # 构建详细的 schema 信息用于前端展示
-            schema_detail = {
-                "summary": f"获取到 {len(tables_list)} 个相关表, {len(columns_list)} 个列",
-                "tables": []
-            }
-            
-            # 按表组织列信息
-            table_columns_map = {}
-            for col in columns_list:
-                table_name = col.get("table_name", "unknown")
-                if table_name not in table_columns_map:
-                    table_columns_map[table_name] = []
-                table_columns_map[table_name].append({
-                    "name": col.get("column_name", ""),
-                    "type": col.get("data_type", ""),
-                    "comment": col.get("column_comment", "")
-                })
-            
-            # 构建表信息列表
-            for table in tables_list:
-                table_name = table.get("table_name", "")
-                schema_detail["tables"].append({
-                    "name": table_name,
-                    "comment": table.get("table_comment", ""),
-                    "columns": table_columns_map.get(table_name, [])
-                })
-            
-            if writer:
-                writer(create_sql_step_event(
-                    step="schema_mapping",
-                    status="completed",
-                    result=json.dumps(schema_detail, ensure_ascii=False),
-                    time_ms=elapsed_ms
-                ))
-            
-            logger.info(f"Schema 获取成功 (并行优化): {len(tables_list)} 个表, {len(columns_list)} 个列 [{elapsed_ms}ms]")
+                # 计算耗时并发送完成事件（包含详细的表和列信息）
+                elapsed_ms = int((time.time() - step_start_time) * 1000)
+                tables_list = schema_context.get("tables", [])
+                columns_list = schema_context.get("columns", [])
+                
+                # 构建详细的 schema 信息用于前端展示
+                schema_detail = {
+                    "summary": f"获取到 {len(tables_list)} 个相关表, {len(columns_list)} 个列",
+                    "tables": []
+                }
+                
+                # 按表组织列信息
+                table_columns_map = {}
+                for col in columns_list:
+                    table_name = col.get("table_name", "unknown")
+                    if table_name not in table_columns_map:
+                        table_columns_map[table_name] = []
+                    table_columns_map[table_name].append({
+                        "name": col.get("column_name", ""),
+                        "type": col.get("data_type", ""),
+                        "comment": col.get("column_comment", "")
+                    })
+                
+                # 构建表信息列表
+                for table in tables_list:
+                    table_name = table.get("table_name", "")
+                    schema_detail["tables"].append({
+                        "name": table_name,
+                        "comment": table.get("table_comment", ""),
+                        "columns": table_columns_map.get(table_name, [])
+                    })
+                
+                if writer:
+                    writer(create_sql_step_event(
+                        step="schema_mapping",
+                        status="completed",
+                        result=json.dumps(schema_detail, ensure_ascii=False),
+                        time_ms=elapsed_ms
+                    ))
+                
+                logger.info(f"Schema 获取成功 (并行优化): {len(tables_list)} 个表, {len(columns_list)} 个列 [{elapsed_ms}ms]")
             
             # 构建 schema_info 存储到状态
             schema_info = {

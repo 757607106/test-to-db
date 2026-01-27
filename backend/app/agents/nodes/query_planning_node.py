@@ -2,12 +2,14 @@
 查询规划节点 (Query Planning Node)
 
 P2 阶段核心节点：在查询处理流程的早期阶段进行意图分析和规划。
+P3 阶段增强：集成 Skills-SQL-Assistant 路由。
 
 职责：
 1. 分析用户查询意图
 2. 分类查询类型
 3. 生成执行计划
 4. 设置路由标志
+5. (P3) Skill 路由决策
 """
 from typing import Dict, Any
 import logging
@@ -15,7 +17,7 @@ import time
 
 from langgraph.config import get_stream_writer
 
-from app.core.state import SQLMessageState
+from app.core.state import SQLMessageState, extract_connection_id
 from app.agents.query_planner import (
     query_planner,
     query_router,
@@ -136,6 +138,18 @@ async def query_planning_node(state: SQLMessageState) -> Dict[str, Any]:
             "analysis_intent": _map_query_type_to_intent(plan.query_type.value),
         }
         
+        # ==========================================
+        # P3: Skills-SQL-Assistant 路由集成
+        # ==========================================
+        # 只在非闲聊且非缓存命中时执行 Skill 路由
+        if plan.query_type != QueryType.GENERAL_CHAT:
+            skill_context = await _perform_skill_routing(
+                query=original_query,
+                connection_id=state.get("connection_id"),
+                writer=writer
+            )
+            result.update(skill_context)
+        
         # 闲聊直接路由
         if plan.query_type == QueryType.GENERAL_CHAT:
             result["current_stage"] = "init"  # 让 supervisor 路由到 general_chat
@@ -211,3 +225,108 @@ def _map_query_type_to_intent(query_type: str) -> str:
         "general_chat": None,
     }
     return intent_map.get(query_type, "detail")
+
+
+async def _perform_skill_routing(
+    query: str,
+    connection_id: int,
+    writer: Any = None
+) -> Dict[str, Any]:
+    """
+    执行 Skill 路由决策
+    
+    P3: Skills-SQL-Assistant 集成
+    
+    Args:
+        query: 用户查询
+        connection_id: 数据库连接 ID
+        writer: Stream writer for events
+        
+    Returns:
+        Dict 包含 Skill 路由结果，可直接合并到 state
+    """
+    from app.services.skill_router import (
+        skill_router, 
+        RoutingStrategy,
+        should_use_skill_mode
+    )
+    from app.services.skill_service import skill_service
+    
+    # 默认返回值（零配置兼容）
+    result = {
+        "skill_mode_enabled": False,
+        "selected_skill_name": None,
+        "skill_confidence": 0.0,
+        "loaded_skill_content": None,
+        "skill_business_rules": None,
+        "skill_routing_strategy": None,
+        "skill_routing_reasoning": "未配置 Skills",
+    }
+    
+    if not connection_id:
+        return result
+    
+    try:
+        # 检查是否配置了 Skills
+        has_skills = await should_use_skill_mode(connection_id)
+        
+        if not has_skills:
+            logger.debug(f"connection_id={connection_id} 未配置 Skills，使用默认模式")
+            return result
+        
+        # 执行 Skill 路由
+        start_time = time.time()
+        routing_result = await skill_router.route(
+            query=query,
+            connection_id=connection_id,
+            strategy=RoutingStrategy.KEYWORD  # 默认使用关键词路由（快速）
+        )
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        
+        # 发送 Skill 路由事件
+        if writer:
+            from app.schemas.stream_events import create_sql_step_event
+            writer(create_sql_step_event(
+                step="skill_routing",
+                status="completed",
+                result=f"Skill: {routing_result.selected_skill.display_name if routing_result.selected_skill else '无匹配'}",
+                time_ms=elapsed_ms
+            ))
+        
+        # 如果有匹配的 Skill
+        if routing_result.selected_skill and not routing_result.fallback_to_default:
+            skill_name = routing_result.selected_skill.skill_name
+            
+            # 加载 Skill 内容
+            try:
+                skill_content = await skill_service.load_skill(skill_name, connection_id)
+                
+                result.update({
+                    "skill_mode_enabled": True,
+                    "selected_skill_name": skill_name,
+                    "skill_confidence": routing_result.selected_skill.confidence,
+                    "loaded_skill_content": skill_content.model_dump(),
+                    "skill_business_rules": skill_content.business_rules,
+                    "skill_routing_strategy": routing_result.strategy_used,
+                    "skill_routing_reasoning": routing_result.reasoning,
+                })
+                
+                logger.info(
+                    f"Skill 路由成功: {skill_name} "
+                    f"(confidence={routing_result.selected_skill.confidence:.2f}) [{elapsed_ms}ms]"
+                )
+                
+            except Exception as e:
+                logger.warning(f"加载 Skill 内容失败: {e}")
+                result["skill_routing_reasoning"] = f"Skill 内容加载失败: {e}"
+        else:
+            result["skill_routing_strategy"] = routing_result.strategy_used
+            result["skill_routing_reasoning"] = routing_result.reasoning
+            logger.debug(f"Skill 路由无匹配: {routing_result.reasoning}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Skill 路由异常: {e}")
+        result["skill_routing_reasoning"] = f"路由异常: {e}"
+        return result

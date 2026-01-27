@@ -164,3 +164,92 @@ def get_optional_current_user(
         return None
     
     return db.query(User).filter(User.id == int(user_id)).first()
+
+
+def verify_tenant_user(current_user: User = Depends(get_current_user)) -> User:
+    """
+    验证用户属于某个租户
+    
+    Raises:
+        HTTPException: 403 如果用户未关联租户
+    """
+    if not current_user.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is not associated with a tenant"
+        )
+    return current_user
+
+
+def verify_connection_access(connection_id: int):
+    """
+    验证用户对数据库连接的访问权限（工厂函数）
+    
+    用法：
+        @router.get("/data")
+        async def get_data(
+            connection: DBConnection = Depends(verify_connection_access(connection_id))
+        ):
+            ...
+    
+    或者更常用的方式，使用 get_verified_connection 依赖：
+        @router.get("/data")
+        async def get_data(
+            connection_id: int = Query(...),
+            db: Session = Depends(get_db),
+            current_user: User = Depends(verify_tenant_user)
+        ):
+            connection = get_verified_connection(db, connection_id, current_user)
+            ...
+    """
+    def _verify(
+        db: Session = Depends(get_db),
+        current_user: User = Depends(verify_tenant_user)
+    ):
+        from app import crud
+        connection = crud.db_connection.get_by_tenant(
+            db=db, id=connection_id, tenant_id=current_user.tenant_id
+        )
+        if not connection:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Connection not found"
+            )
+        return connection
+    return _verify
+
+
+def get_verified_connection(db: Session, connection_id: int, current_user: User):
+    """
+    获取并验证用户对数据库连接的访问权限
+    
+    这是一个辅助函数，用于在 endpoint 内部调用。
+    
+    Args:
+        db: 数据库会话
+        connection_id: 连接 ID
+        current_user: 当前用户（需要先验证 tenant）
+        
+    Returns:
+        DBConnection 对象
+        
+    Raises:
+        HTTPException: 404 如果连接不存在或无权限访问
+    """
+    from app import crud
+    
+    if not current_user.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is not associated with a tenant"
+        )
+    
+    connection = crud.db_connection.get_by_tenant(
+        db=db, id=connection_id, tenant_id=current_user.tenant_id
+    )
+    if not connection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Connection not found"
+        )
+    return connection

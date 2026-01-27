@@ -14,6 +14,7 @@ import {
   RobotOutlined,
   TeamOutlined,
   FunctionOutlined,
+  AppstoreOutlined,
 } from '@ant-design/icons';
 import { message } from 'antd';
 import { useAuth } from '../../contexts/AuthContext';
@@ -58,7 +59,7 @@ const IOSSidebar: React.FC = () => {
     { key: '/schema', icon: <TableOutlined />, label: '数据建模', to: '/schema' },
     { key: '/graph-visualization', icon: <ShareAltOutlined />, label: '知识图谱', to: '/graph-visualization' },
     { key: '/metrics', icon: <FunctionOutlined />, label: '指标库', to: '/metrics' },
-    { key: '/join-rules', icon: <ApiOutlined />, label: 'JOIN规则', to: '/join-rules' },
+    { key: '/skills', icon: <AppstoreOutlined />, label: 'Skills', to: '/skills' },
     { key: '/dashboards', icon: <DashboardOutlined />, label: 'BI仪表盘', to: '/dashboards' },
     { key: '/connections', icon: <DatabaseOutlined />, label: '连接管理', to: '/connections' },
     { key: '/value-mappings', icon: <SwapOutlined />, label: '数据映射', to: '/value-mappings' },

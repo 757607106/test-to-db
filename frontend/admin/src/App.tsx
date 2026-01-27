@@ -1,5 +1,5 @@
 import React from 'react';
-import { Routes, Route, Outlet } from 'react-router-dom';
+import { Routes, Route, Outlet, Navigate } from 'react-router-dom';
 import IOSLayout from './components/layout/IOSLayout';
 import ProtectedRoute from './components/ProtectedRoute';
 
@@ -20,7 +20,7 @@ import LLMConfigPage from './pages/LLMConfig';
 import AgentProfilePage from './pages/AgentProfile';
 import UsersPage from './pages/UsersPage';
 import MetricsPage from './pages/MetricsPage';
-import JoinRulesPage from './pages/JoinRulesPage';
+import SkillsPage from './pages/SkillsPage';
 
 // Layout wrapper that uses IOSLayout with Outlet
 const ProtectedLayout: React.FC = () => {
@@ -50,7 +50,8 @@ const App: React.FC = () => {
           <Route path="/dashboards" element={<DashboardListPage />} />
           <Route path="/dashboards/:id" element={<DashboardEditorPage />} />
           <Route path="/metrics" element={<MetricsPage />} />
-          <Route path="/join-rules" element={<JoinRulesPage />} />
+          <Route path="/join-rules" element={<Navigate to="/skills" replace />} />
+          <Route path="/skills" element={<SkillsPage />} />
           <Route path="/llm-config" element={<LLMConfigPage />} />
           <Route path="/agent-profile" element={<AgentProfilePage />} />
           <Route path="/users" element={<UsersPage />} />

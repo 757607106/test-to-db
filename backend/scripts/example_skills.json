@@ -1,0 +1,307 @@
+{
+  "description": "进销存行业示例 Skills 配置",
+  "version": "1.0",
+  "usage": "使用 init_example_skills.py 脚本将这些配置导入到数据库中",
+  "skills": [
+    {
+      "name": "sales",
+      "display_name": "销售管理",
+      "description": "处理销售订单、客户管理、销售统计分析等相关查询。包括订单明细、客户信息、销售额统计、销售趋势分析等。",
+      "keywords": [
+        "销售", "订单", "客户", "销售额", "成交", "合同", "报价",
+        "销售统计", "销售分析", "销售趋势", "客户分析", "成交量",
+        "退货", "退款", "销售员", "业务员", "提成", "业绩"
+      ],
+      "intent_examples": [
+        "查询本月销售额",
+        "统计各客户的订单数量",
+        "分析销售趋势",
+        "查询销售订单明细",
+        "统计各销售员业绩",
+        "哪些客户订单金额最高",
+        "本季度退货率是多少",
+        "各产品销售排行",
+        "客户复购率分析"
+      ],
+      "table_names": [
+        "sales_order", "sales_order_item", "sales_order_detail",
+        "customer", "customers", "client",
+        "sales_return", "sales_refund",
+        "salesman", "sales_staff", "sales_rep",
+        "quotation", "contract"
+      ],
+      "table_patterns": [
+        "sales_*", "sale_*", "customer*", "client*", "order*"
+      ],
+      "business_rules": "1. 销售金额使用 amount/total_amount/sales_amount 字段\n2. 已取消的订单(status='cancelled'/'canceled')不计入销售统计\n3. 退货订单需要从销售额中扣除\n4. 日期筛选优先使用 order_date/create_time 字段\n5. 客户关联使用 customer_id/client_id 字段",
+      "common_patterns": [
+        {
+          "pattern": "销售统计",
+          "hint": "使用 SUM(amount) 配合 GROUP BY 时间维度（日/周/月）"
+        },
+        {
+          "pattern": "客户分析",
+          "hint": "关联 customer 表，按 customer_id 分组统计"
+        },
+        {
+          "pattern": "销售排行",
+          "hint": "使用 ORDER BY amount DESC LIMIT N"
+        },
+        {
+          "pattern": "同比环比",
+          "hint": "使用日期函数计算同期数据，如 DATE_SUB 或 INTERVAL"
+        }
+      ],
+      "priority": 10,
+      "icon": "shopping-cart",
+      "color": "#1890ff"
+    },
+    {
+      "name": "purchase",
+      "display_name": "采购管理",
+      "description": "处理采购订单、供应商管理、采购成本分析等相关查询。包括采购明细、供应商信息、采购额统计、到货跟踪等。",
+      "keywords": [
+        "采购", "进货", "供应商", "供货商", "采购额", "采购成本",
+        "采购订单", "采购单", "进货单", "到货", "验收",
+        "采购统计", "采购分析", "供应商分析", "采购价格",
+        "采购退货", "采购付款"
+      ],
+      "intent_examples": [
+        "查询本月采购额",
+        "统计各供应商的采购金额",
+        "分析采购成本趋势",
+        "查询采购订单明细",
+        "哪些供应商交货最准时",
+        "各品类采购占比",
+        "采购付款情况",
+        "供应商评估报告"
+      ],
+      "table_names": [
+        "purchase_order", "purchase_order_item", "purchase_order_detail",
+        "supplier", "suppliers", "vendor",
+        "purchase_receipt", "purchase_return",
+        "purchase_payment"
+      ],
+      "table_patterns": [
+        "purchase_*", "po_*", "supplier*", "vendor*"
+      ],
+      "business_rules": "1. 采购金额使用 amount/total_amount/purchase_amount 字段\n2. 已取消的采购单不计入采购统计\n3. 供应商关联使用 supplier_id/vendor_id 字段\n4. 到货日期使用 receipt_date/arrival_date 字段\n5. 采购成本分析需考虑运费和税费",
+      "common_patterns": [
+        {
+          "pattern": "采购统计",
+          "hint": "使用 SUM(amount) 配合 GROUP BY 供应商或时间"
+        },
+        {
+          "pattern": "供应商分析",
+          "hint": "关联 supplier 表，统计交货及时率和质量合格率"
+        },
+        {
+          "pattern": "采购成本",
+          "hint": "汇总采购金额、运费、税费等各项成本"
+        }
+      ],
+      "priority": 8,
+      "icon": "shopping",
+      "color": "#52c41a"
+    },
+    {
+      "name": "inventory",
+      "display_name": "库存管理",
+      "description": "处理库存查询、出入库记录、库存盘点、库存预警等相关查询。包括实时库存、库存变动、呆滞库存分析等。",
+      "keywords": [
+        "库存", "存货", "仓库", "入库", "出库", "盘点",
+        "库存数量", "库存金额", "可用库存", "在途库存",
+        "库存预警", "安全库存", "库存周转", "呆滞库存",
+        "调拨", "移库", "报损", "报溢"
+      ],
+      "intent_examples": [
+        "查询当前库存数量",
+        "统计各仓库库存金额",
+        "分析库存周转率",
+        "查询出入库记录",
+        "哪些商品库存不足",
+        "呆滞库存有多少",
+        "各品类库存分布",
+        "库存盘点差异分析"
+      ],
+      "table_names": [
+        "inventory", "stock", "warehouse_stock",
+        "stock_in", "stock_out", "stock_movement",
+        "warehouse", "warehouses", "location",
+        "inventory_check", "stock_check",
+        "inventory_transfer", "stock_transfer"
+      ],
+      "table_patterns": [
+        "inventory*", "stock*", "warehouse*", "wh_*"
+      ],
+      "business_rules": "1. 库存数量使用 quantity/qty/stock_qty 字段\n2. 可用库存 = 现有库存 - 锁定库存\n3. 库存金额 = 数量 × 成本单价\n4. 仓库关联使用 warehouse_id/location_id 字段\n5. 库存变动记录包含 in_qty/out_qty 和 balance_qty",
+      "common_patterns": [
+        {
+          "pattern": "库存查询",
+          "hint": "按产品和仓库分组汇总 quantity"
+        },
+        {
+          "pattern": "库存周转",
+          "hint": "周转率 = 销售成本 / 平均库存，周转天数 = 365 / 周转率"
+        },
+        {
+          "pattern": "库存预警",
+          "hint": "WHERE quantity < safety_stock 筛选库存不足商品"
+        },
+        {
+          "pattern": "呆滞分析",
+          "hint": "根据最后出库日期判断，超过N天未出库为呆滞"
+        }
+      ],
+      "priority": 9,
+      "icon": "database",
+      "color": "#faad14"
+    },
+    {
+      "name": "finance",
+      "display_name": "财务管理",
+      "description": "处理收付款、应收应付、账单管理、财务统计等相关查询。包括回款情况、付款计划、账龄分析等。",
+      "keywords": [
+        "财务", "收款", "付款", "回款", "账单", "发票",
+        "应收", "应付", "账款", "欠款", "账龄",
+        "收入", "支出", "利润", "毛利", "成本",
+        "对账", "结算", "核销"
+      ],
+      "intent_examples": [
+        "查询应收账款总额",
+        "统计本月回款情况",
+        "分析账龄分布",
+        "查询未付款账单",
+        "客户欠款排行",
+        "各月收支对比",
+        "利润率分析",
+        "逾期应收分析"
+      ],
+      "table_names": [
+        "receivable", "payable", "ar_invoice", "ap_invoice",
+        "receipt", "payment", "collection",
+        "invoice", "bill", "voucher",
+        "account", "ledger", "journal"
+      ],
+      "table_patterns": [
+        "finance_*", "fin_*", "ar_*", "ap_*", "acc_*"
+      ],
+      "business_rules": "1. 应收金额使用 receivable_amount/ar_amount 字段\n2. 应付金额使用 payable_amount/ap_amount 字段\n3. 账龄计算基于单据日期到当前日期的天数差\n4. 已核销金额从应收应付中扣除\n5. 逾期判断基于 due_date（到期日）字段",
+      "common_patterns": [
+        {
+          "pattern": "账龄分析",
+          "hint": "CASE WHEN 划分账龄区间（30天内/30-60天/60-90天/90天以上）"
+        },
+        {
+          "pattern": "回款统计",
+          "hint": "按时间段汇总 receipt 表的金额"
+        },
+        {
+          "pattern": "欠款分析",
+          "hint": "应收金额 - 已收金额 = 欠款余额"
+        },
+        {
+          "pattern": "利润计算",
+          "hint": "毛利 = 销售收入 - 销售成本，毛利率 = 毛利/收入"
+        }
+      ],
+      "priority": 7,
+      "icon": "dollar",
+      "color": "#722ed1"
+    },
+    {
+      "name": "product",
+      "display_name": "商品管理",
+      "description": "处理商品信息、商品分类、价格管理等相关查询。包括商品资料、分类统计、价格分析等。",
+      "keywords": [
+        "商品", "产品", "货品", "物料", "SKU", "条码",
+        "分类", "品类", "品牌", "规格", "型号",
+        "价格", "成本", "售价", "进价", "毛利"
+      ],
+      "intent_examples": [
+        "查询商品信息",
+        "各分类商品数量",
+        "商品价格分析",
+        "查询某品牌的所有商品",
+        "毛利率最高的商品",
+        "商品成本分析"
+      ],
+      "table_names": [
+        "product", "products", "item", "goods",
+        "category", "product_category", "brand",
+        "sku", "product_sku", "specification",
+        "price", "price_list"
+      ],
+      "table_patterns": [
+        "product*", "item*", "goods*", "sku*", "category*"
+      ],
+      "business_rules": "1. 商品主键使用 product_id/item_id/sku_id\n2. 分类使用 category_id 关联分类表\n3. 售价使用 sale_price/retail_price，成本使用 cost_price\n4. 商品状态使用 status 字段（active/inactive/discontinued）\n5. 规格信息可能存储在 specification/specs JSON 字段中",
+      "common_patterns": [
+        {
+          "pattern": "商品查询",
+          "hint": "支持按名称、编码、分类、品牌等多条件筛选"
+        },
+        {
+          "pattern": "分类统计",
+          "hint": "关联 category 表，按分类 GROUP BY 统计"
+        },
+        {
+          "pattern": "毛利分析",
+          "hint": "毛利 = sale_price - cost_price，毛利率 = 毛利/售价"
+        }
+      ],
+      "priority": 6,
+      "icon": "appstore",
+      "color": "#13c2c2"
+    },
+    {
+      "name": "report",
+      "display_name": "报表统计",
+      "description": "处理综合报表、经营分析、KPI指标等跨领域的统计查询。包括经营概览、对比分析、趋势报表等。",
+      "keywords": [
+        "报表", "统计", "汇总", "分析", "对比", "趋势",
+        "日报", "周报", "月报", "年报", "季度",
+        "同比", "环比", "增长率", "占比", "排名",
+        "KPI", "指标", "经营", "业绩"
+      ],
+      "intent_examples": [
+        "今日经营概览",
+        "本月业绩汇总",
+        "销售同比增长率",
+        "各部门业绩对比",
+        "年度经营趋势",
+        "TOP10 客户排名",
+        "各品类销售占比"
+      ],
+      "table_names": [
+        "daily_report", "monthly_report", "sales_summary",
+        "kpi_data", "statistics", "dashboard_data"
+      ],
+      "table_patterns": [
+        "*_report", "*_summary", "*_statistics", "rpt_*"
+      ],
+      "business_rules": "1. 日期范围筛选使用 report_date/stat_date\n2. 同比计算：对比去年同期数据\n3. 环比计算：对比上一期数据\n4. 增长率 = (本期 - 上期) / 上期 × 100%\n5. 占比 = 个体值 / 总值 × 100%",
+      "common_patterns": [
+        {
+          "pattern": "经营概览",
+          "hint": "汇总销售额、订单数、客户数等核心指标"
+        },
+        {
+          "pattern": "同比分析",
+          "hint": "使用 DATE_SUB 或 INTERVAL 获取去年同期数据"
+        },
+        {
+          "pattern": "排名统计",
+          "hint": "使用 ORDER BY + LIMIT 或窗口函数 RANK()"
+        },
+        {
+          "pattern": "趋势分析",
+          "hint": "按时间维度 GROUP BY，可配合折线图展示"
+        }
+      ],
+      "priority": 5,
+      "icon": "bar-chart",
+      "color": "#eb2f96"
+    }
+  ]
+}

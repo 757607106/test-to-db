@@ -107,7 +107,8 @@ from app.schemas.metric import (
     AlertCheckResult,
 )
 
-# JOIN 规则
+# JOIN 规则 (已废弃 - 迁移到 Skill.join_rules)
+# 保留导入以保持向后兼容，但建议使用 Skill 内嵌的 join_rules
 from app.schemas.join_rule import (
     JoinRuleBase,
     JoinRuleCreate,

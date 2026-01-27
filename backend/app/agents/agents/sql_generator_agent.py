@@ -278,6 +278,35 @@ SQL: {sample.get('sql', '')}
 请根据以上信息，生成一个修正后的 SQL 查询。
 """
         
+        # ==========================================
+        # P3: Skills-SQL-Assistant 业务规则注入
+        # ==========================================
+        skill_rules_prompt = ""
+        if state.get("skill_mode_enabled"):
+            skill_name = state.get("selected_skill_name", "")
+            business_rules = state.get("skill_business_rules", "")
+            loaded_content = state.get("loaded_skill_content", {})
+            
+            if business_rules:
+                skill_rules_prompt = f"""
+【业务领域规则 - {skill_name}】
+{business_rules}
+
+请在生成 SQL 时严格遵守以上业务规则。
+"""
+            
+            # 添加常用查询模式提示
+            common_patterns = loaded_content.get("common_patterns", []) if loaded_content else []
+            if common_patterns:
+                patterns_str = "\n".join([
+                    f"- {p.get('pattern', '')}: {p.get('hint', '')}"
+                    for p in common_patterns[:3]
+                ])
+                skill_rules_prompt += f"""
+【常用查询模式参考】
+{patterns_str}
+"""
+        
         # 获取数据库特定语法规则
         db_rules_prompt = format_database_rules_prompt(db_type)
         
@@ -289,6 +318,7 @@ SQL: {sample.get('sql', '')}
 
 {context}
 {sample_context}
+{skill_rules_prompt}
 {db_rules_prompt}
 {error_recovery_hint}
 

@@ -12,3 +12,4 @@ from app.models.dashboard_permission import DashboardPermission
 from app.models.agent_profile import AgentProfile
 from app.models.llm_config import LLMConfiguration
 from app.models.query_history import QueryHistory
+from app.models.skill import Skill

@@ -6,8 +6,11 @@
 - 指标搜索和查询
 - 字段 Profile 分析
 - 语义层 SQL 生成
+
+注意：JOIN 规则已迁移到 Skill.join_rules，相关 API 已废弃
 """
 from typing import Any, List, Dict, Optional
+import warnings
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -627,9 +630,10 @@ async def toggle_alert(
         raise HTTPException(status_code=500, detail=f"Failed to toggle alert: {str(e)}")
 
 
-# ===== JOIN 规则管理 =====
+# ===== JOIN 规则管理 (已废弃 - 迁移到 Skill.join_rules) =====
+# 这些端点保留以保持向后兼容，建议使用 Skills API 管理 JOIN 规则
 
-@router.get("/join-rules", response_model=List[JoinRule])
+@router.get("/join-rules", response_model=List[JoinRule], deprecated=True)
 async def list_join_rules(
     *,
     db: Session = Depends(deps.get_db),
@@ -637,7 +641,12 @@ async def list_join_rules(
     connection_id: int = Query(..., description="数据库连接ID"),
     is_active: Optional[bool] = Query(None, description="是否只返回启用的规则"),
 ) -> Any:
-    """获取 JOIN 规则列表"""
+    """
+    获取 JOIN 规则列表
+    
+    **已废弃**: JOIN 规则已迁移到 Skill.join_rules 字段。
+    建议使用 /api/skills API 管理 JOIN 规则。
+    """
     if not current_user.tenant_id:
         raise HTTPException(status_code=403, detail="User is not associated with a tenant")
     
@@ -654,14 +663,18 @@ async def list_join_rules(
         raise HTTPException(status_code=500, detail=f"Failed to get join rules: {str(e)}")
 
 
-@router.post("/join-rules", response_model=JoinRule)
+@router.post("/join-rules", response_model=JoinRule, deprecated=True)
 async def create_join_rule(
     *,
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
     rule_data: JoinRuleCreate,
 ) -> Any:
-    """创建 JOIN 规则"""
+    """
+    创建 JOIN 规则
+    
+    **已废弃**: 请使用 Skills API 的 join_rules 字段管理 JOIN 规则。
+    """
     if not current_user.tenant_id:
         raise HTTPException(status_code=403, detail="User is not associated with a tenant")
     
@@ -678,14 +691,18 @@ async def create_join_rule(
         raise HTTPException(status_code=500, detail=f"Failed to create join rule: {str(e)}")
 
 
-@router.get("/join-rules/{rule_id}", response_model=JoinRule)
+@router.get("/join-rules/{rule_id}", response_model=JoinRule, deprecated=True)
 async def get_join_rule(
     *,
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
     rule_id: str,
 ) -> Any:
-    """获取单个 JOIN 规则"""
+    """
+    获取单个 JOIN 规则
+    
+    **已废弃**: 请使用 Skills API 管理 JOIN 规则。
+    """
     if not current_user.tenant_id:
         raise HTTPException(status_code=403, detail="User is not associated with a tenant")
     
@@ -702,7 +719,7 @@ async def get_join_rule(
     return rule
 
 
-@router.put("/join-rules/{rule_id}", response_model=JoinRule)
+@router.put("/join-rules/{rule_id}", response_model=JoinRule, deprecated=True)
 async def update_join_rule(
     *,
     db: Session = Depends(deps.get_db),
@@ -710,7 +727,11 @@ async def update_join_rule(
     rule_id: str,
     update_data: JoinRuleUpdate,
 ) -> Any:
-    """更新 JOIN 规则"""
+    """
+    更新 JOIN 规则
+    
+    **已废弃**: 请使用 Skills API 管理 JOIN 规则。
+    """
     if not current_user.tenant_id:
         raise HTTPException(status_code=403, detail="User is not associated with a tenant")
     
@@ -731,14 +752,18 @@ async def update_join_rule(
         raise HTTPException(status_code=500, detail=f"Failed to update join rule: {str(e)}")
 
 
-@router.delete("/join-rules/{rule_id}")
+@router.delete("/join-rules/{rule_id}", deprecated=True)
 async def delete_join_rule(
     *,
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
     rule_id: str,
 ) -> Any:
-    """删除 JOIN 规则"""
+    """
+    删除 JOIN 规则
+    
+    **已废弃**: 请使用 Skills API 管理 JOIN 规则。
+    """
     if not current_user.tenant_id:
         raise HTTPException(status_code=403, detail="User is not associated with a tenant")
     
@@ -763,7 +788,7 @@ async def delete_join_rule(
         raise HTTPException(status_code=500, detail=f"Failed to delete join rule: {str(e)}")
 
 
-@router.get("/join-rules/for-tables", response_model=List[JoinRuleContext])
+@router.get("/join-rules/for-tables", response_model=List[JoinRuleContext], deprecated=True)
 async def get_join_rules_for_tables(
     *,
     db: Session = Depends(deps.get_db),
@@ -773,6 +798,9 @@ async def get_join_rules_for_tables(
 ) -> Any:
     """
     获取指定表之间的 JOIN 规则上下文（用于 LLM SQL 生成）
+    
+    **已废弃**: JOIN 规则现在通过 Skill.join_rules 字段管理。
+    请使用 load_skill 工具获取 JOIN 规则。
     """
     if not current_user.tenant_id:
         raise HTTPException(status_code=403, detail="User is not associated with a tenant")

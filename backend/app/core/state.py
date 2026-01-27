@@ -218,6 +218,22 @@ class SQLMessageState(TypedDict, total=False):
     
     # 意图驱动图表
     analysis_intent: Optional[str]  # 分析意图: trend, structure, comparison, correlation
+    
+    # ==========================================
+    # Skills-SQL-Assistant 相关字段
+    # ==========================================
+    # Skill 模式控制
+    skill_mode_enabled: bool  # 是否启用 Skill 模式（零配置兼容）
+    selected_skill_name: Optional[str]  # 选中的 Skill 名称
+    skill_confidence: float  # Skill 匹配置信度 (0.0 - 1.0)
+    
+    # Skill 内容（按需加载）
+    loaded_skill_content: Optional[Dict[str, Any]]  # 加载的 Skill 完整内容
+    skill_business_rules: Optional[str]  # 业务规则（注入到 SQL 生成）
+    
+    # Skill 路由信息
+    skill_routing_strategy: Optional[str]  # 使用的路由策略: keyword, semantic, llm, hybrid
+    skill_routing_reasoning: Optional[str]  # 路由决策原因
 
 
 # ============================================================================
@@ -283,6 +299,14 @@ def create_initial_state(
         sub_task_results=[],
         multi_step_completed=False,
         analysis_intent=None,
+        # Skills-SQL-Assistant 初始值
+        skill_mode_enabled=False,
+        selected_skill_name=None,
+        skill_confidence=0.0,
+        loaded_skill_content=None,
+        skill_business_rules=None,
+        skill_routing_strategy=None,
+        skill_routing_reasoning=None,
     )
 
 
@@ -513,3 +537,28 @@ def add_error_to_history(
         "error_history": current_history + [error_info],
         "current_stage": "error_recovery"
     }
+
+
+def is_skill_mode_enabled(state: SQLMessageState) -> bool:
+    """
+    判断是否启用了 Skill 模式
+    
+    零配置兼容：未配置 Skill 时返回 False
+    """
+    return state.get("skill_mode_enabled", False)
+
+
+def get_skill_context(state: SQLMessageState) -> Dict[str, Any]:
+    """
+    获取 Skill 上下文信息
+    
+    返回当前会话的 Skill 相关信息，供 Agent 使用
+    """
+    return {
+        "skill_mode_enabled": state.get("skill_mode_enabled", False),
+        "selected_skill_name": state.get("selected_skill_name"),
+        "skill_confidence": state.get("skill_confidence", 0.0),
+        "skill_business_rules": state.get("skill_business_rules"),
+        "loaded_skill_content": state.get("loaded_skill_content"),
+    }
+
