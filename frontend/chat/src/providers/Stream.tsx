@@ -30,6 +30,7 @@ import {
   type QueryContext,
   type StreamEvent,
   type CacheHitEvent,
+  type NodeStatusEvent,
   createEmptyQueryContext,
   isStreamEvent,
 } from "@/types/stream-events";
@@ -297,6 +298,20 @@ const StreamSession = ({
               ...prev,
               insight: streamEvent
             }));
+            break;
+            
+          case "node_status":
+            // 节点状态事件（用于错误恢复等场景）
+            setQueryContext(prev => ({
+              ...prev,
+              nodeStatus: streamEvent
+            }));
+            // 如果是重试状态，可以显示 toast 通知用户
+            if (streamEvent.status === "retrying" && streamEvent.message) {
+              toast.info(streamEvent.message, {
+                duration: 3000,
+              });
+            }
             break;
         }
       }

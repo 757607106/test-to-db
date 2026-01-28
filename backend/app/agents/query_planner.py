@@ -342,9 +342,19 @@ class QueryPlanner:
             )
             sub_tasks.append(aggregation_task)
         
+        # ✅ 保留原始查询类型（comparison/trend 等），而不是强制改为 MULTI_STEP
+        # 这样可以确保对比查询和趋势查询仍然使用增强分析模式
+        original_query_type = QueryType(classification.query_type)
+        
+        # 只有当原始类型是 simple/aggregate 时才改为 multi_step
+        if original_query_type in (QueryType.SIMPLE, QueryType.AGGREGATE):
+            final_query_type = QueryType.MULTI_STEP
+        else:
+            final_query_type = original_query_type
+        
         return QueryPlan(
             original_query=query,
-            query_type=QueryType.MULTI_STEP,
+            query_type=final_query_type,
             complexity=classification.complexity,
             sub_tasks=sub_tasks,
             execution_strategy=f"多步执行：分解为 {len(classification.sub_queries)} 个子任务",

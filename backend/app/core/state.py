@@ -71,6 +71,11 @@ class SQLMessageState(TypedDict, total=False):
     4. 缓存相关字段: cache_hit, cache_hit_type
     5. 快速模式字段: fast_mode, skip_*
     6. 澄清机制字段: needs_clarification, clarification_*
+    
+    Phase 4 优化说明:
+    - 标记了部分低使用率字段为 [DEPRECATED]
+    - 这些字段保留向后兼容，但新代码不应依赖
+    - 未来版本可能移除
     """
     
     # ==========================================
@@ -90,16 +95,25 @@ class SQLMessageState(TypedDict, total=False):
     
     # 当前处理阶段
     current_stage: Literal[
+        "init",               # 初始阶段
+        "planning_done",      # 规划完成
         "clarification",      # 澄清阶段
+        "clarification_done", # 澄清完成
         "cache_check",        # 缓存检查阶段
         "cache_hit",          # 缓存命中阶段
         "schema_analysis",    # 模式分析阶段
+        "schema_done",        # Schema 分析完成
         "sample_retrieval",   # 样本检索阶段
         "sql_generation",     # SQL 生成阶段
+        "sql_generated",      # SQL 生成完成
         "sql_validation",     # SQL 验证阶段
         "sql_execution",      # SQL 执行阶段
+        "execution_done",     # 执行完成
         "analysis",           # 分析阶段
+        "analysis_done",      # 分析完成
         "chart_generation",   # 图表生成阶段
+        "chart_done",         # 图表完成
+        "recommendation_done", # 推荐完成
         "error_recovery",     # 错误恢复阶段
         "completed"           # 完成阶段
     ]
@@ -166,28 +180,32 @@ class SQLMessageState(TypedDict, total=False):
     
     # ==========================================
     # 澄清机制字段
+    # Phase 4: 简化流程下部分字段可能不使用
     # ==========================================
     needs_clarification: bool
-    pending_clarification: bool
+    pending_clarification: bool  # [DEPRECATED] Phase 4: 使用 clarification_confirmed 替代
     clarification_history: List[Dict[str, Any]]
-    clarification_round: int
-    max_clarification_rounds: int
+    clarification_round: int  # [DEPRECATED] Phase 4: 简化流程不使用多轮澄清
+    max_clarification_rounds: int  # [DEPRECATED] Phase 4: 简化流程不使用多轮澄清
     clarification_questions: List[Dict[str, Any]]
     clarification_responses: Optional[List[Dict[str, Any]]]
     clarification_confirmed: bool
     clarification_skipped: bool  # 用户是否跳过了澄清
     original_query: Optional[str]
     enriched_query: Optional[str]
+    query_rewritten: bool  # P4: 查询是否经过上下文改写
     conversation_id: Optional[str]
     
     # ==========================================
     # 表过滤字段 (澄清点B)
+    # [DEPRECATED] Phase 4: 简化流程不使用表过滤澄清
     # ==========================================
     filtered_tables: Optional[List[Dict[str, Any]]]  # 过滤后的表列表
     table_filter_confirmed: bool  # 表过滤是否已确认
     
     # ==========================================
     # Schema 澄清字段 (澄清点C)
+    # [DEPRECATED] Phase 4: 简化流程不使用 Schema 澄清
     # ==========================================
     schema_clarification_confirmed: bool  # Schema 澄清是否已确认
     schema_clarification_round: int  # Schema 澄清轮次
@@ -221,6 +239,7 @@ class SQLMessageState(TypedDict, total=False):
     
     # ==========================================
     # Skills-SQL-Assistant 相关字段
+    # Phase 3: 默认禁用，通过 SKILL_MODE_ENABLED 控制
     # ==========================================
     # Skill 模式控制
     skill_mode_enabled: bool  # 是否启用 Skill 模式（零配置兼容）
@@ -249,6 +268,9 @@ def create_initial_state(
     """
     创建初始状态
     
+    Phase 5 优化: 精简初始化字段，只初始化核心字段
+    废弃字段不再初始化，使用时按需检查
+    
     Args:
         connection_id: 数据库连接 ID
         thread_id: 会话线程 ID
@@ -259,54 +281,61 @@ def create_initial_state(
         SQLMessageState: 初始化的状态对象
     """
     return SQLMessageState(
+        # ==========================================
+        # 核心字段（必须初始化）
+        # ==========================================
         messages=[],
         remaining_steps=25,  # ReAct Agent 默认最大步数
         connection_id=connection_id,
-        current_stage="schema_analysis",
+        current_stage="init",
+        
+        # ==========================================
+        # 流程控制字段
+        # ==========================================
         retry_count=0,
         max_retries=3,
         error_history=[],
-        error_recovery_context=None,  # 错误恢复上下文
         route_decision="data_query",
-        agent_messages={},
+        
+        # ==========================================
+        # 会话相关
+        # ==========================================
         thread_id=thread_id,
         user_id=user_id,
-        tenant_id=tenant_id,  # 多租户支持
+        tenant_id=tenant_id,
+        
+        # ==========================================
+        # 缓存相关（Phase 6 简化）
+        # ==========================================
         cache_hit=False,
+        thread_history_hit=False,
+        
+        # ==========================================
+        # 快速模式
+        # ==========================================
         fast_mode=False,
         skip_sample_retrieval=False,
         skip_chart_generation=False,
         enable_query_checker=True,
-        sql_check_passed=False,
-        needs_clarification=False,
-        pending_clarification=False,
-        clarification_history=[],
-        clarification_round=0,
-        max_clarification_rounds=2,
-        clarification_questions=[],
+        
+        # ==========================================
+        # 澄清机制（Phase 4 简化后的核心字段）
+        # ==========================================
         clarification_confirmed=False,
-        clarification_skipped=False,  # 用户跳过澄清标记
-        table_filter_confirmed=False,  # 表过滤确认状态
-        schema_clarification_confirmed=False,  # Schema 澄清确认状态
-        schema_clarification_round=0,  # Schema 澄清轮次
-        schema_clarification_history=[],  # Schema 澄清历史
-        needs_analysis=False,
-        # P2: 智能规划初始值
-        query_plan=None,
-        query_type=None,
+        clarification_skipped=False,
+        
+        # ==========================================
+        # Skill 模式（Phase 3 默认禁用）
+        # ==========================================
+        skill_mode_enabled=False,
+        
+        # ==========================================
+        # 智能规划（P2）
+        # ==========================================
         multi_step_mode=False,
         current_sub_task_index=0,
         sub_task_results=[],
         multi_step_completed=False,
-        analysis_intent=None,
-        # Skills-SQL-Assistant 初始值
-        skill_mode_enabled=False,
-        selected_skill_name=None,
-        skill_confidence=0.0,
-        loaded_skill_content=None,
-        skill_business_rules=None,
-        skill_routing_strategy=None,
-        skill_routing_reasoning=None,
     )
 
 
@@ -562,3 +591,125 @@ def get_skill_context(state: SQLMessageState) -> Dict[str, Any]:
         "loaded_skill_content": state.get("loaded_skill_content"),
     }
 
+
+# ============================================================================
+# Phase 5: 状态字段统计辅助函数
+# ============================================================================
+
+def get_state_field_usage() -> Dict[str, Any]:
+    """
+    获取状态字段使用情况统计
+    
+    Phase 5 优化: 用于分析哪些字段实际被使用，指导后续精简
+    
+    Returns:
+        Dict 包含:
+        - core_fields: 核心字段列表
+        - deprecated_fields: 废弃字段列表
+        - optional_fields: 可选字段列表
+    """
+    return {
+        "core_fields": [
+            "messages",
+            "connection_id", 
+            "current_stage",
+            "retry_count",
+            "error_history",
+            "generated_sql",
+            "execution_result",
+            "schema_info",
+        ],
+        "deprecated_fields": [
+            "pending_clarification",  # 使用 clarification_confirmed 替代
+            "clarification_round",    # 简化流程不使用多轮澄清
+            "max_clarification_rounds",
+            "filtered_tables",        # 简化流程不使用表过滤澄清
+            "table_filter_confirmed",
+            "schema_clarification_confirmed",
+            "schema_clarification_round",
+            "schema_clarification_history",
+            "schema_analysis_result",
+        ],
+        "optional_fields": [
+            "fast_mode",
+            "skip_sample_retrieval",
+            "skip_chart_generation",
+            "cache_hit",
+            "thread_history_hit",
+            "skill_mode_enabled",
+            "multi_step_mode",
+        ],
+        "phase_info": {
+            "phase_3": "Skill 功能默认禁用 (SKILL_MODE_ENABLED=false)",
+            "phase_4": "简化流程启用 (SIMPLIFIED_FLOW_ENABLED=true)",
+            "phase_5": "状态字段精简，移除废弃字段初始化",
+            "phase_6": "缓存简化模式 (CACHE_MODE=simple)",
+        }
+    }
+
+
+def get_optimization_summary() -> Dict[str, Any]:
+    """
+    获取优化总结
+    
+    Returns:
+        Dict 包含各 Phase 的优化内容
+    """
+    return {
+        "phase_1": {
+            "name": "Schema 数据格式统一",
+            "status": "completed",
+            "changes": [
+                "创建 SchemaContext Pydantic 模型",
+                "添加 normalize_schema_info() 自动转换",
+                "统一 schema_info 输出格式",
+            ]
+        },
+        "phase_2": {
+            "name": "SQL 生成准确性增强",
+            "status": "completed", 
+            "changes": [
+                "添加 validate_sql_syntax() 语法检查",
+                "添加 check_mysql_antipatterns() 反模式检测",
+                "添加 prevalidate_sql() 整合验证",
+                "验证失败时阻止执行并触发重新生成",
+            ]
+        },
+        "phase_3": {
+            "name": "Skill 功能降级为可选",
+            "status": "completed",
+            "changes": [
+                "添加 SKILL_MODE_ENABLED 配置，默认 false",
+                "query_planning_node 检查全局开关",
+                "schema_agent 检查全局开关",
+            ]
+        },
+        "phase_4": {
+            "name": "架构精简",
+            "status": "completed",
+            "changes": [
+                "添加 SIMPLIFIED_FLOW_ENABLED 配置",
+                "添加 _is_clear_query() 判断查询明确性",
+                "明确查询跳过澄清节点",
+                "标记废弃状态字段",
+            ]
+        },
+        "phase_5": {
+            "name": "状态字段精简",
+            "status": "completed",
+            "changes": [
+                "精简 create_initial_state() 初始化字段",
+                "移除废弃字段的默认初始化",
+                "添加状态字段使用统计函数",
+            ]
+        },
+        "phase_6": {
+            "name": "缓存机制简化",
+            "status": "completed",
+            "changes": [
+                "添加 CACHE_MODE 配置 (simple/full)",
+                "简化模式只使用精确缓存",
+                "跳过 Milvus 语义检索，减少延迟",
+            ]
+        }
+    }

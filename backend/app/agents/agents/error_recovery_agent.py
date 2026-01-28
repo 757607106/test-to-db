@@ -38,6 +38,10 @@ USER_FRIENDLY_MESSAGES = {
         "retrying": "抱歉，生成的查询语句有误。正在为您重新生成更准确的查询...",
         "failed": "很抱歉，多次尝试后仍无法生成正确的查询语句。建议您：\n1. 尝试简化查询描述\n2. 提供更具体的筛选条件\n3. 检查是否涉及不存在的数据"
     },
+    "mysql_limit_fix": {
+        "retrying": "检测到 MySQL 子查询限制问题，正在使用 JOIN 方式重新生成查询...",
+        "failed": "很抱歉，无法自动修复子查询问题。建议您简化查询，分步获取数据。"
+    },
     "verify_schema": {
         "retrying": "抱歉，无法找到您查询的数据表或字段。正在重新分析数据库结构...",
         "failed": "很抱歉，无法匹配到相关的数据表。可能原因：\n1. 数据库中没有相关数据\n2. 表名或字段名表述不同\n3. 建议检查数据库连接是否正确"
@@ -62,6 +66,7 @@ USER_FRIENDLY_MESSAGES = {
 
 # 错误类型到动作的映射 (用于获取用户友好消息)
 ERROR_TYPE_TO_ACTION = {
+    "mysql_limit_subquery_error": "mysql_limit_fix",  # MySQL LIMIT in subquery 特殊处理
     "sql_syntax_error": "regenerate_sql",
     "syntax_error": "regenerate_sql",
     "not_found_error": "verify_schema",
@@ -147,6 +152,7 @@ def _classify_error_type(error_msg: str) -> str:
     - 权限错误 (permission denied)
     - 超时错误 (timeout)
     - 子查询错误 (subquery error)
+    - MySQL 特定限制错误 (LIMIT in subquery)
     
     Args:
         error_msg: 小写的错误消息
@@ -154,7 +160,18 @@ def _classify_error_type(error_msg: str) -> str:
     Returns:
         str: 错误类型标识
     """
-    # 1. SQL 语法和结构错误 - 最常见，优先检测
+    # 1. MySQL 特定限制错误 - 优先检测（这是最常见的复杂查询错误）
+    mysql_limit_patterns = [
+        "doesn't yet support",
+        "limit & in/all/any/some subquery",
+        "1235",  # MySQL 错误码
+    ]
+    
+    for pattern in mysql_limit_patterns:
+        if pattern in error_msg:
+            return "mysql_limit_subquery_error"
+    
+    # 2. SQL 语法和结构错误 - 最常见，优先检测
     sql_syntax_patterns = [
         "syntax", "语法",
         "unknown column", "unknown table",  # MySQL 特有
@@ -169,13 +186,15 @@ def _classify_error_type(error_msg: str) -> str:
         "42s22", "42s02",  # SQL 状态码
         "in 'where clause'", "in 'field list'", "in 'on clause'",  # MySQL 错误位置提示
         "group by", "having",  # 聚合查询错误
+        "1055",  # MySQL ONLY_FULL_GROUP_BY 错误
+        "1242",  # Subquery returns more than 1 row
     ]
     
     for pattern in sql_syntax_patterns:
         if pattern in error_msg:
             return "sql_syntax_error"
     
-    # 2. 资源不存在错误
+    # 3. 资源不存在错误
     not_found_patterns = [
         "not found", "找不到", "不存在",
         "does not exist", "doesn't exist",
@@ -186,7 +205,7 @@ def _classify_error_type(error_msg: str) -> str:
         if pattern in error_msg:
             return "not_found_error"
     
-    # 3. 连接错误
+    # 4. 连接错误
     connection_patterns = [
         "connection", "连接",
         "refused", "timed out", "unreachable",
@@ -197,7 +216,7 @@ def _classify_error_type(error_msg: str) -> str:
         if pattern in error_msg:
             return "connection_error"
     
-    # 4. 权限错误
+    # 5. 权限错误
     permission_patterns = [
         "permission", "权限", "denied",
         "access denied", "unauthorized",
@@ -208,7 +227,7 @@ def _classify_error_type(error_msg: str) -> str:
         if pattern in error_msg:
             return "permission_error"
     
-    # 5. 超时错误
+    # 6. 超时错误
     timeout_patterns = [
         "timeout", "超时", "timed out",
         "too long", "slow query"
@@ -244,6 +263,20 @@ def generate_recovery_strategy(
         
         # 基于错误类型制定策略
         strategies = {
+            # MySQL LIMIT in subquery 错误 - 需要特殊处理
+            "mysql_limit_subquery_error": {
+                "primary_action": "regenerate_sql",
+                "description": "MySQL 不支持在 IN/ALL/ANY/SOME 子查询中使用 LIMIT，需要改用 JOIN 派生表",
+                "auto_fixable": True,
+                "confidence": 0.9,  # 高置信度，因为修复方案明确
+                "steps": [
+                    "识别使用了 IN + LIMIT 的子查询",
+                    "将 WHERE id IN (SELECT ... LIMIT N) 改写为 JOIN 派生表",
+                    "正确写法: JOIN (SELECT ... LIMIT N) AS subq ON main.id = subq.id",
+                    "确保派生表有别名"
+                ],
+                "fix_hint": "查询执行失败，错误信息显示MySQL版本不支持在IN子查询中使用LIMIT。我需要修改SQL查询语句，使用JOIN替代IN子查询。"
+            },
             # SQL 语法/结构错误 - 可自动修复
             "sql_syntax_error": {
                 "primary_action": "regenerate_sql",
@@ -476,6 +509,28 @@ class ErrorRecoveryAgent:
                     
                     logger.info(f"错误恢复: {primary_action} -> {next_stage} (重试 {retry_count + 1}/{max_retries})")
                     logger.info(f"错误类型: {error_context['error_type']}, 失败SQL长度: {len(failed_sql)}")
+                    
+                    # ✅ 修复：发送流式事件通知前端正在重试
+                    try:
+                        from langgraph.config import get_stream_writer
+                        from app.schemas.stream_events import create_node_event
+                        
+                        writer = get_stream_writer()
+                        if writer:
+                            # 发送错误恢复状态事件
+                            writer(create_node_event(
+                                node="error_recovery",
+                                status="retrying",
+                                message=user_message,
+                                metadata={
+                                    "retry_count": retry_count + 1,
+                                    "max_retries": max_retries,
+                                    "error_type": error_context["error_type"],
+                                    "next_stage": next_stage
+                                }
+                            ))
+                    except Exception as e:
+                        logger.debug(f"发送流式事件失败（非关键）: {e}")
                     
                     return {
                         "messages": [AIMessage(content=user_message)],

@@ -45,7 +45,11 @@ async def schema_agent_node(state: SQLMessageState, writer: StreamWriter) -> Dic
     
     agent = get_custom_agent(state, "schema_agent", schema_agent)
     result = await agent.process(state)
-    result["current_stage"] = "schema_done"
+    
+    # ✅ 修复：只有在成功时才设置 schema_done，保留 error_recovery 状态
+    if result.get("current_stage") != "error_recovery":
+        result["current_stage"] = "schema_done"
+    
     return result
 
 
@@ -64,7 +68,18 @@ async def sql_generator_node(state: SQLMessageState, writer: StreamWriter) -> Di
     
     agent = get_custom_agent(state, "sql_generator", sql_generator_agent)
     result = await agent.process(state)
-    result["current_stage"] = "sql_generated"
+    
+    # ✅ 修复：只有在成功生成 SQL 时才设置 sql_generated
+    # 如果 SQL Generator 返回了 error_recovery，保留该状态
+    result_stage = result.get("current_stage")
+    logger.info(f"[sql_generator_node] agent 返回的 current_stage: {result_stage}")
+    
+    if result_stage != "error_recovery":
+        result["current_stage"] = "sql_generated"
+        logger.info(f"[sql_generator_node] 设置 current_stage 为 sql_generated")
+    else:
+        logger.info(f"[sql_generator_node] 保留 error_recovery 状态，不覆盖")
+    
     return result
 
 
@@ -171,7 +186,11 @@ async def data_analyst_node(state: SQLMessageState, writer: StreamWriter) -> Dic
     
     agent = get_custom_agent(state, "data_analyst", data_analyst_agent)
     result = await agent.process(state, writer=writer)
-    result["current_stage"] = "analysis_done"
+    
+    # ✅ 修复：保留 error_recovery 状态
+    if result.get("current_stage") != "error_recovery":
+        result["current_stage"] = "analysis_done"
+    
     return result
 
 
@@ -191,7 +210,11 @@ async def chart_generator_node(state: SQLMessageState, writer: StreamWriter) -> 
     
     agent = get_custom_agent(state, "chart_generator", chart_generator_agent)
     result = await agent.process(state, writer=writer)
-    result["current_stage"] = "chart_done"
+    
+    # ✅ 修复：保留 error_recovery 状态
+    if result.get("current_stage") != "error_recovery":
+        result["current_stage"] = "chart_done"
+    
     return result
 
 

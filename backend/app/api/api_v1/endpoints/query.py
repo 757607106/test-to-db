@@ -2,6 +2,7 @@ from typing import Any, List, Optional
 from uuid import uuid4
 import time
 import json
+import warnings
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -10,33 +11,52 @@ from langchain_core.messages import HumanMessage
 
 from app import crud, schemas
 from app.api import deps
-from app.services.text2sql_service import process_text2sql_query
 from app.agents.chat_graph import IntelligentSQLGraph
 from app.core.state import SQLMessageState
 
 router = APIRouter()
 
-@router.post("/", response_model=schemas.QueryResponse)
-def execute_query(
+@router.post("/", response_model=schemas.QueryResponse, deprecated=True)
+async def execute_query(
     *,
     db: Session = Depends(deps.get_db),
     query_request: schemas.QueryRequest,
 ) -> Any:
     """
     Execute a natural language query against a database.
+    
+    ⚠️ DEPRECATED: 此接口已废弃，请使用 POST /query/chat 替代。
+    
+    此接口保留用于向后兼容，内部已重定向到新的 LangGraph 架构。
     """
     connection = crud.db_connection.get(db=db, id=query_request.connection_id)
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
     
     try:
-        # Process the query
-        result = process_text2sql_query(
-            db=db,
-            connection=connection,
-            natural_language_query=query_request.natural_language_query
+        # ✅ 使用新的 LangGraph 架构替代旧的 text2sql_service
+        graph = IntelligentSQLGraph()
+        result = await graph.process_query(
+            query=query_request.natural_language_query,
+            connection_id=query_request.connection_id
         )
-        return result
+        
+        # 转换为旧格式响应
+        if result.get("success"):
+            final_state = result.get("result", {})
+            return schemas.QueryResponse(
+                sql=final_state.get("generated_sql", ""),
+                results=_extract_results(final_state.get("execution_result")),
+                error=None,
+                context={"source": "langgraph_architecture"}
+            )
+        else:
+            return schemas.QueryResponse(
+                sql="",
+                results=None,
+                error=result.get("error", "Unknown error"),
+                context=None
+            )
     except Exception as e:
         return schemas.QueryResponse(
             sql="",
@@ -44,6 +64,17 @@ def execute_query(
             error=f"Error processing query: {str(e)}",
             context=None
         )
+
+
+def _extract_results(execution_result) -> Optional[Any]:
+    """从执行结果中提取数据"""
+    if execution_result is None:
+        return None
+    if hasattr(execution_result, 'data'):
+        return execution_result.data
+    if isinstance(execution_result, dict):
+        return execution_result.get('data')
+    return execution_result
 
 
 @router.post("/chat", response_model=schemas.ChatQueryResponse)

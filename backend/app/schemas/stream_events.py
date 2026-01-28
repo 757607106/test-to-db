@@ -95,6 +95,19 @@ class InsightEvent(BaseModel):
     time_ms: int = Field(default=0, description="分析耗时(毫秒)")
 
 
+class NodeStatusEvent(BaseModel):
+    """
+    节点状态事件 - 展示 Agent 节点的执行状态
+    
+    用于向前端通知节点执行状态，特别是错误恢复等场景
+    """
+    type: Literal["node_status"] = "node_status"
+    node: str = Field(description="节点名称: schema_agent | sql_generator | error_recovery 等")
+    status: str = Field(description="状态: running | completed | error | retrying")
+    message: Optional[str] = Field(default=None, description="用户友好的状态消息")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="额外元数据")
+
+
 # 辅助函数
 def create_intent_analysis_event(
     dataset: str = "默认数据集",
@@ -213,4 +226,29 @@ def create_insight_event(
         recommendations=recommendations or [],
         raw_content=raw_content,
         time_ms=time_ms
+    ).model_dump()
+
+
+def create_node_event(
+    node: str,
+    status: str,
+    message: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    创建节点状态事件
+    
+    用于向前端通知节点执行状态，特别是错误恢复等场景
+    
+    Args:
+        node: 节点名称 (schema_agent, sql_generator, error_recovery 等)
+        status: 状态 (running, completed, error, retrying)
+        message: 用户友好的状态消息
+        metadata: 额外元数据 (如 retry_count, error_type 等)
+    """
+    return NodeStatusEvent(
+        node=node,
+        status=status,
+        message=message,
+        metadata=metadata
     ).model_dump()

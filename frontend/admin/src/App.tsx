@@ -21,6 +21,7 @@ import AgentProfilePage from './pages/AgentProfile';
 import UsersPage from './pages/UsersPage';
 import MetricsPage from './pages/MetricsPage';
 import SkillsPage from './pages/SkillsPage';
+import SQLEnhancementConfigPage from './pages/SQLEnhancementConfigPage';
 
 // Layout wrapper that uses IOSLayout with Outlet
 const ProtectedLayout: React.FC = () => {
@@ -53,6 +54,7 @@ const App: React.FC = () => {
           <Route path="/join-rules" element={<Navigate to="/skills" replace />} />
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/llm-config" element={<LLMConfigPage />} />
+          <Route path="/sql-enhancement" element={<SQLEnhancementConfigPage />} />
           <Route path="/agent-profile" element={<AgentProfilePage />} />
           <Route path="/users" element={<UsersPage />} />
         </Route>

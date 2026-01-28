@@ -148,33 +148,137 @@ class Settings(BaseSettings):
     ENABLE_PARALLEL_EXECUTION: bool = os.getenv("ENABLE_PARALLEL_EXECUTION", "false").lower() == "true"
 
     # ==========================================
+    # Schema 加载策略配置
+    # ==========================================
+    # 控制 Schema Agent 如何加载数据库表结构
+    # - full_load: 全量加载所有表（推荐，确保表完整性）
+    # - smart_filter: 智能过滤（LLM 语义匹配，可能遗漏表）
+    # - skill_based: 基于 Skill 加载（需要预先配置 Skill）
+    # 
+    # ⚠️ [DEPRECATED for V2] V2 架构默认使用 full_load，此配置仅用于旧版兼容
+    # ==========================================
+    SCHEMA_LOADING_STRATEGY: str = os.getenv("SCHEMA_LOADING_STRATEGY", "full_load")
+    
+    # ==========================================
+    # Skill 功能配置 (Phase 3 优化)
+    # ==========================================
+    # Skill 功能用于大型数据库（100+ 表）的领域隔离
+    # 对于中小型数据库（< 50 表），建议关闭以简化流程
+    # 
+    # 关闭后的影响：
+    # - 跳过 Skill 路由决策，减少一次 LLM 调用
+    # - 直接使用全量 Schema 加载，确保表完整性
+    # - 不影响图表生成、仪表盘、数据洞察等核心功能
+    # 
+    # ⚠️ [DEPRECATED for V2] V2 架构不使用 Skill 路由，此配置仅用于旧版兼容
+    # ==========================================
+    SKILL_MODE_ENABLED: bool = os.getenv("SKILL_MODE_ENABLED", "false").lower() == "true"
+    
+    # ==========================================
+    # 简化流程配置 (Phase 4 优化)
+    # ==========================================
+    # 启用后简化查询处理流程，减少节点跳转：
+    # - 跳过澄清节点（对于明确的查询）
+    # - 合并部分状态更新
+    # - 减少 Supervisor 路由判断
+    # 
+    # 适用场景：
+    # - 查询意图明确的场景
+    # - 追求响应速度的场景
+    # - 不需要交互式澄清的场景
+    # 
+    # ⚠️ [DEPRECATED for V2] V2 架构默认简化流程，此配置仅用于旧版兼容
+    # ==========================================
+    SIMPLIFIED_FLOW_ENABLED: bool = os.getenv("SIMPLIFIED_FLOW_ENABLED", "true").lower() == "true"
+    
+    # 简化流程下是否跳过澄清节点
+    # ⚠️ [DEPRECATED for V2] V2 架构不使用澄清节点
+    SKIP_CLARIFICATION_FOR_CLEAR_QUERIES: bool = os.getenv("SKIP_CLARIFICATION_FOR_CLEAR_QUERIES", "true").lower() == "true"
+    
+    # ==========================================
+    # 缓存机制配置 (Phase 6 优化)
+    # ==========================================
+    # 缓存模式：
+    # - simple: 只使用精确缓存（快速，推荐）
+    # - full: 使用精确缓存 + 语义缓存（功能完整，但较慢）
+    # 
+    # 简化模式优势：
+    # - 跳过 Milvus 向量检索，减少 200-500ms 延迟
+    # - 减少对向量数据库的依赖
+    # - 适合大多数场景
+    # ==========================================
+    CACHE_MODE: str = os.getenv("CACHE_MODE", "simple")  # simple | full
+    
+    # 是否启用 Thread 历史缓存（同一对话内相同问题）
+    THREAD_HISTORY_CACHE_ENABLED: bool = os.getenv("THREAD_HISTORY_CACHE_ENABLED", "true").lower() == "true"
+    
+    # 精确缓存 TTL（秒）
+    EXACT_CACHE_TTL: int = int(os.getenv("EXACT_CACHE_TTL", "3600"))
+    
+    # 全量加载的表数量阈值（超过此数量自动降级到智能过滤）
+    SCHEMA_FULL_LOAD_THRESHOLD: int = int(os.getenv("SCHEMA_FULL_LOAD_THRESHOLD", "100"))
+
+    # ==========================================
     # 快速模式配置 (Fast Mode)
     # ==========================================
     # 借鉴官方 LangGraph SQL Agent 的简洁性思想
     # 对于简单查询，跳过样本检索、图表生成等步骤，提升响应速度
+    # 
+    # ⚠️ [DEPRECATED for V2] V2 架构已内置优化，不需要单独的快速模式配置
     # ==========================================
     
     # 是否启用快速模式自动检测
+    # ⚠️ [DEPRECATED for V2]
     FAST_MODE_AUTO_DETECT: bool = os.getenv("FAST_MODE_AUTO_DETECT", "true").lower() == "true"
     
     # 快速模式查询长度阈值（字符数，短于此值可能启用快速模式）
+    # ⚠️ [DEPRECATED for V2]
     FAST_MODE_QUERY_LENGTH_THRESHOLD: int = int(os.getenv("FAST_MODE_QUERY_LENGTH_THRESHOLD", "50"))
     
     # 快速模式关键词（包含这些词会强制使用完整模式）
     # 如：图表、趋势、分布、比较、可视化、分析 等
+    # ⚠️ [DEPRECATED for V2]
     FAST_MODE_DISABLE_KEYWORDS: str = os.getenv(
         "FAST_MODE_DISABLE_KEYWORDS", 
         "图表,趋势,分布,比较,可视化,分析,chart,trend,distribution,compare,visualize,analyze"
     )
     
     # 是否在快速模式中启用 SQL Query Checker
+    # ⚠️ [DEPRECATED for V2]
     FAST_MODE_ENABLE_QUERY_CHECKER: bool = os.getenv("FAST_MODE_ENABLE_QUERY_CHECKER", "true").lower() == "true"
     
     # 是否在快速模式中跳过样本检索
+    # ⚠️ [DEPRECATED for V2]
     FAST_MODE_SKIP_SAMPLE_RETRIEVAL: bool = os.getenv("FAST_MODE_SKIP_SAMPLE_RETRIEVAL", "true").lower() == "true"
     
     # 是否在快速模式中跳过图表生成（默认不跳过，确保图表正常生成）
+    # ⚠️ [DEPRECATED for V2]
     FAST_MODE_SKIP_CHART_GENERATION: bool = os.getenv("FAST_MODE_SKIP_CHART_GENERATION", "false").lower() == "true"
+
+    # ==========================================
+    # Agents V2 配置 (langgraph-supervisor 架构)
+    # ==========================================
+    # 新架构使用官方 langgraph-supervisor 库
+    # 简化了配置项，移除了废弃的选项
+    # 
+    # 核心特性：
+    # - 使用 create_supervisor() 创建监督代理
+    # - 简化的状态管理（约 15 个核心字段）
+    # - 保留 SQL 验证、结果验证、多租户缓存等企业级功能
+    # ==========================================
+    
+    # 是否启用 V2 架构（用于渐进式迁移）
+    V2_ENABLED: bool = os.getenv("V2_ENABLED", "false").lower() == "true"
+    
+    # SQL 验证配置
+    V2_DEFAULT_LIMIT: int = int(os.getenv("V2_DEFAULT_LIMIT", "100"))
+    V2_MAX_LIMIT: int = int(os.getenv("V2_MAX_LIMIT", "5000"))
+    V2_MAX_RETRIES: int = int(os.getenv("V2_MAX_RETRIES", "3"))
+    
+    # 缓存配置（复用现有 CACHE_MODE）
+    # CACHE_MODE: "simple" | "full" (已在上方定义)
+    # EXACT_CACHE_TTL: 精确缓存 TTL (已在上方定义)
+    # THREAD_HISTORY_CACHE_ENABLED: Thread 历史缓存 (已在上方定义)
 
     class Config:
         case_sensitive = True

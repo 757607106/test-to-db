@@ -139,6 +139,25 @@ export interface InsightEvent {
 }
 
 /**
+ * 节点状态事件 - 展示 Agent 节点的执行状态
+ * 
+ * 用于向前端通知节点执行状态，特别是错误恢复等场景
+ */
+export interface NodeStatusEvent {
+  type: "node_status";
+  node: string;                         // 节点名称
+  status: "running" | "completed" | "error" | "retrying";
+  message?: string;                     // 用户友好的状态消息
+  metadata?: {
+    retry_count?: number;
+    max_retries?: number;
+    error_type?: string;
+    next_stage?: string;
+    [key: string]: any;
+  };
+}
+
+/**
  * 所有流式事件的联合类型
  */
 export type StreamEvent = 
@@ -147,7 +166,8 @@ export type StreamEvent =
   | SQLStepEvent 
   | DataQueryEvent 
   | SimilarQuestionsEvent
-  | InsightEvent;
+  | InsightEvent
+  | NodeStatusEvent;
 
 /**
  * 查询上下文 - 聚合所有流式事件数据
@@ -159,6 +179,7 @@ export interface QueryContext {
   dataQuery?: DataQueryEvent;
   similarQuestions?: SimilarQuestionsEvent;
   insight?: InsightEvent;                 // 数据洞察
+  nodeStatus?: NodeStatusEvent;           // 节点状态（用于错误恢复等）
 }
 
 /**
@@ -182,7 +203,8 @@ export function isStreamEvent(event: unknown): event is StreamEvent {
     e.type === "sql_step" ||
     e.type === "data_query" ||
     e.type === "similar_questions" ||
-    e.type === "insight"
+    e.type === "insight" ||
+    e.type === "node_status"
   );
 }
 

@@ -26,6 +26,7 @@ class CacheEntry:
     """缓存条目"""
     query: str                          # 原始查询
     connection_id: int                  # 数据库连接ID
+    tenant_id: Optional[int]            # 租户ID（多租户隔离）
     sql: str                            # 生成的SQL
     result: Any                         # 执行结果
     created_at: float                   # 创建时间戳
@@ -116,10 +117,19 @@ class QueryCacheService:
                 return str(query.get("text"))
         return str(query)
 
-    def _make_cache_key(self, query: str, connection_id: int) -> str:
-        """生成缓存键"""
+    def _make_cache_key(self, query: str, connection_id: int, tenant_id: Optional[int] = None) -> str:
+        """
+        生成缓存键（支持多租户隔离）
+        
+        Args:
+            query: 用户查询
+            connection_id: 数据库连接ID
+            tenant_id: 租户ID（可选，用于多租户隔离）
+        """
         normalized_query = self._normalize_query(query).lower().strip()
-        key_str = f"{normalized_query}:{connection_id}"
+        # 租户隔离：不同租户的缓存键不同
+        tenant_prefix = f"t{tenant_id}:" if tenant_id else ""
+        key_str = f"{tenant_prefix}{normalized_query}:{connection_id}"
         return hashlib.md5(key_str.encode()).hexdigest()
     
     def _evict_if_needed(self):
@@ -141,42 +151,67 @@ class QueryCacheService:
         if expired_keys:
             logger.debug(f"Cleaned {len(expired_keys)} expired cache entries")
     
-    async def check_cache(self, query: str, connection_id: int) -> Optional[CacheHit]:
+    async def check_cache(self, query: str, connection_id: int, tenant_id: Optional[int] = None) -> Optional[CacheHit]:
         """
-        检查缓存 - 优化版：并行查询L1和L2缓存
+        检查缓存（支持多租户隔离）
         
-        性能提升: 
-        - 串行: L1(100ms) + L2(300ms) = 400ms
-        - 并行: max(100ms, 300ms) = 300ms
-        - 提升: 25%
+        Phase 6 优化: 支持简化模式（只使用精确缓存）
+        
+        缓存模式：
+        - simple: 只检查精确缓存（快速，跳过 Milvus）
+        - full: 并行检查精确缓存 + 语义缓存（完整功能）
         
         Args:
             query: 用户查询
             connection_id: 数据库连接ID
+            tenant_id: 租户ID（可选，用于多租户隔离）
             
         Returns:
             CacheHit 如果命中，否则 None
         """
         import asyncio
+        from app.core.config import settings
         
-        # ✅ 并行查询L1和L2缓存 (Python asyncio标准模式)
+        # Phase 6: 检查缓存模式
+        cache_mode = getattr(settings, 'CACHE_MODE', 'simple')
+        
+        if cache_mode == "simple":
+            # ==========================================
+            # 简化模式：只检查精确缓存
+            # ==========================================
+            start_time = time.time()
+            result = self._check_exact_cache(query, connection_id, tenant_id)
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            
+            if result:
+                self._stats["exact_hits"] += 1
+                logger.info(f"Cache HIT (exact, simple mode): query='{query[:50]}...', connection_id={connection_id}, tenant_id={tenant_id} [{elapsed_ms}ms]")
+                return result
+            
+            self._stats["misses"] += 1
+            logger.debug(f"Cache MISS (simple mode): query='{query[:50]}...' [{elapsed_ms}ms]")
+            return None
+        
+        # ==========================================
+        # 完整模式：并行查询 L1 和 L2 缓存
+        # ==========================================
         # 将同步的_check_exact_cache包装为async
         async def check_exact_async():
-            # 在executor中运行同步代码，避免阻塞
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(
                 None, 
                 self._check_exact_cache, 
                 query, 
-                connection_id
+                connection_id,
+                tenant_id
             )
         
         # 创建并发任务
         l1_task = asyncio.create_task(check_exact_async())
-        l2_task = asyncio.create_task(self._check_semantic_cache(query, connection_id))
+        l2_task = asyncio.create_task(self._check_semantic_cache(query, connection_id, tenant_id))
         
         try:
-            # ✅ 等待第一个完成的缓存查询 (asyncio标准)
+            # 等待第一个完成的缓存查询
             done, pending = await asyncio.wait(
                 {l1_task, l2_task},
                 return_when=asyncio.FIRST_COMPLETED,
@@ -187,17 +222,17 @@ class QueryCacheService:
             for task in done:
                 result = task.result()
                 if result:  # 缓存命中
-                    # 取消未完成的任务（节省资源）
+                    # 取消未完成的任务
                     for pending_task in pending:
                         pending_task.cancel()
                     
                     # 更新统计
                     if result.hit_type == "exact":
                         self._stats["exact_hits"] += 1
-                        logger.info(f"Cache HIT (exact, 并行): query='{query[:50]}...', connection_id={connection_id}")
+                        logger.info(f"Cache HIT (exact): query='{query[:50]}...', connection_id={connection_id}, tenant_id={tenant_id}")
                     else:
                         self._stats["semantic_hits"] += 1
-                        logger.info(f"Cache HIT (semantic, 并行): query='{query[:50]}...', similarity={result.similarity:.3f}")
+                        logger.info(f"Cache HIT (semantic): query='{query[:50]}...', similarity={result.similarity:.3f}")
                     
                     return result
             
@@ -206,17 +241,14 @@ class QueryCacheService:
                 remaining_results = await asyncio.gather(*pending, return_exceptions=True)
                 for result in remaining_results:
                     if isinstance(result, CacheHit):
-                        # 更新统计
                         if result.hit_type == "exact":
                             self._stats["exact_hits"] += 1
-                            logger.info(f"Cache HIT (exact): query='{query[:50]}...', connection_id={connection_id}")
                         else:
                             self._stats["semantic_hits"] += 1
-                            logger.info(f"Cache HIT (semantic): query='{query[:50]}...', similarity={result.similarity:.3f}")
                         return result
         
         except asyncio.TimeoutError:
-            logger.warning(f"缓存查询超时(2s)，跳过缓存")
+            logger.warning("缓存查询超时(2s)，跳过缓存")
         except Exception as e:
             logger.error(f"缓存查询异常: {e}")
         
@@ -225,9 +257,9 @@ class QueryCacheService:
         logger.debug(f"Cache MISS: query='{query[:50]}...', connection_id={connection_id}")
         return None
     
-    def _check_exact_cache(self, query: str, connection_id: int) -> Optional[CacheHit]:
-        """检查精确匹配缓存"""
-        cache_key = self._make_cache_key(query, connection_id)
+    def _check_exact_cache(self, query: str, connection_id: int, tenant_id: Optional[int] = None) -> Optional[CacheHit]:
+        """检查精确匹配缓存（支持多租户隔离）"""
+        cache_key = self._make_cache_key(query, connection_id, tenant_id)
         
         with self._cache_lock:
             # 定期清理过期条目

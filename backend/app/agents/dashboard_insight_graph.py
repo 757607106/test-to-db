@@ -12,6 +12,9 @@ Dashboard 独有节点：
 - relationship_analyzer: 图谱关系分析
 - sql_validator: SQL 验证
 - insight_analyzer: 洞察分析
+
+Phase 1 优化:
+- 使用统一的 SchemaContext 格式
 """
 from typing import Dict, Any, List, Optional, Literal
 from typing_extensions import TypedDict
@@ -30,6 +33,7 @@ from app.services.sql_helpers import (
     validate_sql_safety,
     clean_sql_from_llm_response,
 )
+from app.schemas.schema_context import SchemaContext, TableInfo, ColumnInfo, normalize_schema_info
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +105,7 @@ def _adapt_for_error_recovery(state: DashboardInsightState) -> Dict[str, Any]:
 # ============================================================================
 
 async def schema_enricher_node(state: DashboardInsightState) -> Dict[str, Any]:
-    """Schema 增强：获取表结构、列统计、语义类型"""
+    """Schema 增强：获取表结构、列统计、语义类型 - 使用统一的 SchemaContext 格式"""
     logger.info("[Worker] schema_enricher 开始执行")
     start_time = time.time()
     
@@ -114,36 +118,34 @@ async def schema_enricher_node(state: DashboardInsightState) -> Dict[str, Any]:
         
         with get_db_session() as db:
             connection = db.query(DBConnection).filter(DBConnection.id == connection_id).first()
-            db_type = connection.db_type.upper() if connection else "MYSQL"
+            db_type = connection.db_type.lower() if connection else "mysql"
             tables = crud.schema_table.get_by_connection(db=db, connection_id=connection_id)
             
-            enriched_tables = []
-            enriched_columns = []
+            # Phase 1: 使用统一的 TableInfo 和 ColumnInfo 格式
+            table_infos = []
+            column_infos = []
             column_statistics = {}
             
             for table in tables[:10]:
-                table_info = {
-                    "id": table.id,
-                    "name": table.table_name,
-                    "description": table.description or f"表 {table.table_name}",
-                }
-                enriched_tables.append(table_info)
+                table_infos.append(TableInfo(
+                    table_name=table.table_name,
+                    description=table.description or f"表 {table.table_name}",
+                    id=table.id
+                ))
                 
                 columns = crud.schema_column.get_by_table(db=db, table_id=table.id)
                 for col in columns:
                     semantic_type = infer_semantic_type(col.column_name, col.data_type)
-                    col_info = {
-                        "id": col.id,
-                        "name": col.column_name,
-                        "type": col.data_type,
-                        "description": col.description or f"{table.table_name}.{col.column_name}",
-                        "is_primary_key": col.is_primary_key,
-                        "is_foreign_key": col.is_foreign_key,
-                        "table_id": table.id,
-                        "table_name": table.table_name,
-                        "semantic_type": semantic_type
-                    }
-                    enriched_columns.append(col_info)
+                    column_infos.append(ColumnInfo(
+                        table_name=table.table_name,
+                        column_name=col.column_name,
+                        data_type=col.data_type,
+                        description=col.description or "",
+                        is_primary_key=col.is_primary_key,
+                        is_foreign_key=col.is_foreign_key,
+                        id=col.id,
+                        table_id=table.id
+                    ))
                     
                     key = f"{table.table_name}.{col.column_name}"
                     column_statistics[key] = {
@@ -153,18 +155,26 @@ async def schema_enricher_node(state: DashboardInsightState) -> Dict[str, Any]:
                         "is_groupable": is_groupable_type(col.data_type, col.column_name)
                     }
         
+        # 构建 SchemaContext
+        schema_context = SchemaContext(
+            tables=table_infos,
+            columns=column_infos,
+            relationships=[],
+            value_mappings={},
+            connection_id=connection_id,
+            db_type=db_type
+        )
+        
         elapsed_ms = int((time.time() - start_time) * 1000)
-        logger.info(f"[Worker] schema_enricher 完成, 耗时 {elapsed_ms}ms, {len(enriched_tables)} 表")
+        logger.info(f"[Worker] schema_enricher 完成, 耗时 {elapsed_ms}ms, {schema_context.table_count} 表")
+        
+        # 返回统一格式的字典表示，附加 column_statistics
+        enriched_schema = schema_context.to_dict()
+        enriched_schema["column_statistics"] = column_statistics
         
         return {
-            "enriched_schema": {
-                "tables": enriched_tables,
-                "columns": enriched_columns,
-                "column_statistics": column_statistics,
-                "relationships": [],
-                "db_type": db_type
-            },
-            "db_type": db_type,
+            "enriched_schema": enriched_schema,
+            "db_type": db_type.upper(),
             "connection_id": connection_id,
             "current_stage": "schema_done"
         }
@@ -284,7 +294,7 @@ async def sql_generator_node(state: DashboardInsightState) -> Dict[str, Any]:
         
         # P0: 收集SQL生成溯源信息
         enriched_schema = state.get("enriched_schema", {})
-        source_tables = [t.get("name", "") for t in enriched_schema.get("tables", [])]
+        source_tables = [t.get("table_name", "") for t in enriched_schema.get("tables", [])]
         
         lineage = state.get("lineage") or {}
         lineage.update({
@@ -691,10 +701,22 @@ async def analyze_dashboard(
     user_intent: Optional[str] = None
 ) -> Dict[str, Any]:
     """分析 Dashboard 的便捷函数"""
+    
+    # 动态获取数据库类型
+    actual_connection_id = connection_id or aggregated_data.get("connection_id", 1)
+    db_type = "mysql"  # 默认值
+    try:
+        from app.services.db_service import get_db_connection_by_id
+        conn = get_db_connection_by_id(actual_connection_id)
+        if conn and conn.db_type:
+            db_type = conn.db_type.upper()
+    except Exception:
+        pass
+    
     initial_state = DashboardInsightState(
         dashboard=dashboard,
-        connection_id=connection_id or aggregated_data.get("connection_id", 1),
-        db_type="MYSQL",
+        connection_id=actual_connection_id,
+        db_type=db_type,
         user_intent=user_intent or "自动发现关键业务指标和趋势",
         aggregated_data=aggregated_data,
         enriched_schema=None,

@@ -283,6 +283,38 @@ class SQLExecutorAgent:
                 rows_affected=result.get("data", {}).get("row_count", 0) if result.get("success") else 0
             )
             
+            # ✅ 新增：执行结果验证
+            result_validation = None
+            if result.get("success"):
+                try:
+                    from app.services.result_validator import result_validator
+                    
+                    user_query = self._extract_user_query(state)
+                    result_validation = result_validator.validate(
+                        result=execution_result,
+                        sql=sql_query,
+                        user_query=user_query
+                    )
+                    
+                    # 记录验证结果
+                    if result_validation.has_issues:
+                        logger.info(f"结果验证发现问题: {result_validation.message}")
+                        for warning in result_validation.warnings:
+                            logger.info(f"  警告: {warning}")
+                        
+                        # 如果是空结果，在流式事件中提示
+                        if result_validation.row_count == 0 and writer:
+                            writer(create_sql_step_event(
+                                step="final_sql",
+                                status="completed",
+                                result=f"查询成功但结果为空。{result_validation.message or ''}",
+                                time_ms=elapsed_ms
+                            ))
+                except ImportError:
+                    pass  # result_validator 模块不存在时跳过
+                except Exception as e:
+                    logger.warning(f"结果验证异常: {e}")
+            
             # 如果执行成功，发送数据查询事件
             if result.get("success") and writer:
                 data_result = result.get("data", {})
@@ -354,15 +386,24 @@ class SQLExecutorAgent:
                     "current_stage": "analysis"  # 总是进入数据分析阶段
                 }
             else:
-                # ✅ 修复：SQL 执行失败时，必须添加 error_history
-                # 这样 error_recovery_agent 才能正确分析错误并递增 retry_count
+                # ✅ 修复：SQL 执行失败时，必须添加 error_history 和 error_recovery_context
+                # 这样 sql_generator 在重试时能知道之前的错误并获取完整的表列表
                 error_msg = result.get("error", "SQL 执行失败")
                 logger.warning(f"SQL 执行失败（工具返回错误）: {error_msg[:100]}")
+                
+                # ✅ 关键修复：构建 error_recovery_context，传递给 sql_generator
+                error_recovery_context = {
+                    "failed_sql": sql_query,
+                    "error_message": error_msg,
+                    "error_type": "sql_execution_failed",
+                    "recovery_steps": ["检查列名是否正确", "检查表名是否存在", "简化 SQL 结构"],
+                }
                 
                 return {
                     "messages": messages,
                     "execution_result": execution_result,
                     "current_stage": "error_recovery",
+                    "error_recovery_context": error_recovery_context,  # ✅ 传递错误上下文
                     "error_history": state.get("error_history", []) + [{
                         "stage": "sql_execution",
                         "error": error_msg,
@@ -389,10 +430,19 @@ class SQLExecutorAgent:
                 error=str(e)
             )
             
+            # ✅ 关键修复：构建 error_recovery_context
+            error_recovery_context = {
+                "failed_sql": state.get("generated_sql", ""),
+                "error_message": str(e),
+                "error_type": "sql_execution_exception",
+                "recovery_steps": ["检查 SQL 语法", "检查表名和列名", "简化查询结构"],
+            }
+            
             return {
                 "messages": [AIMessage(content=f"SQL 执行失败: {str(e)}")],
                 "execution_result": execution_result,
                 "current_stage": "error_recovery",
+                "error_recovery_context": error_recovery_context,  # ✅ 传递错误上下文
                 "error_history": state.get("error_history", []) + [{
                     "stage": "sql_execution",
                     "error": str(e),

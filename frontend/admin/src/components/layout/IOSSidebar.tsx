@@ -64,6 +64,7 @@ const IOSSidebar: React.FC = () => {
     { key: '/connections', icon: <DatabaseOutlined />, label: '连接管理', to: '/connections' },
     { key: '/value-mappings', icon: <SwapOutlined />, label: '数据映射', to: '/value-mappings' },
     { key: '/llm-config', icon: <ApiOutlined />, label: '模型配置', to: '/llm-config' },
+    { key: '/sql-enhancement', icon: <SettingOutlined />, label: 'SQL增强配置', to: '/sql-enhancement' },
     { key: '/agent-profile', icon: <RobotOutlined />, label: '智能体配置', to: '/agent-profile' },
     { key: '/users', icon: <TeamOutlined />, label: '用户管理', to: '/users', adminOnly: true },
   ];

@@ -83,27 +83,38 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
         logger.info(f"语义缓存命中 (相似度: {cache_similarity:.1%})，检查是否需要澄清差异")
     
     # 1. 提取用户查询
-    messages = state.get("messages", [])
-    if not messages:
-        logger.warning("无消息，跳过澄清")
-        return {"current_stage": "schema_analysis"}
-    
-    user_query = None
-    # ✅ 修复：取最后一条 human 消息
-    for msg in reversed(messages):
-        if hasattr(msg, 'type') and msg.type == 'human':
-            user_query = msg.content
-            break
+    # P4: 优先使用 enriched_query（多轮对话改写后的查询）
+    user_query = state.get("enriched_query")
+    original_query = state.get("original_query")
+    query_rewritten = state.get("query_rewritten", False)
     
     if not user_query:
-        logger.warning("无法提取用户查询，跳过澄清")
-        return {"current_stage": "schema_analysis"}
+        # 从消息中获取原始查询
+        messages = state.get("messages", [])
+        if not messages:
+            logger.warning("无消息，跳过澄清")
+            return {"current_stage": "schema_analysis"}
+        
+        # 取最后一条 human 消息
+        for msg in reversed(messages):
+            if hasattr(msg, 'type') and msg.type == 'human':
+                user_query = msg.content
+                break
+        
+        if not user_query:
+            logger.warning("无法提取用户查询，跳过澄清")
+            return {"current_stage": "schema_analysis"}
+        
+        # 规范化查询内容
+        if isinstance(user_query, list):
+            user_query = user_query[0].get("text", "") if user_query else ""
+        
+        original_query = user_query
     
-    # 2. 规范化查询内容
-    if isinstance(user_query, list):
-        user_query = user_query[0].get("text", "") if user_query else ""
-    
-    logger.info(f"用户查询: {user_query[:100]}...")
+    if query_rewritten:
+        logger.info(f"使用改写后的查询进行澄清检测: {user_query[:100]}...")
+    else:
+        logger.info(f"用户查询: {user_query[:100]}...")
     
     # 3. 快速预检查 (性能优化)
     if should_skip_clarification(user_query):
@@ -249,13 +260,12 @@ def should_enter_clarification(state: SQLMessageState) -> bool:
     if route_decision == "general_chat":
         return False
     
-    # 如果已经确认过，不再澄清
+    # 如果已经确认过澄清，不再澄清
     if state.get("clarification_confirmed", False):
         return False
     
-    # 如果已经有增强查询，不再澄清
-    if state.get("enriched_query"):
-        return False
+    # P4: 即使有 enriched_query（改写后的查询），仍然需要进入澄清节点
+    # 澄清节点会检测改写后的查询是否仍然模糊
     
     return True
 

@@ -21,6 +21,48 @@ export interface DefaultEmbeddingResponse {
   message?: string;
 }
 
+// ============================================================================
+// SQL 增强配置相关类型
+// ============================================================================
+
+export interface SQLEnhancementConfig {
+  // QA 样本检索配置
+  qa_sample_enabled: boolean;
+  qa_sample_min_similarity: number;
+  qa_sample_top_k: number;
+  qa_sample_verified_only: boolean;
+  
+  // 指标库配置
+  metrics_enabled: boolean;
+  metrics_max_count: number;
+  
+  // 枚举值提示配置
+  enum_hints_enabled: boolean;
+  enum_max_values: number;
+  
+  // 简化流程配置
+  simplified_flow_enabled: boolean;
+  skip_clarification_for_clear_queries: boolean;
+  
+  // 缓存配置
+  cache_mode: 'simple' | 'full';
+}
+
+// 默认配置
+export const DEFAULT_SQL_ENHANCEMENT_CONFIG: SQLEnhancementConfig = {
+  qa_sample_enabled: false,
+  qa_sample_min_similarity: 0.85,
+  qa_sample_top_k: 3,
+  qa_sample_verified_only: true,
+  metrics_enabled: false,
+  metrics_max_count: 3,
+  enum_hints_enabled: true,
+  enum_max_values: 20,
+  simplified_flow_enabled: true,
+  skip_clarification_for_clear_queries: true,
+  cache_mode: 'simple'
+};
+
 /**
  * Get system configuration by key
  */
@@ -56,4 +98,29 @@ export const setDefaultEmbeddingModel = async (llmConfigId: number) => {
  */
 export const clearDefaultEmbeddingModel = async () => {
   return axios.delete(`${API_BASE_URL}/system-config/default-embedding`);
+};
+
+// ============================================================================
+// SQL 增强配置 API
+// ============================================================================
+
+/**
+ * 获取 SQL 增强功能配置
+ */
+export const getSQLEnhancementConfig = async () => {
+  return axios.get<SQLEnhancementConfig>(`${API_BASE_URL}/system-config/sql-enhancement/config`);
+};
+
+/**
+ * 更新 SQL 增强功能配置
+ */
+export const updateSQLEnhancementConfig = async (config: SQLEnhancementConfig) => {
+  return axios.put<SQLEnhancementConfig>(`${API_BASE_URL}/system-config/sql-enhancement/config`, config);
+};
+
+/**
+ * 重置 SQL 增强功能配置为默认值
+ */
+export const resetSQLEnhancementConfig = async () => {
+  return axios.post<{ message: string; config: SQLEnhancementConfig }>(`${API_BASE_URL}/system-config/sql-enhancement/reset`);
 };

@@ -274,6 +274,9 @@ class SkillService:
                 SchemaColumn.table_id.in_(table_ids)
             ).all() if table_ids else []
             
+            # 构建 table_id -> table_name 映射
+            table_id_to_name = {t.id: t.table_name for t in tables}
+            
             # 获取关系
             relationships = db.query(SchemaRelationship).filter(
                 SchemaRelationship.connection_id == connection_id,
@@ -286,18 +289,20 @@ class SkillService:
             return {
                 "tables": [
                     {
+                        "id": t.id,
                         "table_name": t.table_name,
-                        "table_comment": t.description,
-                        "id": t.id
+                        "description": t.description or ""
                     }
                     for t in tables
                 ],
                 "columns": [
                     {
+                        "id": c.id,
                         "column_name": c.column_name,
                         "data_type": c.data_type,
-                        "column_comment": c.description,
+                        "description": c.description or "",
                         "table_id": c.table_id,
+                        "table_name": table_id_to_name.get(c.table_id, ""),
                         "is_primary_key": c.is_primary_key,
                         "is_foreign_key": c.is_foreign_key
                     }

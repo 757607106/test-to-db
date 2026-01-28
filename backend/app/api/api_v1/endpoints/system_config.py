@@ -1,12 +1,48 @@
-from typing import Any, Optional
+from typing import Any, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
 from app import crud
 from app.api import deps
 from app.schemas.system_config import SystemConfig, SystemConfigCreate, SystemConfigUpdate
 
 router = APIRouter()
+
+
+# ============================================================================
+# SQL 增强配置相关的数据模型
+# ============================================================================
+
+class SQLEnhancementConfig(BaseModel):
+    """SQL 增强功能配置"""
+    # QA 样本检索配置
+    qa_sample_enabled: bool = False
+    qa_sample_min_similarity: float = 0.85
+    qa_sample_top_k: int = 3
+    qa_sample_verified_only: bool = True
+    
+    # 指标库配置
+    metrics_enabled: bool = False
+    metrics_max_count: int = 3
+    
+    # 枚举值提示配置
+    enum_hints_enabled: bool = True
+    enum_max_values: int = 20
+    
+    # 简化流程配置
+    simplified_flow_enabled: bool = True
+    skip_clarification_for_clear_queries: bool = True
+    
+    # 缓存配置
+    cache_mode: str = "simple"  # simple | full
+
+
+# SQL 增强配置的 key 前缀
+SQL_ENHANCEMENT_PREFIX = "sql_enhancement_"
+
+# 默认配置
+DEFAULT_SQL_ENHANCEMENT_CONFIG = SQLEnhancementConfig()
 
 
 @router.get("/{config_key}", response_model=SystemConfig)
@@ -134,3 +170,114 @@ def get_default_embedding_model(
         "base_url": llm_config.base_url,
         "is_active": llm_config.is_active
     }
+
+
+# ============================================================================
+# SQL 增强配置 API
+# ============================================================================
+
+@router.get("/sql-enhancement/config", response_model=SQLEnhancementConfig)
+def get_sql_enhancement_config(
+    *,
+    db: Session = Depends(deps.get_db),
+) -> Any:
+    """
+    获取 SQL 增强功能配置
+    
+    包括：
+    - QA 样本检索配置
+    - 指标库配置
+    - 枚举值提示配置
+    - 简化流程配置
+    - 缓存配置
+    """
+    import json
+    
+    config_key = f"{SQL_ENHANCEMENT_PREFIX}config"
+    config = crud.system_config.get_by_key(db, config_key=config_key)
+    
+    if not config or not config.config_value:
+        return DEFAULT_SQL_ENHANCEMENT_CONFIG
+    
+    try:
+        config_dict = json.loads(config.config_value)
+        return SQLEnhancementConfig(**config_dict)
+    except (json.JSONDecodeError, ValueError):
+        return DEFAULT_SQL_ENHANCEMENT_CONFIG
+
+
+@router.put("/sql-enhancement/config", response_model=SQLEnhancementConfig)
+def update_sql_enhancement_config(
+    *,
+    db: Session = Depends(deps.get_db),
+    config_in: SQLEnhancementConfig,
+) -> Any:
+    """
+    更新 SQL 增强功能配置
+    """
+    import json
+    
+    config_key = f"{SQL_ENHANCEMENT_PREFIX}config"
+    config_value = json.dumps(config_in.model_dump())
+    
+    crud.system_config.set_value(
+        db,
+        config_key=config_key,
+        config_value=config_value,
+        description="SQL 增强功能配置（QA样本、指标库、枚举提示等）"
+    )
+    
+    return config_in
+
+
+@router.post("/sql-enhancement/reset")
+def reset_sql_enhancement_config(
+    *,
+    db: Session = Depends(deps.get_db),
+) -> Any:
+    """
+    重置 SQL 增强功能配置为默认值
+    """
+    import json
+    
+    config_key = f"{SQL_ENHANCEMENT_PREFIX}config"
+    config_value = json.dumps(DEFAULT_SQL_ENHANCEMENT_CONFIG.model_dump())
+    
+    crud.system_config.set_value(
+        db,
+        config_key=config_key,
+        config_value=config_value,
+        description="SQL 增强功能配置（QA样本、指标库、枚举提示等）"
+    )
+    
+    return {
+        "message": "SQL 增强配置已重置为默认值",
+        "config": DEFAULT_SQL_ENHANCEMENT_CONFIG.model_dump()
+    }
+
+
+# ============================================================================
+# 辅助函数：获取 SQL 增强配置（供其他模块使用）
+# ============================================================================
+
+def get_sql_enhancement_settings() -> SQLEnhancementConfig:
+    """
+    获取 SQL 增强配置（供其他模块调用）
+    
+    优先从数据库读取，如果没有则返回默认配置
+    """
+    import json
+    from app.db.session import get_db_session
+    
+    try:
+        with get_db_session() as db:
+            config_key = f"{SQL_ENHANCEMENT_PREFIX}config"
+            config = crud.system_config.get_by_key(db, config_key=config_key)
+            
+            if config and config.config_value:
+                config_dict = json.loads(config.config_value)
+                return SQLEnhancementConfig(**config_dict)
+    except Exception:
+        pass
+    
+    return DEFAULT_SQL_ENHANCEMENT_CONFIG

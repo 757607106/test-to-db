@@ -1109,12 +1109,12 @@ async def retrieve_relevant_schema_async(db: Session, connection_id: int, query:
             key=lambda t: table_relevance_scores.get(t[0], 0),
             reverse=True
         )
-        tables_list = [{"id": t[0], "name": t[1], "description": t[2]} for t in sorted_tables]
+        tables_list = [{"id": t[0], "table_name": t[1], "description": t[2] or ""} for t in sorted_tables]
         
         if not tables_list:
             all_tables_from_db = crud.schema_table.get_by_connection(db=db, connection_id=connection_id)
             tables_list = [
-                {"id": table.id, "name": table.table_name, "description": table.description or ""}
+                {"id": table.id, "table_name": table.table_name, "description": table.description or ""}
                 for table in all_tables_from_db
             ]
         
@@ -1138,8 +1138,8 @@ async def retrieve_relevant_schema_async(db: Session, connection_id: int, query:
         
         # 处理关系
         relationships_list = []
-        table_name_map = {t["id"]: t["name"] for t in tables_list}
-        col_name_map = {c["id"]: c["name"] for c in columns_list}
+        table_name_map = {t["id"]: t["table_name"] for t in tables_list}
+        col_name_map = {c["id"]: c["column_name"] for c in columns_list}
         
         for rel in raw_relationships:
             if rel.source_table_id in table_ids and rel.target_table_id in table_ids:
@@ -1183,14 +1183,14 @@ def fetch_columns_batch_sync(db: Session, table_ids: List[int], tables_list: Lis
         for table_id in table_ids:
             all_columns.extend(crud.schema_column.get_by_table(db=db, table_id=table_id))
     
-    table_name_map = {t["id"]: t["name"] for t in tables_list}
+    table_name_map = {t["id"]: t["table_name"] for t in tables_list}
     
     return [
         {
             "id": col.id,
-            "name": col.column_name,
-            "type": col.data_type,
-            "description": col.description,
+            "column_name": col.column_name,
+            "data_type": col.data_type,
+            "description": col.description or "",
             "is_primary_key": col.is_primary_key,
             "is_foreign_key": col.is_foreign_key,
             "table_id": col.table_id,

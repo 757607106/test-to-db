@@ -238,10 +238,11 @@ def _determine_source(state: SQLMessageState) -> str:
 # 阶段路由映射表
 STAGE_ROUTES = {
     "init": "query_planning",           # P2: 先进行查询规划
-    "planning_done": "schema_agent",    # 规划完成后进入 schema 分析
-    "schema_done": "clarification",
+    "planning_done": "schema_agent",    # 规划完成后进入 schema 分析（简化流程跳过澄清）
+    "schema_done": "clarification",     # Schema 完成后进入澄清（非简化流程）
     "clarification_done": "sql_generator",
     "schema_analysis": "sql_generator",
+    "sql_generation": "sql_generator",  # ✅ 修复：错误恢复后重新生成 SQL
     "sql_generated": "sql_executor",
     "execution_done": "data_analyst",
     "chart_done": "recommendation",
@@ -258,7 +259,10 @@ def supervisor_route(state: SQLMessageState) -> str:
     基于 current_stage 和状态标志决定下一个节点。
     P2 新增: 支持智能规划路由
     P2.1 新增: 支持多步执行路由
+    Phase 4 优化: 简化流程支持
     """
+    from app.core.config import settings
+    
     current_stage = state.get("current_stage", "init")
     route_decision = state.get("route_decision")
     logger.info(f"[Route] 当前阶段: {current_stage}, 路由决策: {route_decision}")
@@ -291,11 +295,47 @@ def supervisor_route(state: SQLMessageState) -> str:
         if retry_count >= max_retries:
             logger.info(f"[Route] 达到重试上限 ({retry_count}/{max_retries}) → FINISH")
             return "FINISH"
+        
+        # ✅ 关键修复：检查错误类型，如果是 Schema 相关错误，重新执行 schema_agent
+        error_recovery_context = state.get("error_recovery_context") or {}
+        error_msg = (error_recovery_context.get("error_message") or "").lower()
+        
+        # 检测是否是 Schema 相关错误（表名/列名不存在）
+        is_schema_error = (
+            "unknown column" in error_msg or
+            "doesn't exist" in error_msg or
+            "unknown table" in error_msg or
+            "no such table" in error_msg or
+            "no such column" in error_msg or
+            "列名验证失败" in error_msg  # 添加中文错误检测
+        )
+        
+        if is_schema_error and retry_count == 1:
+            # 第一次重试时，重新执行 schema_agent 获取完整表列表
+            logger.info(f"[Route] 检测到 Schema 错误，重新执行 schema_agent ({retry_count}/{max_retries})")
+            return "schema_agent"
+        
         logger.info(f"[Route] 错误恢复 ({retry_count}/{max_retries}) → sql_generator")
         return "sql_generator"
     
-    # P2.1: 多步执行模式下，execution_done 由 supervisor 处理，不直接路由到 data_analyst
-    # (这个逻辑在 supervisor_node 的 _handle_multi_step_execution 中处理)
+    # ==========================================
+    # Phase 4: 简化流程 - 跳过澄清节点
+    # ==========================================
+    if current_stage == "schema_done":
+        # 检查是否启用简化流程
+        if settings.SIMPLIFIED_FLOW_ENABLED and settings.SKIP_CLARIFICATION_FOR_CLEAR_QUERIES:
+            # 检查查询是否明确（已改写或已确认）
+            query_rewritten = state.get("query_rewritten", False)
+            clarification_confirmed = state.get("clarification_confirmed", False)
+            
+            if query_rewritten or clarification_confirmed:
+                logger.info("[Route] 简化流程: 查询已明确，跳过澄清 → sql_generator")
+                return "sql_generator"
+            
+            # 检查是否是简单查询（可以跳过澄清）
+            if _is_clear_query(state):
+                logger.info("[Route] 简化流程: 查询明确，跳过澄清 → sql_generator")
+                return "sql_generator"
     
     # 分析完成后的路由（检查是否跳过图表）
     if current_stage == "analysis_done":
@@ -307,6 +347,66 @@ def supervisor_route(state: SQLMessageState) -> str:
     next_agent = STAGE_ROUTES.get(current_stage, "FINISH")
     logger.info(f"[Route] {current_stage} → {next_agent}")
     return next_agent
+
+
+def _is_clear_query(state: SQLMessageState) -> bool:
+    """
+    Phase 4: 判断查询是否足够明确，可以跳过澄清
+    
+    明确查询的特征：
+    - 包含具体的表名或字段名
+    - 包含明确的时间范围
+    - 包含具体的数值条件
+    - 查询结构完整（有主语、谓语、宾语）
+    """
+    import re
+    
+    # 获取查询
+    query = state.get("enriched_query") or state.get("original_query")
+    if not query:
+        messages = state.get("messages", [])
+        for msg in reversed(messages):
+            if hasattr(msg, 'type') and msg.type == 'human':
+                query = msg.content
+                if isinstance(query, list):
+                    query = query[0].get("text", "") if query else ""
+                break
+    
+    if not query:
+        return False
+    
+    query_lower = query.lower()
+    
+    # 明确查询的模式
+    clear_patterns = [
+        # 包含具体时间
+        r'(今天|昨天|本周|本月|今年|\d{4}[-/年]\d{1,2}[-/月]|\d{1,2}月)',
+        # 包含具体数量
+        r'(前\d+|top\s*\d+|\d+条|\d+个)',
+        # 包含具体表名（常见业务表）
+        r'(订单|用户|产品|库存|销售|客户|员工|部门)',
+        # 包含聚合函数关键词
+        r'(总数|数量|平均|最大|最小|求和|统计|汇总)',
+        # 包含排序关键词
+        r'(排名|排序|最多|最少|最高|最低)',
+    ]
+    
+    # 模糊查询的模式（需要澄清）
+    ambiguous_patterns = [
+        r'^(查询|获取|显示|看看).{0,5}$',  # 太短的查询
+        r'(哪些|什么样的|怎样的).{0,10}$',  # 开放式问题
+        r'(大概|可能|也许|或者)',  # 不确定词
+    ]
+    
+    # 检查是否匹配模糊模式
+    for pattern in ambiguous_patterns:
+        if re.search(pattern, query_lower):
+            return False
+    
+    # 检查是否匹配明确模式（至少匹配2个）
+    clear_count = sum(1 for pattern in clear_patterns if re.search(pattern, query_lower))
+    
+    return clear_count >= 2
 
 
 def _is_general_chat(state: SQLMessageState) -> bool:

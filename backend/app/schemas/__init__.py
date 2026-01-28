@@ -117,3 +117,13 @@ from app.schemas.join_rule import (
     JoinRuleContext,
 )
 
+# Phase 1: 统一的 Schema 上下文格式
+from app.schemas.schema_context import (
+    TableInfo,
+    ColumnInfo,
+    RelationshipInfo,
+    SchemaContext,
+    normalize_schema_info,
+    extract_table_names,
+)
+
