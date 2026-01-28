@@ -7,6 +7,18 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     API_V1_STR: str = "/v1"
     SECRET_KEY: str = os.getenv("SECRET_KEY", "development_secret_key")
+    
+    # ==========================================
+    # LangSmith 监控配置
+    # ==========================================
+    # LangSmith 提供 LLM 应用的可观测性
+    # 文档: https://docs.langchain.com/langsmith/home
+    # ==========================================
+    LANGCHAIN_TRACING_V2: bool = True  # 默认启用追踪
+    LANGCHAIN_ENDPOINT: str = "https://api.smith.langchain.com"
+    LANGCHAIN_API_KEY: str = os.getenv("LANGCHAIN_API_KEY", "")  # 从环境变量读取
+    LANGCHAIN_PROJECT: str = os.getenv("LANGCHAIN_PROJECT", "chatbi-production")
+    LANGCHAIN_CALLBACKS_BACKGROUND: bool = True
 
     # CORS settings
     BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []

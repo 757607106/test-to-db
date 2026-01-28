@@ -10,6 +10,11 @@ P2 新增: 智能规划
 - 查询规划节点：分析意图、分类查询、生成执行计划
 - 智能路由：根据查询类型选择最佳处理路径
 
+P3 新增: 可观测性
+- 请求追踪 (trace_id)
+- LangSmith 集成
+- 性能监控
+
 图结构:
     START → supervisor → [planning] → [Worker Agents] → supervisor → ... → FINISH
 """
@@ -21,6 +26,13 @@ from langgraph.graph.state import CompiledStateGraph
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.state import SQLMessageState
+from app.core.tracing import (
+    TraceContext,
+    generate_trace_id,
+    get_trace_id,
+    inject_trace_to_state,
+    extract_trace_from_state,
+)
 from app.models.agent_profile import AgentProfile
 
 # 导入统一的 Worker 节点
@@ -57,6 +69,7 @@ async def supervisor_node(state: SQLMessageState) -> Dict[str, Any]:
     - 汇总各 Agent 的执行结果
     """
     current_stage = state.get("current_stage", "init")
+    trace_id = extract_trace_from_state(state) or "-"
     
     # 检测是否有新的用户消息需要处理
     if current_stage in ["completed", "recommendation_done"]:
@@ -66,7 +79,7 @@ async def supervisor_node(state: SQLMessageState) -> Dict[str, Any]:
             is_human_message = _is_human_message(last_msg)
             
             if is_human_message:
-                logger.info("[Supervisor] 检测到新的用户消息，重置状态")
+                logger.info(f"[{trace_id}] [Supervisor] 检测到新的用户消息，重置状态")
                 return {
                     "current_stage": "init",
                     "execution_result": None,
@@ -298,19 +311,34 @@ def supervisor_route(state: SQLMessageState) -> str:
         
         # ✅ 关键修复：检查错误类型，如果是 Schema 相关错误，重新执行 schema_agent
         error_recovery_context = state.get("error_recovery_context") or {}
+        error_type = error_recovery_context.get("error_type", "")
         error_msg = (error_recovery_context.get("error_message") or "").lower()
         
-        # 检测是否是 Schema 相关错误（表名/列名不存在）
+        # 检测是否是列名验证失败（这是最常见的幻觉错误）
+        is_column_validation_error = (
+            error_type == "column_validation_failed" or
+            "列名验证失败" in error_msg or
+            "column_validation" in error_type
+        )
+        
+        # 检测是否是 Schema 相关错误（表名/列名不存在）- 包括 SQL 执行时的错误
         is_schema_error = (
             "unknown column" in error_msg or
             "doesn't exist" in error_msg or
             "unknown table" in error_msg or
             "no such table" in error_msg or
             "no such column" in error_msg or
-            "列名验证失败" in error_msg  # 添加中文错误检测
+            "in 'field list'" in error_msg  # MySQL 特有的列名错误提示
         )
         
-        if is_schema_error and retry_count == 1:
+        # ✅ 关键修复：列名验证失败或 SQL 执行时的列名错误，直接重试 sql_generator
+        # 因为 schema 是正确的，只是 LLM 生成了错误的列名
+        if is_column_validation_error or (is_schema_error and error_recovery_context.get("available_columns_hint")):
+            logger.info(f"[Route] 列名错误，重试 sql_generator ({retry_count}/{max_retries})")
+            logger.info(f"[Route] 错误上下文中包含正确列名信息: {bool(error_recovery_context.get('available_columns_hint'))}")
+            return "sql_generator"
+        
+        if is_schema_error and retry_count <= 1:
             # 第一次重试时，重新执行 schema_agent 获取完整表列表
             logger.info(f"[Route] 检测到 Schema 错误，重新执行 schema_agent ({retry_count}/{max_retries})")
             return "schema_agent"
@@ -332,10 +360,8 @@ def supervisor_route(state: SQLMessageState) -> str:
                 logger.info("[Route] 简化流程: 查询已明确，跳过澄清 → sql_generator")
                 return "sql_generator"
             
-            # 检查是否是简单查询（可以跳过澄清）
-            if _is_clear_query(state):
-                logger.info("[Route] 简化流程: 查询明确，跳过澄清 → sql_generator")
-                return "sql_generator"
+            # 不再使用关键词匹配判断，统一进入澄清节点由 LLM 判断
+            # 澄清节点内部会调用 LLM 判断是否真正需要澄清
     
     # 分析完成后的路由（检查是否跳过图表）
     if current_stage == "analysis_done":
@@ -347,66 +373,6 @@ def supervisor_route(state: SQLMessageState) -> str:
     next_agent = STAGE_ROUTES.get(current_stage, "FINISH")
     logger.info(f"[Route] {current_stage} → {next_agent}")
     return next_agent
-
-
-def _is_clear_query(state: SQLMessageState) -> bool:
-    """
-    Phase 4: 判断查询是否足够明确，可以跳过澄清
-    
-    明确查询的特征：
-    - 包含具体的表名或字段名
-    - 包含明确的时间范围
-    - 包含具体的数值条件
-    - 查询结构完整（有主语、谓语、宾语）
-    """
-    import re
-    
-    # 获取查询
-    query = state.get("enriched_query") or state.get("original_query")
-    if not query:
-        messages = state.get("messages", [])
-        for msg in reversed(messages):
-            if hasattr(msg, 'type') and msg.type == 'human':
-                query = msg.content
-                if isinstance(query, list):
-                    query = query[0].get("text", "") if query else ""
-                break
-    
-    if not query:
-        return False
-    
-    query_lower = query.lower()
-    
-    # 明确查询的模式
-    clear_patterns = [
-        # 包含具体时间
-        r'(今天|昨天|本周|本月|今年|\d{4}[-/年]\d{1,2}[-/月]|\d{1,2}月)',
-        # 包含具体数量
-        r'(前\d+|top\s*\d+|\d+条|\d+个)',
-        # 包含具体表名（常见业务表）
-        r'(订单|用户|产品|库存|销售|客户|员工|部门)',
-        # 包含聚合函数关键词
-        r'(总数|数量|平均|最大|最小|求和|统计|汇总)',
-        # 包含排序关键词
-        r'(排名|排序|最多|最少|最高|最低)',
-    ]
-    
-    # 模糊查询的模式（需要澄清）
-    ambiguous_patterns = [
-        r'^(查询|获取|显示|看看).{0,5}$',  # 太短的查询
-        r'(哪些|什么样的|怎样的).{0,10}$',  # 开放式问题
-        r'(大概|可能|也许|或者)',  # 不确定词
-    ]
-    
-    # 检查是否匹配模糊模式
-    for pattern in ambiguous_patterns:
-        if re.search(pattern, query_lower):
-            return False
-    
-    # 检查是否匹配明确模式（至少匹配2个）
-    clear_count = sum(1 for pattern in clear_patterns if re.search(pattern, query_lower))
-    
-    return clear_count >= 2
 
 
 def _is_general_chat(state: SQLMessageState) -> bool:
@@ -532,7 +498,8 @@ class IntelligentSQLGraph:
         query: str,
         connection_id: Optional[int] = None,
         thread_id: Optional[str] = None,
-        tenant_id: Optional[int] = None
+        tenant_id: Optional[int] = None,
+        trace_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         处理 SQL 查询
@@ -542,7 +509,11 @@ class IntelligentSQLGraph:
             connection_id: 数据库连接ID
             thread_id: 会话线程ID
             tenant_id: 租户ID (多租户隔离)
+            trace_id: 追踪ID (用于日志关联和 LangSmith)
         """
+        # 生成或使用传入的 trace_id
+        trace_id = trace_id or generate_trace_id()
+        
         try:
             from uuid import uuid4
             
@@ -550,7 +521,7 @@ class IntelligentSQLGraph:
             
             if thread_id is None:
                 thread_id = str(uuid4())
-                logger.info(f"生成新的 thread_id: {thread_id}")
+                logger.info(f"[{trace_id}] 生成新的 thread_id: {thread_id}")
             
             initial_state = {
                 "messages": [HumanMessage(content=query)],
@@ -561,28 +532,38 @@ class IntelligentSQLGraph:
                 "retry_count": 0,
                 "max_retries": 3,
                 "error_history": [],
+                "trace_id": trace_id,  # P3: 添加追踪ID
                 "context": {
                     "connectionId": connection_id,
-                    "tenantId": tenant_id
+                    "tenantId": tenant_id,
+                    "traceId": trace_id
                 }
             }
             
+            # 注入追踪信息
+            initial_state = inject_trace_to_state(initial_state)
+            
             config = {"configurable": {"thread_id": thread_id}}
+            
+            logger.info(f"[{trace_id}] 开始处理查询: {query[:50]}...")
             result = await self.graph.ainvoke(initial_state, config=config)
+            logger.info(f"[{trace_id}] 查询处理完成: stage={result.get('current_stage')}")
             
             return {
                 "success": True,
                 "result": result,
                 "thread_id": thread_id,
+                "trace_id": trace_id,
                 "final_stage": result.get("current_stage", "completed")
             }
             
         except Exception as e:
-            logger.error(f"查询处理失败: {e}")
+            logger.error(f"[{trace_id}] 查询处理失败: {e}")
             return {
                 "success": False,
                 "error": str(e),
                 "thread_id": thread_id if 'thread_id' in locals() else None,
+                "trace_id": trace_id,
                 "final_stage": "error"
             }
     

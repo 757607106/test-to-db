@@ -202,12 +202,16 @@ class SQLExecutorAgent:
 **核心职责**: 执行 SQL 查询，返回原始数据
 
 **执行规则**:
-1. 使用 execute_sql_query 工具执行 SQL 查询（仅一次）
+1. 使用 execute_sql_query 工具执行 SQL 查询（仅执行一次）
 2. 返回工具执行的原始结果
-3. **禁止生成查询结果的总结或解读**
-4. **禁止重复调用工具**
+3. 禁止生成查询结果的总结或解读
+4. 禁止重复调用工具
 
-**你的输出**: 只返回工具调用结果，不添加任何文字"""
+**错误处理**:
+- 执行失败时，错误信息会自动传递给错误恢复模块
+- 不要尝试自行修复 SQL
+
+**输出格式**: 只返回工具调用结果，不添加任何文字"""
     
     async def execute(self, state: SQLMessageState) -> Dict[str, Any]:
         """执行 SQL 查询"""
@@ -391,13 +395,58 @@ class SQLExecutorAgent:
                 error_msg = result.get("error", "SQL 执行失败")
                 logger.warning(f"SQL 执行失败（工具返回错误）: {error_msg[:100]}")
                 
-                # ✅ 关键修复：构建 error_recovery_context，传递给 sql_generator
+                # ✅ 关键修复：从 state 中获取 schema_info，构建列名白名单
+                schema_info = state.get("schema_info", {})
+                available_columns_hint = ""
+                column_whitelist = {}
+                
+                if schema_info:
+                    columns_list = schema_info.get("columns", [])
+                    if columns_list:
+                        # 构建列名白名单
+                        for col in columns_list:
+                            table_name = col.get("table_name", "")
+                            col_name = col.get("column_name", "")
+                            if table_name and col_name:
+                                if table_name not in column_whitelist:
+                                    column_whitelist[table_name] = []
+                                column_whitelist[table_name].append(col_name)
+                        
+                        # 构建可用列提示
+                        available_columns_info = []
+                        for table_name, cols in column_whitelist.items():
+                            available_columns_info.append(f"表 `{table_name}` 的可用列: {', '.join(cols)}")
+                        available_columns_hint = "\n".join(available_columns_info)
+                        
+                        logger.info(f"[SQL执行失败] 构建列名白名单: {len(column_whitelist)} 个表")
+                
+                # ✅ 关键修复：构建 error_recovery_context，包含列名白名单
                 error_recovery_context = {
                     "failed_sql": sql_query,
                     "error_message": error_msg,
                     "error_type": "sql_execution_failed",
                     "recovery_steps": ["检查列名是否正确", "检查表名是否存在", "简化 SQL 结构"],
+                    # ✅ 新增：传递列名白名单信息
+                    "available_columns_hint": available_columns_hint,
+                    "column_whitelist": column_whitelist,
                 }
+                
+                # ✅ 如果错误是 Unknown column，构建详细的修复提示
+                if "unknown column" in error_msg.lower() and available_columns_hint:
+                    error_recovery_context["fix_prompt"] = f"""
+【严重错误】SQL 执行失败，使用了不存在的列名！
+
+错误信息: {error_msg}
+
+【正确的列名信息 - 请严格使用以下列名】
+{available_columns_hint}
+
+【修复要求】
+1. 仔细检查上面的可用列名列表
+2. 只使用列表中存在的列名
+3. 不要猜测或虚构任何列名
+4. 如果需要计算某个指标，请使用实际存在的列进行计算
+"""
                 
                 return {
                     "messages": messages,
@@ -409,7 +458,10 @@ class SQLExecutorAgent:
                         "error": error_msg,
                         "sql_query": sql_query,
                         "retry_count": state.get("retry_count", 0),
-                        "timestamp": time.time()
+                        "timestamp": time.time(),
+                        # ✅ 新增：在 error_history 中也保存列名白名单
+                        "column_whitelist": column_whitelist,
+                        "available_columns": available_columns_hint
                     }]
                 }
             
@@ -430,24 +482,66 @@ class SQLExecutorAgent:
                 error=str(e)
             )
             
-            # ✅ 关键修复：构建 error_recovery_context
+            # ✅ 关键修复：从 state 中获取 schema_info，构建列名白名单
+            error_msg = str(e)
+            schema_info = state.get("schema_info", {})
+            available_columns_hint = ""
+            column_whitelist = {}
+            
+            if schema_info:
+                columns_list = schema_info.get("columns", [])
+                if columns_list:
+                    for col in columns_list:
+                        table_name = col.get("table_name", "")
+                        col_name = col.get("column_name", "")
+                        if table_name and col_name:
+                            if table_name not in column_whitelist:
+                                column_whitelist[table_name] = []
+                            column_whitelist[table_name].append(col_name)
+                    
+                    available_columns_info = []
+                    for table_name, cols in column_whitelist.items():
+                        available_columns_info.append(f"表 `{table_name}` 的可用列: {', '.join(cols)}")
+                    available_columns_hint = "\n".join(available_columns_info)
+            
+            # ✅ 关键修复：构建 error_recovery_context，包含列名白名单
             error_recovery_context = {
                 "failed_sql": state.get("generated_sql", ""),
-                "error_message": str(e),
+                "error_message": error_msg,
                 "error_type": "sql_execution_exception",
                 "recovery_steps": ["检查 SQL 语法", "检查表名和列名", "简化查询结构"],
+                "available_columns_hint": available_columns_hint,
+                "column_whitelist": column_whitelist,
             }
             
+            # 如果错误是 Unknown column，构建详细的修复提示
+            if "unknown column" in error_msg.lower() and available_columns_hint:
+                error_recovery_context["fix_prompt"] = f"""
+【严重错误】SQL 执行失败，使用了不存在的列名！
+
+错误信息: {error_msg}
+
+【正确的列名信息 - 请严格使用以下列名】
+{available_columns_hint}
+
+【修复要求】
+1. 仔细检查上面的可用列名列表
+2. 只使用列表中存在的列名
+3. 不要猜测或虚构任何列名
+"""
+            
             return {
-                "messages": [AIMessage(content=f"SQL 执行失败: {str(e)}")],
+                "messages": [AIMessage(content=f"SQL 执行失败: {error_msg}")],
                 "execution_result": execution_result,
                 "current_stage": "error_recovery",
-                "error_recovery_context": error_recovery_context,  # ✅ 传递错误上下文
+                "error_recovery_context": error_recovery_context,
                 "error_history": state.get("error_history", []) + [{
                     "stage": "sql_execution",
-                    "error": str(e),
+                    "error": error_msg,
                     "sql_query": state.get("generated_sql"),
-                    "retry_count": state.get("retry_count", 0)
+                    "retry_count": state.get("retry_count", 0),
+                    "column_whitelist": column_whitelist,
+                    "available_columns": available_columns_hint
                 }]
             }
     

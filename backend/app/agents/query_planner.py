@@ -199,14 +199,20 @@ class QueryClassifier:
 - 如果查询涉及多个不相关的指标，需要分解
 - 如果查询需要先查A再用A的结果查B，需要分解
 
+**子查询依赖关系**:
+- 如果子查询包含"结果"、"上述"、"之后"等词，则依赖前一个任务
+- 否则子查询可以并行执行
+
 请返回 JSON 格式:
 {
     "query_type": "类型",
     "complexity": 数字,
     "needs_decomposition": true/false,
     "reasoning": "分类理由",
-    "sub_queries": ["子查询1", "子查询2"] // 如果需要分解
-}"""
+    "sub_queries": ["子查询1", "子查询2"]
+}
+
+注意: sub_queries 只在 needs_decomposition 为 true 时需要填写"""
 
         try:
             messages = [

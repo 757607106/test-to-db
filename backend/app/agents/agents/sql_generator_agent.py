@@ -502,9 +502,29 @@ def generate_sql_query(
             recovery_steps = error_ctx.get("recovery_steps", [])
             fix_prompt = error_ctx.get("fix_prompt", "")
             
+            # ✅ 关键修复：检查是否有列名验证失败的详细信息
+            available_columns_hint = error_ctx.get("available_columns_hint", "")
+            
             if failed_sql or error_message:
+                # 优先使用预构建的 fix_prompt（包含详细的列名信息）
                 if fix_prompt:
                     specific_fix_hints = fix_prompt
+                elif available_columns_hint:
+                    # 如果有可用列信息，构建详细的修复提示
+                    specific_fix_hints = f"""
+【严重错误】上一次生成的 SQL 使用了不存在的列名！
+
+错误信息: {error_message}
+
+【正确的列名信息 - 请严格使用以下列名】
+{available_columns_hint}
+
+【修复要求】
+1. 仔细检查上面的可用列名列表
+2. 只使用列表中存在的列名
+3. 不要猜测或虚构任何列名
+4. 如果需要计算某个指标（如库存总量），请使用实际存在的列进行计算
+"""
                 else:
                     from app.services.sql_helpers import build_targeted_fix_prompt
                     specific_fix_hints = build_targeted_fix_prompt(error_message, failed_sql, db_type)
@@ -604,6 +624,17 @@ def generate_sql_query(
 5. 使用适当的连接和过滤条件
 6. 限制结果数量（除非用户明确要求全部数据）
 7. 使用正确的值映射和枚举值
+
+【禁止假设 - 严格遵守】
+- 禁止在 SQL 中添加任何注释（如 "-- 假设..."、"-- 替换为..."）
+- 禁止使用占位符值（如 "1, 2, 3, 4, 5" 代替实际ID）
+- 禁止假设字段的业务含义（如假设 status=1 表示某种状态）
+- 禁止生成需要用户手动修改的 SQL
+
+如果信息不足以生成完整 SQL：
+- 对于缺少具体值的情况（如"前5个产品"但未指定哪5个），使用子查询动态获取
+- 对于状态字段，如果不知道具体值含义，不要添加状态过滤条件
+- 生成可直接执行的 SQL，不需要任何人工修改
 """
         
         # 使用指数退避重试调用 LLM
@@ -627,6 +658,15 @@ def generate_sql_query(
             sql_query = sql_query[:-3]
         sql_query = sql_query.strip()
         
+        # ✅ 新增：移除 SQL 中的注释（防止 LLM 添加假设性注释）
+        import re
+        # 移除单行注释 (-- 开头)
+        sql_query = re.sub(r'--.*?$', '', sql_query, flags=re.MULTILINE)
+        # 移除多行注释 (/* ... */)
+        sql_query = re.sub(r'/\*.*?\*/', '', sql_query, flags=re.DOTALL)
+        # 清理多余空行
+        sql_query = re.sub(r'\n\s*\n', '\n', sql_query).strip()
+        
         # ✅ 新增：列名验证（防幻觉关键步骤）
         # 修复：列名验证失败时直接返回失败，触发重试
         column_validation_errors = []
@@ -636,14 +676,25 @@ def generate_sql_query(
                 column_validation_errors = validation_result["errors"]
                 logger.warning(f"[列名验证] 发现问题: {column_validation_errors}")
                 
+                # ✅ 关键修复：构建详细的列名白名单信息，帮助 LLM 修正
+                # 提取所有可用的列名，按表分组
+                available_columns_info = []
+                for table_name, cols in column_whitelist.items():
+                    available_columns_info.append(f"表 `{table_name}` 的可用列: {', '.join(cols)}")
+                available_columns_str = "\n".join(available_columns_info)
+                
                 # ✅ 修复：列名验证失败时返回失败状态，触发错误恢复
+                # 包含详细的正确列名信息
                 return json.dumps({
                     "success": False,  # 标记为失败，触发重试
                     "error": f"列名验证失败: {'; '.join(column_validation_errors)}",
                     "sql_query": sql_query,
                     "samples_used": len(samples) if samples else 0,
                     "column_validation_errors": column_validation_errors,
-                    "validation_passed": False
+                    "validation_passed": False,
+                    # ✅ 新增：传递正确的列名信息
+                    "available_columns": available_columns_str,
+                    "column_whitelist": column_whitelist
                 }, ensure_ascii=False)
         
         return json.dumps({
@@ -811,23 +862,30 @@ class SQLGeneratorAgent:
 
 **工作流程**:
 1. 使用 generate_sql_query 工具生成 SQL
-   - connection_id 和快速模式设置会自动从状态获取
-   - 工具内部会自动检索相关样本（如果启用）
-2. **只返回 SQL 语句，不解释，不总结**
+2. 只返回 SQL 语句，不解释，不总结
+
+**关键约束**:
+1. 只能使用 schema_info 中提供的表名和列名
+2. 禁止虚构任何表名或列名
+3. 禁止在 SQL 中添加注释或假设
+4. 禁止使用占位符值，必须生成可直接执行的 SQL
+
+**错误恢复模式**:
+- 如果 error_recovery_context 存在，说明上一次生成失败
+- 必须仔细阅读 available_columns_hint 中的正确列名
+- 生成完全不同结构的 SQL 避免相同错误
 
 **生成原则**:
 - 确保语法绝对正确
 - 使用适当的连接方式
-- 限制结果集大小（除非明确要求）
+- 限制结果集大小（除非明确要求全部）
 - 使用正确的值映射
 - 避免危险操作（DROP, DELETE, UPDATE 等）
 
 **禁止的行为**:
-- ❌ 不要生成查询结果的预测或解读
-- ❌ 不要添加 SQL 以外的内容
-- ❌ 不要重复调用工具
-
-**输出格式**: 只返回工具调用结果，包含生成的 SQL"""
+- 不要生成查询结果的预测或解读
+- 不要添加 SQL 以外的内容
+- 不要重复调用工具"""
     
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
         """处理 SQL 生成任务"""
@@ -1140,7 +1198,67 @@ class SQLGeneratorAgent:
             result = json.loads(result_json)
             
             if not result.get("success"):
-                raise ValueError(f"SQL 生成失败: {result.get('error')}")
+                # ✅ 关键修复：检查是否是列名验证失败
+                if result.get("column_validation_errors"):
+                    column_errors = result.get("column_validation_errors", [])
+                    available_columns = result.get("available_columns", "")
+                    failed_sql = result.get("sql_query", "")
+                    
+                    logger.warning(f"[列名验证失败] 错误: {column_errors}")
+                    logger.info(f"[列名验证失败] 可用列信息已准备，将传递给重试")
+                    
+                    # 构建详细的错误恢复上下文，包含正确的列名信息
+                    error_recovery_ctx = {
+                        "error_type": "column_validation_failed",
+                        "error_message": f"列名验证失败: {'; '.join(column_errors)}",
+                        "failed_sql": failed_sql,
+                        "recovery_action": "regenerate_sql",
+                        "recovery_steps": [
+                            "检查 SQL 中使用的列名",
+                            "只使用下面列出的可用列名",
+                            "不要猜测或虚构列名"
+                        ],
+                        # ✅ 关键：传递正确的列名信息给 LLM
+                        "available_columns_hint": available_columns,
+                        "column_whitelist": result.get("column_whitelist", {}),
+                        "fix_prompt": f"""
+【严重错误】上一次生成的 SQL 使用了不存在的列名！
+
+错误详情:
+{chr(10).join(f"  - {err}" for err in column_errors)}
+
+【正确的列名信息】
+{available_columns}
+
+【修复要求】
+1. 仔细检查上面的可用列名列表
+2. 只使用列表中存在的列名
+3. 不要猜测或虚构任何列名
+4. 如果需要的数据不存在，使用最接近的可用列
+
+请重新生成 SQL，确保所有列名都在可用列表中。
+"""
+                    }
+                    
+                    return {
+                        "messages": [],
+                        "current_stage": "error_recovery",
+                        "error_recovery_context": error_recovery_ctx,
+                        "generated_sql": None,
+                        "retry_count": state.get("retry_count", 0) + 1,
+                        "error_history": state.get("error_history", []) + [{
+                            "stage": "sql_generation_column_validation",
+                            "error": f"列名验证失败: {'; '.join(column_errors)}",
+                            "failed_sql": failed_sql,
+                            "column_errors": column_errors,
+                            # ✅ 关键修复：在 error_history 中也保存列名白名单
+                            # 这样 error_recovery_agent 可以从 error_history 中提取
+                            "column_whitelist": result.get("column_whitelist", {}),
+                            "available_columns": available_columns
+                        }]
+                    }
+                else:
+                    raise ValueError(f"SQL 生成失败: {result.get('error')}")
             
             generated_sql = result.get("sql_query", "")
             

@@ -132,15 +132,24 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
     # 4. LLM检测是否需要澄清
     connection_id = state.get("connection_id")
     
+    # ✅ 获取 schema_info，用于生成动态澄清选项
+    schema_info = state.get("schema_info")
+    if schema_info:
+        logger.info(f"使用 Schema 信息进行智能澄清 (表数量: {len(schema_info.get('tables', []))})")
+    else:
+        logger.warning("无 Schema 信息，澄清选项可能不够精确")
+    
     try:
         # 如果是语义命中，可以将匹配的原查询作为上下文
         check_context = {}
         if cache_hit_type == "semantic" and cache_matched_query:
             check_context["matched_similar_query"] = cache_matched_query
         
+        # ✅ 传递 schema_info 给澄清检测函数，实现动态选项生成
         check_result = quick_clarification_check(
             query=user_query,
-            connection_id=connection_id
+            connection_id=connection_id,
+            schema_info=schema_info
         )
     except Exception as e:
         logger.error(f"澄清检测失败: {e}", exc_info=True)

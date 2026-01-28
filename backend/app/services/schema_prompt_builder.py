@@ -136,6 +136,14 @@ def build_schema_prompt(
     lines.append("4. 【JOIN 约束】JOIN 时必须使用正确的关联字段")
     lines.append("5. 【别名约束】使用表别名时，确保引用的列在该表中存在")
     lines.append("")
+    lines.append("【⚠️ 特别警告 - 常见幻觉列名】")
+    lines.append("以下列名经常被错误使用，请特别注意：")
+    lines.append("  ❌ total_inventory → 不存在！请使用 quantity 或 SUM(quantity)")
+    lines.append("  ❌ total_sales → 不存在！请使用 SUM(amount) 或 SUM(quantity * unit_price)")
+    lines.append("  ❌ avg_daily_sales → 不存在！请使用 AVG(...) 计算")
+    lines.append("  ❌ product_name → 可能不存在！请检查是否是 name")
+    lines.append("  ❌ category_name → 可能不存在！请检查是否是 name")
+    lines.append("")
     
     # 常见错误示例 - 更具体的例子
     lines.append("【❌ 常见错误示例 - 请避免】")

@@ -43,12 +43,12 @@ CLARIFICATION_UNIFIED_PROMPT = """你是一个专业的数据查询意图分析�
 
 数据库连接ID: {connection_id}
 
-请检测以下类型的模糊性:
-1. **时间范围模糊**: 如"最近"、"近期"、"上个月"等没有明确日期的表述
-2. **字段/指标模糊**: 如"查看订单"但没说明需要哪些字段（金额、数量、状态？）
-3. **筛选条件模糊**: 如"大客户"、"热销产品"等主观描述
-4. **分组维度模糊**: 如"按地区"但不明确是省、市还是区
-5. **排序/数量模糊**: 如"前几名"、"一些"等不明确的数量
+**检测的模糊类型** (按优先级排序):
+1. 时间范围模糊: 如"最近"、"近期"、"上个月"等没有明确日期的表述
+2. 筛选条件模糊: 如"大客户"、"热销产品"等主观描述
+3. 字段/指标模糊: 如"查看订单"但没说明需要哪些字段（金额、数量、状态？）
+4. 分组维度模糊: 如"按地区"但不明确是省、市还是区
+5. 排序/数量模糊: 如"前几名"、"一些"等不明确的数量
 
 **重要判断原则**:
 - 如果查询已经足够明确，可以直接生成SQL，则不需要澄清
@@ -56,6 +56,12 @@ CLARIFICATION_UNIFIED_PROMPT = """你是一个专业的数据查询意图分析�
 - 简单查询（如"查询所有用户"）通常不需要澄清
 - 包含具体时间、具体数值、具体条件的查询不需要澄清
 - 只处理高/中严重度的模糊性，低严重度可以忽略
+
+**问题生成规则**:
+- 最多生成 3 个澄清问题
+- 优先级：时间范围 > 筛选条件 > 字段选择 > 分组维度
+- 优先生成选择题（更便于用户回答）
+- 每个问题需要唯一的ID（如 q1, q2, q3）
 
 请以JSON格式返回分析结果（一次性返回检测结果和澄清问题）:
 {{
@@ -82,8 +88,77 @@ CLARIFICATION_UNIFIED_PROMPT = """你是一个专业的数据查询意图分析�
 **注意**:
 - 如果 needs_clarification 为 false，questions 数组应为空
 - 如果 needs_clarification 为 true，必须提供 questions 数组
-- questions 最多3个问题，优先生成选择题（更便于用户回答）
+
+只返回JSON，不要其他内容。"""
+
+
+# 结合 Schema 信息的澄清提示词
+CLARIFICATION_WITH_SCHEMA_PROMPT = """你是一个专业的数据查询意图分析专家。请结合数据库结构信息，分析用户查询是否存在模糊或不明确的地方。
+
+**用户查询**: {query}
+
+**数据库连接ID**: {connection_id}
+
+**数据库结构信息** (仅供你理解数据，不要暴露给用户):
+{schema_context}
+
+**检测的模糊类型** (按优先级排序):
+1. 时间范围模糊: 如"最近"、"近期"等
+2. 筛选条件模糊: 如"大客户"等主观描述
+3. 字段/指标模糊: 如"查看数据"但没说明具体内容
+4. 分组维度模糊: 如"按地区"但不明确层级
+5. 排序/数量模糊: 如"前几名"等不明确的数量
+
+**重要判断原则**:
+- 如果查询已经足够明确，可以直接生成SQL，则不需要澄清
+- 只有当模糊性会显著影响查询结果时才需要澄清
+- 简单查询（如"查询所有用户"）通常不需要澄清
+- 包含具体时间、具体数值、具体条件的查询不需要澄清
+- 只处理高/中严重度的模糊性，低严重度可以忽略
+
+**问题生成规则 (极其重要)**:
+- 最多生成 3 个澄清问题
+- 问题和选项必须使用用户能理解的业务语言
+- 禁止在问题或选项中出现任何技术术语：表名、字段名、SQL、数据库等
+- 选项应该描述用户的业务需求，而不是数据来源
 - 每个问题需要唯一的ID（如 q1, q2, q3）
+
+**错误示例** (不要这样写):
+- "当前库存数量（来自 inventory 表）" 
+- "按产品（product 表）"
+- "库存及对应产品信息（关联 product...）"
+
+**正确示例** (应该这样写):
+- "当前库存数量"
+- "按产品分类"
+- "库存详情（含产品名称）"
+
+请以JSON格式返回分析结果:
+{{
+    "needs_clarification": true/false,
+    "reason": "需要/不需要澄清的原因",
+    "ambiguities": [
+        {{
+            "type": "时间范围|字段选择|筛选条件|分组维度|排序数量",
+            "description": "具体描述模糊之处",
+            "severity": "high|medium|low"
+        }}
+    ],
+    "questions": [
+        {{
+            "id": "q1",
+            "question": "您想查看哪个时间范围的数据？",
+            "type": "choice",
+            "options": ["最近7天", "最近30天", "本月", "本季度"],
+            "related_ambiguity": "时间范围模糊"
+        }}
+    ]
+}}
+
+**注意**:
+- 如果 needs_clarification 为 false，questions 数组应为空
+- 如果 needs_clarification 为 true，必须提供 questions 数组
+- 所有面向用户的文字必须是业务语言，不能包含任何技术细节
 
 只返回JSON，不要其他内容。"""
 
@@ -95,18 +170,23 @@ CLARIFICATION_UNIFIED_PROMPT = """你是一个专业的数据查询意图分析�
 # 内部函数（不使用 @tool 装饰器，避免 LangGraph 的工具流式处理）
 # ============================================================================
 
-def _quick_clarification_check_impl(query: str, connection_id: Optional[int] = None) -> Dict[str, Any]:
+def _quick_clarification_check_impl(
+    query: str, 
+    connection_id: Optional[int] = None,
+    schema_info: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """
     快速检测用户查询是否需要澄清（内部实现，不使用 @tool 装饰器）
     
-    优化版：使用单次LLM调用同时完成检测和问题生成，减少延迟
-    
-    注意：这个函数使用禁用流式输出的 LLM，确保检测结果不会被
-    错误地流式传输到前端。
+    优化版：结合 Schema 信息进行智能澄清
+    - 根据实际表结构生成澄清问题
+    - 根据字段枚举值生成选项
+    - 根据日期字段范围生成时间选项
     
     Args:
         query: 用户的自然语言查询
         connection_id: 数据库连接ID
+        schema_info: Schema 信息（包含 tables、columns、semantic_layer 等）
         
     Returns:
         Dict包含:
@@ -117,23 +197,25 @@ def _quick_clarification_check_impl(query: str, connection_id: Optional[int] = N
     try:
         logger.info(f"开始澄清检测: {query[:50]}...")
         
-        # 获取 LLM 并禁用流式输出，防止 JSON 输出被流式传输到前端
+        # 获取 LLM 并禁用流式输出
         base_llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
-        # 使用 with_config 禁用流式输出
         llm = base_llm.with_config({"callbacks": []})
         
-        # 优化：使用统一提示词，一次LLM调用同时完成检测和问题生成
-        unified_prompt = CLARIFICATION_UNIFIED_PROMPT.format(
+        # 构建 Schema 上下文
+        schema_context = _build_schema_context_for_clarification(schema_info)
+        
+        # 使用结合 Schema 的提示词
+        prompt = CLARIFICATION_WITH_SCHEMA_PROMPT.format(
             query=query,
-            connection_id=connection_id
+            connection_id=connection_id,
+            schema_context=schema_context
         )
         
-        # 使用 invoke 而不是 stream，并且不传递 callbacks
-        response = llm.invoke([HumanMessage(content=unified_prompt)], config={"callbacks": []})
+        # 使用 invoke 而不是 stream
+        response = llm.invoke([HumanMessage(content=prompt)], config={"callbacks": []})
         
         # 解析响应
         try:
-            # 清理响应中的markdown标记
             content = response.content.strip()
             if content.startswith("```json"):
                 content = content[7:]
@@ -152,7 +234,6 @@ def _quick_clarification_check_impl(query: str, connection_id: Optional[int] = N
                 "reason": "解析失败，默认不需要澄清"
             }
         
-        # 检查是否需要澄清
         needs_clarification = result.get("needs_clarification", False)
         
         if not needs_clarification:
@@ -180,7 +261,6 @@ def _quick_clarification_check_impl(query: str, connection_id: Optional[int] = N
                 "reason": "模糊性较轻，可以继续执行"
             }
         
-        # 获取澄清问题（已在同一次调用中生成）
         questions = result.get("questions", [])
         
         if not questions:
@@ -207,6 +287,91 @@ def _quick_clarification_check_impl(query: str, connection_id: Optional[int] = N
             "questions": [],
             "reason": f"检测过程出错: {str(e)}"
         }
+
+
+def _build_schema_context_for_clarification(schema_info: Optional[Dict[str, Any]]) -> str:
+    """
+    构建用于澄清的 Schema 上下文
+    
+    Args:
+        schema_info: Schema 信息
+        
+    Returns:
+        格式化的 Schema 上下文字符串
+    """
+    if not schema_info:
+        return "（无 Schema 信息）"
+    
+    lines = []
+    
+    # 1. 表信息
+    tables = schema_info.get("tables", [])
+    if tables:
+        lines.append("**可用的数据表**:")
+        for t in tables[:10]:  # 最多显示10个表
+            table_name = t.get("table_name", t.get("name", ""))
+            description = t.get("description", t.get("comment", ""))
+            if description:
+                lines.append(f"- {table_name}: {description}")
+            else:
+                lines.append(f"- {table_name}")
+    
+    # 2. 关键字段信息
+    columns = schema_info.get("columns", [])
+    if columns:
+        # 按表分组，只显示重要字段
+        important_columns = [c for c in columns if c.get("description") or c.get("comment")]
+        if important_columns:
+            lines.append("\n**关键字段**:")
+            for c in important_columns[:20]:  # 最多显示20个字段
+                table_name = c.get("table_name", "")
+                col_name = c.get("column_name", c.get("name", ""))
+                description = c.get("description", c.get("comment", ""))
+                data_type = c.get("data_type", c.get("type", ""))
+                lines.append(f"- {table_name}.{col_name} ({data_type}): {description}")
+    
+    # 3. 语义层信息（枚举值、日期范围等）
+    semantic_layer = schema_info.get("semantic_layer", {})
+    
+    # 枚举字段
+    enum_columns = semantic_layer.get("enum_columns", [])
+    if enum_columns:
+        lines.append("\n**字段可选值**:")
+        for enum_col in enum_columns[:5]:  # 最多显示5个枚举字段
+            table_name = enum_col.get("table_name", "")
+            col_name = enum_col.get("column_name", "")
+            values = enum_col.get("values", [])
+            if values:
+                values_str = ", ".join(str(v) for v in values[:10])
+                if len(values) > 10:
+                    values_str += "..."
+                lines.append(f"- {table_name}.{col_name}: {values_str}")
+    
+    # 日期字段范围
+    date_columns = semantic_layer.get("date_columns", [])
+    if date_columns:
+        lines.append("\n**日期字段范围**:")
+        for date_col in date_columns[:5]:
+            table_name = date_col.get("table_name", "")
+            col_name = date_col.get("column_name", "")
+            date_min = date_col.get("date_min", "")
+            date_max = date_col.get("date_max", "")
+            if date_min or date_max:
+                lines.append(f"- {table_name}.{col_name}: {date_min} ~ {date_max}")
+    
+    # 业务指标
+    metrics = semantic_layer.get("metrics", [])
+    if metrics:
+        lines.append("\n**业务指标**:")
+        for m in metrics[:5]:
+            name = m.get("business_name", m.get("name", ""))
+            description = m.get("description", "")
+            if description:
+                lines.append(f"- {name}: {description}")
+            else:
+                lines.append(f"- {name}")
+    
+    return "\n".join(lines) if lines else "（无详细 Schema 信息）"
 
 
 def _enrich_query_with_clarification_impl(
@@ -433,125 +598,30 @@ def should_skip_clarification(query: str) -> bool:
     """
     快速判断是否可以跳过澄清检测
     
-    简化版本：只保留核心规则，减少复杂度
-    原则：既不过度澄清，也不遗漏真正模糊的查询
-    
-    修复 (2026-01-22): 
-    - 调整阈值逻辑，短查询需要额外检查是否包含模糊词
-    - 添加更多明确查询的识别模式
+    修改 (2026-01-28): 
+    - 移除关键词匹配逻辑，统一由 LLM 判断
+    - 只保留极端情况的快速过滤（如空查询、纯闲聊）
     
     Args:
         query: 用户查询
         
     Returns:
-        bool - 是否跳过澄清
+        bool - 是否跳过澄清（True=跳过，False=需要LLM判断）
     """
-    import re
-    
     query_lower = query.lower().strip()
     query_len = len(query)
     
-    # ============================================
-    # 1. 短查询的特殊处理
-    # ============================================
-    if query_len < 8:
-        # 非常短的查询，检查是否是数据查询意图
-        query_intent_words = ['查询', '统计', '显示', '列出', '获取', '查一下', '查看', '找', '搜', '数据']
-        if any(word in query for word in query_intent_words):
-            # 如 "查一下数据" - 太短且模糊，需要澄清
-            return False
-        # 如 "你好" - 可能是闲聊，跳过澄清
+    # 1. 空查询或极短查询（小于3个字符）- 跳过澄清
+    if query_len < 3:
         return True
     
-    # 8-20 字符的查询需要更细致的判断
-    if query_len < 20:
-        # 检查是否包含明确的条件
-        has_specific_condition = any([
-            re.search(r'\d+', query),  # 包含数字
-            re.search(r'[=><]', query),  # 包含比较运算符
-            re.search(r'(ID|编号|名称)', query, re.IGNORECASE),  # 包含ID等关键词
-        ])
-        if has_specific_condition:
-            return True
-        
-        # 检查是否是模糊查询
-        ambiguous_words = ['最近', '一些', '几个', '前几', '大概', '差不多', '左右']
-        if any(word in query for word in ambiguous_words):
-            return False  # 包含模糊词，需要澄清
-    
-    # ============================================
-    # 2. 包含具体日期 - 跳过澄清
-    # ============================================
-    date_patterns = [
-        r'\d{4}[-/年]\d{1,2}[-/月]\d{1,2}',  # 2024-01-01
-        r'今[天日]|昨[天日]|前[天日]',       # 今天、昨天
-        r'本[周月季年]|上[周月季年]',        # 本周、上月
-        r'最近\d+[天周月年]',                # 最近30天
-        r'\d+月\d+[日号]',                   # 1月1日
-    ]
-    if any(re.search(p, query) for p in date_patterns):
+    # 2. 纯闲聊关键词 - 跳过澄清
+    chat_keywords = ['你好', 'hello', 'hi', '谢谢', 'thanks', '再见', 'bye']
+    if query_lower in chat_keywords:
         return True
     
-    # ============================================
-    # 3. 包含具体数量 - 跳过澄清
-    # ============================================
-    quantity_patterns = [
-        r'前\d+[个名条项]',    # 前10个
-        r'top\s*\d+',           # top 10
-        r'limit\s*\d+',         # limit 10
-        r'\d+[条个项]',         # 10条
-        r'第\d+',               # 第5
-    ]
-    if any(re.search(p, query_lower) for p in quantity_patterns):
-        return True
-    
-    # ============================================
-    # 4. 简单聚合查询 - 跳过澄清
-    # ============================================
-    if re.search(r'^(统计|计算|求|查询).*(总数|总量|总额|平均|最大|最小|数量)', query):
-        return True
-    
-    # ============================================
-    # 5. 查询所有/全部 - 跳过澄清
-    # ============================================
-    if re.search(r'^(查[询看]|显示|列出|获取)(所有|全部|所有的)', query):
-        return True
-    
-    # ============================================
-    # 6. 包含明确条件 - 跳过澄清
-    # ============================================
-    # 包含ID/编号条件
-    if re.search(r'(ID|编号|订单号|用户名)\s*[=为是:：]?\s*[\w\d]+', query, re.IGNORECASE):
-        return True
-    
-    # 包含具体名称/值（引号内的内容）
-    if re.search(r'["\'""].*?["\'""]', query):
-        return True
-    
-    # 包含比较条件
-    if re.search(r'(大于|小于|等于|超过|低于|不少于|不超过)\s*\d+', query):
-        return True
-    
-    # ============================================
-    # 7. 包含明确模糊词 - 需要澄清
-    # ============================================
-    high_ambiguity_words = [
-        '最近的', '近期的', '一些', '某些', '部分',
-        '大客户', '小客户', '热门', '冷门',
-        '高价值', '低价值', '重要的', '主要的'
-    ]
-    if any(word in query for word in high_ambiguity_words):
-        return False  # 明确需要澄清
-    
-    # ============================================
-    # 8. 默认：中等长度查询跳过澄清
-    # ============================================
-    # 如果到这里还没有决定，默认跳过澄清
-    # （让 LLM 澄清检测做最终判断）
+    # 3. 其他所有情况 - 交给 LLM 判断
     return False
-
-
-# 已移除 _contains_ambiguous_words 函数，逻辑已集成到 should_skip_clarification 中
 
 
 # ============================================================================

@@ -5,11 +5,16 @@ LLM 模型管理模块
 - 数据库配置的模型
 - 环境变量配置的模型
 - 实例缓存优化
+- LLM 包装器（重试、超时、监控）
 
 重构说明 (2026-01-25):
 - 移除硬编码的 Provider 判断逻辑
 - 使用 model_registry 工厂函数动态创建模型
 - 支持所有 OpenAI 兼容的国内外模型
+
+重构说明 (2026-01-28):
+- 集成 LLM 包装器，提供统一的重试和超时控制
+- 支持 LangSmith 追踪
 """
 import time
 import logging
@@ -24,6 +29,12 @@ from app.core.model_registry import (
     create_chat_model,
     create_embedding_model,
     get_provider_config,
+)
+from app.core.llm_wrapper import (
+    LLMWrapper,
+    LLMWrapperConfig,
+    get_llm_wrapper,
+    reset_llm_wrapper,
 )
 from app.db.session import SessionLocal
 from app.models.llm_config import LLMConfiguration
@@ -440,3 +451,91 @@ def create_llm_from_config(config: LLMConfiguration) -> BaseChatModel:
             exc_info=True
         )
         raise
+
+
+# ============================================================================
+# LLM 包装器集成
+# ============================================================================
+
+def get_wrapped_llm(
+    config_override: Optional[LLMConfiguration] = None,
+    caller: str = None,
+    wrapper_config: Optional[LLMWrapperConfig] = None
+) -> LLMWrapper:
+    """
+    获取带包装器的 LLM 实例
+    
+    包装器提供：
+    - 统一的重试策略（指数退避）
+    - 超时控制
+    - 错误分类和处理
+    - 性能监控
+    - LangSmith 追踪集成
+    
+    Args:
+        config_override: 指定的 LLM 配置
+        caller: 调用者标识，用于日志追踪
+        wrapper_config: 包装器配置（可选）
+    
+    Returns:
+        LLMWrapper 实例
+    
+    使用示例:
+        wrapper = get_wrapped_llm(caller="sql_generator")
+        response = await wrapper.ainvoke(messages, trace_id="req-123")
+    """
+    # 获取底层 LLM
+    llm = get_default_model(config_override=config_override, caller=caller)
+    
+    # 创建包装器配置
+    if wrapper_config is None:
+        wrapper_config = LLMWrapperConfig(
+            max_retries=3,
+            retry_base_delay=1.0,
+            timeout=60.0,
+            enable_tracing=settings.LANGCHAIN_TRACING_V2,
+        )
+    
+    # 创建并返回包装器
+    return LLMWrapper(
+        llm=llm,
+        config=wrapper_config,
+        name=caller or "default"
+    )
+
+
+def get_global_llm_wrapper() -> LLMWrapper:
+    """
+    获取全局 LLM 包装器实例
+    
+    适用于不需要特定配置的场景，使用全局共享的包装器实例。
+    
+    Returns:
+        全局 LLMWrapper 实例
+    """
+    return get_llm_wrapper()
+
+
+def get_llm_metrics() -> Dict[str, Any]:
+    """
+    获取全局 LLM 调用指标
+    
+    Returns:
+        包含调用统计的字典
+    """
+    wrapper = get_llm_wrapper()
+    return wrapper.get_metrics()
+
+
+def clear_all_llm_caches():
+    """
+    清除所有 LLM 相关缓存
+    
+    包括：
+    - LLM 实例缓存
+    - 配置缓存
+    - 全局包装器
+    """
+    clear_llm_cache()
+    reset_llm_wrapper()
+    logger.info("All LLM caches cleared")

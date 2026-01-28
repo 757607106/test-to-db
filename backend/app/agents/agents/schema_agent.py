@@ -155,21 +155,22 @@ class SchemaAnalysisAgent:
 **核心职责**: 分析用户查询，获取相关的数据库表结构信息
 
 **工作流程**:
-1. 使用 analyze_user_query 工具分析用户查询意图
-2. 使用 retrieve_database_schema 工具获取相关表结构
+1. 使用 analyze_user_query 工具分析用户查询意图（可选，失败不影响后续步骤）
+2. 使用 retrieve_database_schema 工具获取相关表结构（必须执行）
    - connection_id 会自动从状态中获取，无需手动传递
-3. **只返回模式信息，不生成 SQL，不预测结果**
 
-**输出内容**:
-- 相关的表和字段信息
-- 必要的值映射信息
+**输出格式**: 
+返回 JSON 格式的 schema_info，包含以下字段:
+- tables: 相关表列表，每个表包含 table_name 和 description
+- columns: 列信息列表，每列包含 column_name、table_name、data_type、description
+- relationships: 表关联关系列表
+- value_mappings: 字段值映射信息
 
 **禁止的行为**:
-- ❌ 不要生成 SQL 语句
-- ❌ 不要预测查询结果
-- ❌ 不要重复调用工具
-
-**输出格式**: 只返回工具调用结果，包含表结构和值映射信息"""
+- 不要生成 SQL 语句
+- 不要预测查询结果
+- 不要重复调用工具
+- 不要对数据做任何假设"""
     
     def _generate_schema_analysis_text(
         self,

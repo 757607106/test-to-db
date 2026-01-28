@@ -421,19 +421,28 @@ class ErrorRecoveryAgent:
 **核心职责**: 分析错误原因，制定恢复策略
 
 **工作流程**:
-1. 使用 analyze_error_pattern 工具分析错误历史
+1. 使用 analyze_error_pattern 工具分析错误历史，识别错误类型和模式
 2. 使用 generate_recovery_strategy 工具制定恢复策略
-3. **只返回恢复方案，不重复错误详情**
+3. 只返回恢复方案，不重复错误详情
 
-**输出内容**:
-- 错误类型和根因
-- 具体的恢复步骤
-- 预期成功率
+**错误类型识别**:
+- sql_syntax_error: SQL 语法错误、列名/表名不存在
+- mysql_limit_subquery_error: MySQL 子查询中使用 LIMIT 的限制
+- connection_error: 数据库连接问题
+- permission_error: 权限不足
+- timeout_error: 查询超时
+- not_found_error: 数据不存在
+
+**恢复策略**:
+- sql_syntax_error -> 重新生成 SQL，使用正确的列名
+- mysql_limit_subquery_error -> 改用 JOIN 派生表方式
+- connection_error -> 检查连接配置
+- timeout_error -> 优化查询，添加 LIMIT
 
 **禁止的行为**:
-- ❌ 不要重复输出错误堆栈
-- ❌ 不要生成冗长的错误分析
-- ❌ 不要重复调用工具
+- 不要重复输出错误堆栈
+- 不要生成冗长的错误分析
+- 不要重复调用工具
 
 **输出格式**: 简洁的恢复方案和建议"""
     
@@ -451,18 +460,126 @@ class ErrorRecoveryAgent:
         messages = USER_FRIENDLY_MESSAGES.get(action, USER_FRIENDLY_MESSAGES["restart"])
         return messages["retrying"] if is_retrying else messages["failed"]
     
+    def _build_enhanced_error_context(
+        self,
+        error_analysis_data: Dict[str, Any],
+        latest_error: Dict[str, Any],
+        failed_sql: str,
+        primary_action: str,
+        recovery_steps: List[str],
+        retry_count: int,
+        existing_context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        构建增强的错误恢复上下文
+        
+        关键修复：正确传递列名白名单信息，帮助 LLM 避免幻觉
+        
+        Args:
+            error_analysis_data: 错误分析结果
+            latest_error: 最近的错误信息
+            failed_sql: 失败的 SQL
+            primary_action: 主要恢复动作
+            recovery_steps: 恢复步骤
+            retry_count: 当前重试次数
+            existing_context: 已有的错误上下文（可能包含列名信息）
+            
+        Returns:
+            增强的错误上下文
+        """
+        error_type = error_analysis_data.get("most_common_type", "unknown")
+        error_message = latest_error.get("error", "")
+        
+        # 基础错误上下文
+        error_context = {
+            "error_type": error_type,
+            "error_message": error_message,
+            "failed_sql": failed_sql,
+            "recovery_action": primary_action,
+            "recovery_steps": recovery_steps,
+            "retry_count": retry_count
+        }
+        
+        # ✅ 关键修复：从已有上下文中继承列名信息
+        # 这些信息是 sql_generator_agent 在列名验证失败时传递的
+        if existing_context:
+            # 继承可用列提示
+            if existing_context.get("available_columns_hint"):
+                error_context["available_columns_hint"] = existing_context["available_columns_hint"]
+                logger.info(f"[错误恢复] 继承 available_columns_hint")
+            
+            # 继承列名白名单
+            if existing_context.get("column_whitelist"):
+                error_context["column_whitelist"] = existing_context["column_whitelist"]
+                logger.info(f"[错误恢复] 继承 column_whitelist: {len(existing_context['column_whitelist'])} 个表")
+            
+            # 继承修复提示
+            if existing_context.get("fix_prompt"):
+                error_context["fix_prompt"] = existing_context["fix_prompt"]
+                logger.info(f"[错误恢复] 继承 fix_prompt")
+            
+            # 继承完整表列表
+            if existing_context.get("full_table_list"):
+                error_context["full_table_list"] = existing_context["full_table_list"]
+        
+        # ✅ 从 error_history 中提取列名信息（如果存在）
+        column_errors = latest_error.get("column_errors", [])
+        if column_errors and not error_context.get("available_columns_hint"):
+            # 尝试从 error_history 中获取列名白名单
+            column_whitelist = latest_error.get("column_whitelist", {})
+            if column_whitelist:
+                error_context["column_whitelist"] = column_whitelist
+                # 构建可用列提示
+                available_columns_info = []
+                for table_name, cols in column_whitelist.items():
+                    available_columns_info.append(f"表 `{table_name}` 的可用列: {', '.join(cols)}")
+                error_context["available_columns_hint"] = "\n".join(available_columns_info)
+                logger.info(f"[错误恢复] 从 error_history 提取列名白名单: {len(column_whitelist)} 个表")
+        
+        # ✅ 如果有列名验证错误，构建详细的修复提示
+        if column_errors or error_type == "column_validation_failed":
+            if not error_context.get("fix_prompt") and error_context.get("available_columns_hint"):
+                error_context["fix_prompt"] = f"""
+【严重错误】上一次生成的 SQL 使用了不存在的列名！
+
+错误详情:
+{chr(10).join(f"  - {err}" for err in column_errors) if column_errors else f"  - {error_message}"}
+
+【正确的列名信息 - 请严格使用以下列名】
+{error_context["available_columns_hint"]}
+
+【修复要求】
+1. 仔细检查上面的可用列名列表
+2. 只使用列表中存在的列名
+3. 不要猜测或虚构任何列名
+4. 如果需要计算某个指标（如库存总量），请使用实际存在的列进行计算
+   例如：使用 SUM(quantity) 而不是 total_inventory
+
+请重新生成 SQL，确保所有列名都在可用列表中。
+"""
+                logger.info(f"[错误恢复] 构建了详细的 fix_prompt")
+        
+        return error_context
+    
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
         """
         执行错误恢复
         
         修复 (2026-01-22): 改进错误消息，提供用户友好的反馈
         修复 (2026-01-23): 将错误上下文传递给下一阶段，支持智能重试
+        修复 (2026-01-28): 正确传递列名白名单信息，解决 LLM 幻觉问题
         """
         try:
             error_history = state.get("error_history", [])
+            # ✅ 关键修复：使用 state 中已有的 retry_count，不再重复递增
+            # retry_count 已经在 sql_generator_agent 中递增过了
             retry_count = state.get("retry_count", 0)
             max_retries = state.get("max_retries", 3)
             failed_sql = state.get("generated_sql", "")  # 获取失败的 SQL
+            
+            # ✅ 关键修复：从 state 中获取已有的 error_recovery_context
+            # 这个上下文可能包含 sql_generator_agent 传递的详细列名信息
+            existing_error_context = state.get("error_recovery_context", {})
             
             # 分析错误
             error_analysis = analyze_error_pattern.invoke({
@@ -498,17 +615,21 @@ class ErrorRecoveryAgent:
                     
                     # 提取最近的错误信息用于重试上下文
                     latest_error = error_history[-1] if error_history else {}
-                    error_context = {
-                        "error_type": error_analysis_data.get("most_common_type", "unknown"),
-                        "error_message": latest_error.get("error", ""),
-                        "failed_sql": failed_sql,
-                        "recovery_action": primary_action,
-                        "recovery_steps": strategy_info.get("steps", []),
-                        "retry_count": retry_count + 1
-                    }
                     
-                    logger.info(f"错误恢复: {primary_action} -> {next_stage} (重试 {retry_count + 1}/{max_retries})")
-                    logger.info(f"错误类型: {error_context['error_type']}, 失败SQL长度: {len(failed_sql)}")
+                    # ✅ 关键修复：构建增强的错误上下文，包含列名白名单信息
+                    error_context = self._build_enhanced_error_context(
+                        error_analysis_data=error_analysis_data,
+                        latest_error=latest_error,
+                        failed_sql=failed_sql or existing_error_context.get("failed_sql", ""),
+                        primary_action=primary_action,
+                        recovery_steps=strategy_info.get("steps", []),
+                        retry_count=retry_count,
+                        existing_context=existing_error_context
+                    )
+                    
+                    logger.info(f"错误恢复: {primary_action} -> {next_stage} (重试 {retry_count}/{max_retries})")
+                    logger.info(f"错误类型: {error_context['error_type']}, 失败SQL长度: {len(error_context.get('failed_sql', ''))}")
+                    logger.info(f"是否包含列名提示: {bool(error_context.get('available_columns_hint'))}")
                     
                     # ✅ 修复：发送流式事件通知前端正在重试
                     try:
@@ -523,7 +644,7 @@ class ErrorRecoveryAgent:
                                 status="retrying",
                                 message=user_message,
                                 metadata={
-                                    "retry_count": retry_count + 1,
+                                    "retry_count": retry_count,
                                     "max_retries": max_retries,
                                     "error_type": error_context["error_type"],
                                     "next_stage": next_stage
@@ -532,11 +653,12 @@ class ErrorRecoveryAgent:
                     except Exception as e:
                         logger.debug(f"发送流式事件失败（非关键）: {e}")
                     
+                    # ✅ 关键修复：不再递增 retry_count，因为已经在 sql_generator_agent 中递增过了
                     return {
                         "messages": [AIMessage(content=user_message)],
                         "current_stage": next_stage,
-                        "retry_count": retry_count + 1,
-                        "error_recovery_context": error_context,  # 传递错误上下文给下一阶段
+                        "retry_count": retry_count,  # 保持不变，不再递增
+                        "error_recovery_context": error_context,  # 传递增强的错误上下文给下一阶段
                         "generated_sql": None  # 清除失败的 SQL，强制重新生成
                     }
                 else:
