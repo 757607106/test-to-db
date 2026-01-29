@@ -26,6 +26,7 @@ export interface AccuracyMetrics {
   mape: number;
   rmse: number;
   mae: number;
+  rSquared?: number;
 }
 
 export interface TrendAnalysis {
@@ -35,6 +36,37 @@ export interface TrendAnalysis {
   minValue: number;
   maxValue: number;
   volatility: number;
+  hasSeasonality?: boolean;
+  seasonalityPeriod?: number;
+}
+
+/** 数据质量信息 */
+export interface DataQualityInfo {
+  totalPoints: number;
+  validPoints: number;
+  missingCount: number;
+  missingFilledMethod?: string;
+  outlierCount: number;
+  outlierIndices: number[];
+  dateInterval?: string;
+}
+
+/** 方法选择理由 */
+export interface MethodSelectionReason {
+  selectedMethod: string;
+  reason: string;
+  dataCharacteristics: Record<string, any>;
+  methodScores: Record<string, number>;
+}
+
+/** 预测解释 - 让用户知道预测结果怎么来的 */
+export interface PredictionExplanation {
+  methodExplanation: string;
+  formulaUsed: string;
+  keyParameters: Record<string, any>;
+  calculationSteps: string[];
+  confidenceExplanation: string;
+  reliabilityAssessment: string;
 }
 
 export interface PredictionResult {
@@ -44,6 +76,10 @@ export interface PredictionResult {
   accuracyMetrics: AccuracyMetrics;
   trendAnalysis: TrendAnalysis;
   generatedAt: string;
+  // 新增可解释性字段
+  dataQuality?: DataQualityInfo;
+  methodSelectionReason?: MethodSelectionReason;
+  explanation?: PredictionExplanation;
 }
 
 export interface PredictionColumnsResponse {

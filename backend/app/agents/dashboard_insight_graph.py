@@ -440,63 +440,244 @@ async def sql_executor_node(state: DashboardInsightState) -> Dict[str, Any]:
 
 
 async def insight_analyzer_node(state: DashboardInsightState) -> Dict[str, Any]:
-    """洞察分析：分析数据并生成洞察"""
+    """洞察分析：调用 LLM 智能分析 Agent 生成深度洞察"""
     logger.info("[Worker] insight_analyzer 开始执行")
+    start_time = time.time()
     
     try:
         execution_result = state.get("execution_result", {})
+        enriched_schema = state.get("enriched_schema")
+        relationship_context = state.get("relationship_context")
+        sample_data = state.get("sample_data")
+        user_intent = state.get("user_intent")
+        aggregated_data = state.get("aggregated_data", {})
         
+        # 准备分析数据
+        data = []
         if execution_result.get("success") and execution_result.get("data"):
             data = execution_result["data"]
-            row_count = len(data)
-            
-            # 提取关键指标
-            key_metrics = {}
-            if data and isinstance(data[0], dict):
-                numeric_cols = [k for k, v in data[0].items() if isinstance(v, (int, float))]
-                for col in numeric_cols[:5]:
-                    values = [row.get(col, 0) for row in data if row.get(col) is not None]
-                    if values:
-                        key_metrics[col] = {
-                            "sum": sum(values),
-                            "avg": round(sum(values) / len(values), 2),
-                            "max": max(values),
-                            "min": min(values)
-                        }
-            
-            insights = {
-                "summary": {
-                    "total_rows": row_count,
-                    "key_metrics": key_metrics,
-                    "time_range": "已分析",
-                    "data_quality": "good"
-                },
-                "trends": None,
-                "anomalies": [],
-                "correlations": [],
-                "recommendations": [{"type": "info", "content": f"成功分析 {row_count} 条数据", "priority": "medium"}]
-            }
-        else:
-            insights = {
-                "summary": {"total_rows": 0, "key_metrics": {}, "time_range": "分析受限"},
-                "trends": None,
-                "anomalies": [],
-                "correlations": [],
-                "recommendations": [{"type": "warning", "content": "数据获取受限，请检查查询", "priority": "medium"}]
-            }
+        elif aggregated_data.get("data"):
+            # 如果执行结果为空，尝试使用聚合数据
+            data = aggregated_data["data"]
         
-        logger.info("[Worker] insight_analyzer 完成")
-        return {"insights": insights, "current_stage": "analysis_done"}
+        row_count = len(data)
+        
+        if row_count < 2:
+            # 数据量过少，跳过 LLM 分析
+            logger.info(f"[Worker] 数据量过少 ({row_count} 行)，跳过 LLM 分析")
+            insights = _create_minimal_insights(data, relationship_context)
+            return {"insights": insights, "current_stage": "analysis_done"}
+        
+        # 调用 LLM 智能分析 Agent
+        try:
+            from app.agents.agents.dashboard_analyst_agent import dashboard_analyst_agent
+            
+            insights = await dashboard_analyst_agent.analyze(
+                data=data,
+                schema_info=enriched_schema,
+                relationship_context=relationship_context,
+                sample_data=sample_data,
+                user_intent=user_intent
+            )
+            
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            logger.info(f"[Worker] insight_analyzer LLM 分析完成, 耗时 {elapsed_ms}ms")
+            
+            # 更新 lineage 信息
+            lineage = state.get("lineage") or {}
+            lineage["insight_analysis"] = {
+                "method": "llm",
+                "analysis_time_ms": elapsed_ms,
+                "data_rows_analyzed": row_count,
+                "relationship_count": len((relationship_context or {}).get("direct_relationships", []))
+            }
+            
+            return {
+                "insights": insights,
+                "current_stage": "analysis_done",
+                "lineage": lineage
+            }
+            
+        except Exception as llm_error:
+            logger.warning(f"[Worker] LLM 分析失败: {llm_error}，降级到规则分析")
+            # 降级到规则分析
+            insights = _create_rule_based_insights(data, relationship_context)
+            
+            lineage = state.get("lineage") or {}
+            lineage["insight_analysis"] = {
+                "method": "rule_based",
+                "fallback_reason": str(llm_error),
+                "data_rows_analyzed": row_count
+            }
+            
+            return {
+                "insights": insights,
+                "current_stage": "analysis_done",
+                "lineage": lineage
+            }
         
     except Exception as e:
         logger.error(f"[Worker] insight_analyzer 失败: {e}")
         return {
             "insights": {
                 "summary": {"total_rows": 0, "key_metrics": {}, "time_range": "分析失败"},
+                "trends": None,
+                "anomalies": [],
+                "correlations": [],
                 "recommendations": [{"type": "error", "content": str(e), "priority": "high"}]
             },
             "current_stage": "analysis_done"
         }
+
+
+def _create_minimal_insights(data: List[Dict], relationship_context: Optional[Dict] = None) -> Dict[str, Any]:
+    """创建最小化的洞察（数据量过少时使用）"""
+    row_count = len(data) if data else 0
+    
+    # 提取基础指标
+    key_metrics = {}
+    if data and isinstance(data[0], dict):
+        for key, value in data[0].items():
+            if isinstance(value, (int, float)):
+                values = [row.get(key, 0) for row in data if row.get(key) is not None]
+                if values:
+                    key_metrics[key] = {
+                        "sum": sum(values),
+                        "avg": round(sum(values) / len(values), 2) if values else 0,
+                        "max": max(values) if values else 0,
+                        "min": min(values) if values else 0
+                    }
+    
+    # 基于图谱关系生成关联洞察
+    correlations = []
+    if relationship_context:
+        direct_rels = relationship_context.get("direct_relationships", [])
+        for rel in direct_rels[:3]:
+            src_table = rel.get("source_table", "")
+            tgt_table = rel.get("target_table", "")
+            if src_table and tgt_table:
+                correlations.append({
+                    "type": "cross_table",
+                    "tables": [src_table, tgt_table],
+                    "relationship": f"{src_table} 与 {tgt_table} 存在外键关联",
+                    "insight": f"可分析 {src_table} 和 {tgt_table} 之间的业务关联",
+                    "strength": "medium"
+                })
+    
+    return {
+        "summary": {
+            "total_rows": row_count,
+            "key_metrics": key_metrics,
+            "time_range": "已分析",
+            "data_quality": "limited" if row_count < 10 else "good"
+        },
+        "trends": None,
+        "anomalies": [],
+        "correlations": correlations,
+        "recommendations": [
+            {"type": "info", "content": f"分析了 {row_count} 条数据", "priority": "medium"}
+        ]
+    }
+
+
+def _create_rule_based_insights(data: List[Dict], relationship_context: Optional[Dict] = None) -> Dict[str, Any]:
+    """基于规则的洞察分析（LLM 降级方案）"""
+    row_count = len(data) if data else 0
+    
+    # 提取关键指标
+    key_metrics = {}
+    numeric_cols = []
+    date_cols = []
+    
+    if data and isinstance(data[0], dict):
+        for key, value in data[0].items():
+            if isinstance(value, (int, float)):
+                numeric_cols.append(key)
+                values = [row.get(key, 0) for row in data if row.get(key) is not None]
+                if values:
+                    key_metrics[key] = {
+                        "sum": sum(values),
+                        "avg": round(sum(values) / len(values), 2),
+                        "max": max(values),
+                        "min": min(values)
+                    }
+            elif any(kw in key.lower() for kw in ["date", "time", "日期", "时间", "created", "updated"]):
+                date_cols.append(key)
+    
+    # 趋势分析
+    trends = None
+    if date_cols and numeric_cols:
+        trends = {
+            "trend_direction": "待分析",
+            "total_growth_rate": None,
+            "description": f"数据包含时间维度 ({', '.join(date_cols[:2])})，建议进行趋势分析"
+        }
+    
+    # 异常检测
+    anomalies = []
+    for col in numeric_cols[:5]:
+        values = [row.get(col, 0) for row in data if row.get(col) is not None]
+        if values:
+            avg_val = sum(values) / len(values)
+            max_val = max(values)
+            if avg_val > 0 and max_val > avg_val * 10:
+                anomalies.append({
+                    "type": "outlier",
+                    "column": col,
+                    "description": f"{col} 存在极大值 ({max_val})，远超平均值 ({round(avg_val, 2)})",
+                    "severity": "medium"
+                })
+    
+    # 基于图谱关系生成关联洞察
+    correlations = []
+    if relationship_context:
+        direct_rels = relationship_context.get("direct_relationships", [])
+        for rel in direct_rels[:5]:
+            src_table = rel.get("source_table", "")
+            tgt_table = rel.get("target_table", "")
+            if src_table and tgt_table:
+                correlations.append({
+                    "type": "cross_table",
+                    "tables": [src_table, tgt_table],
+                    "relationship": f"{src_table} 与 {tgt_table} 存在外键关联",
+                    "insight": f"可分析 {src_table} 和 {tgt_table} 之间的业务关联",
+                    "strength": "medium"
+                })
+    
+    # 建议
+    recommendations = [
+        {"type": "info", "content": f"成功分析 {row_count} 条数据", "priority": "medium"}
+    ]
+    
+    if numeric_cols:
+        recommendations.append({
+            "type": "optimization",
+            "content": f"建议重点关注数值指标: {', '.join(numeric_cols[:3])}",
+            "priority": "medium",
+            "basis": "数据包含多个数值列"
+        })
+    
+    if correlations:
+        recommendations.append({
+            "type": "opportunity",
+            "content": f"发现 {len(correlations)} 个表间关联，可进行跨表分析",
+            "priority": "high",
+            "basis": "图谱关系分析"
+        })
+    
+    return {
+        "summary": {
+            "total_rows": row_count,
+            "key_metrics": key_metrics,
+            "time_range": "已分析",
+            "data_quality": "good" if row_count > 0 else "no_data",
+            "description": f"共分析 {row_count} 条数据，包含 {len(numeric_cols)} 个数值列"
+        },
+        "trends": trends,
+        "anomalies": anomalies,
+        "correlations": correlations,
+        "recommendations": recommendations
+    }
 
 
 async def error_recovery_node(state: DashboardInsightState) -> Dict[str, Any]:

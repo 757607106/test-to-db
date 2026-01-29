@@ -21,6 +21,8 @@ import {
   Badge,
   Segmented,
   FloatButton,
+  Divider,
+  Tag,
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -152,23 +154,6 @@ const styles = {
     background: 'linear-gradient(135deg, #fafbfc 0%, #f8f9fa 100%)',
     borderRadius: 12,
     border: '2px dashed #d1d5db',
-  },
-  toolbar: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    flexWrap: 'wrap' as const,
-    gap: 16,
-  },
-  statusBar: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 20,
-    fontSize: 13,
-    color: '#6b7280',
-    marginTop: 14,
-    paddingTop: 14,
-    borderTop: '1px solid #f3f4f6',
   },
 };
 
@@ -933,7 +918,7 @@ const DashboardEditorPage: React.FC = () => {
       )}
       {!isFullscreen && (
         <div style={styles.header}>
-        <div style={styles.toolbar}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <Space>
             <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/dashboards')}>
               返回
@@ -949,126 +934,130 @@ const DashboardEditorPage: React.FC = () => {
               )}
             </div>
           </Space>
-
-          {canEdit && (
-            <Space wrap>
-              <Segmented
-                value={editorMode}
-                onChange={(v) => setEditorMode(v as EditorMode)}
-                options={[
-                  { value: 'edit', icon: <EditOutlined />, label: '编辑' },
-                  { value: 'preview', icon: <EyeOutlined />, label: '预览' },
-                ]}
+          
+          <Space size={16}>
+             {/* 状态信息 */}
+             <Space size={12} split={<Divider type="vertical" />}>
+                <Text type="secondary" style={{ fontSize: 12 }}>组件: {dashboard.widgets.length}</Text>
+                {isLayoutDirty && <Tag color="warning">布局未保存</Tag>}
+             </Space>
+             
+             {/* 刷新控制 */}
+             <RefreshControlPanel
+                dashboardId={dashboardId}
+                config={refreshConfig}
+                onConfigChange={handleRefreshConfigChange}
+                onGlobalRefresh={handleGlobalRefresh}
+                isRefreshing={isGlobalRefreshing || isAutoRefreshing}
+                lastRefreshTime={lastRefreshTime}
+                nextRefreshIn={nextRefreshIn}
+                isPaused={isPaused}
+                onPause={pauseAutoRefresh}
+                onResume={resumeAutoRefresh}
               />
-              
-              <Tooltip title={gridLocked ? '解锁布局' : '锁定布局'}>
-                <Button
-                  icon={gridLocked ? <LockOutlined /> : <UnlockOutlined />}
-                  onClick={() => setGridLocked(!gridLocked)}
-                />
-              </Tooltip>
+          </Space>
+        </div>
 
-              <Tooltip title={isFullscreen ? '退出全屏' : '全屏'}>
-                <Button
-                  icon={isFullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
-                  onClick={handleToggleFullscreen}
+        {canEdit && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc', padding: '12px', borderRadius: 8 }}>
+              <Space size={16}>
+                <Segmented
+                  value={editorMode}
+                  onChange={(v) => setEditorMode(v as EditorMode)}
+                  options={[
+                    { value: 'edit', icon: <EditOutlined />, label: '编辑' },
+                    { value: 'preview', icon: <EyeOutlined />, label: '预览' },
+                  ]}
                 />
-              </Tooltip>
+                
+                <Space.Compact>
+                  <Tooltip title={gridLocked ? '解锁布局' : '锁定布局'}>
+                    <Button
+                      icon={gridLocked ? <LockOutlined /> : <UnlockOutlined />}
+                      onClick={() => setGridLocked(!gridLocked)}
+                    />
+                  </Tooltip>
 
-              <Dropdown
-                menu={{
-                  items: [
-                    {
-                      key: 'grid',
-                      icon: <AppstoreOutlined />,
-                      label: '网格排列 (双列)',
-                      onClick: () => handleAutoLayout('grid'),
-                    },
-                    {
-                      key: 'flow',
-                      icon: <BarsOutlined />,
-                      label: '流式排列 (三列)',
-                      onClick: () => handleAutoLayout('flow'),
-                    },
-                  ],
-                }}
-              >
-                <Button icon={<AppstoreOutlined />}>
-                  一键排版
+                  <Tooltip title={isFullscreen ? '退出全屏' : '全屏'}>
+                    <Button
+                      icon={isFullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+                      onClick={handleToggleFullscreen}
+                    />
+                  </Tooltip>
+
+                  <Dropdown
+                    menu={{
+                      items: [
+                        {
+                          key: 'grid',
+                          icon: <AppstoreOutlined />,
+                          label: '网格排列 (双列)',
+                          onClick: () => handleAutoLayout('grid'),
+                        },
+                        {
+                          key: 'flow',
+                          icon: <BarsOutlined />,
+                          label: '流式排列 (三列)',
+                          onClick: () => handleAutoLayout('flow'),
+                        },
+                      ],
+                    }}
+                  >
+                    <Button icon={<AppstoreOutlined />}>
+                      一键排版
+                    </Button>
+                  </Dropdown>
+                </Space.Compact>
+              </Space>
+
+              <Space size={12}>
+                <Button
+                  icon={<BulbOutlined />}
+                  onClick={() => setMiningWizardVisible(true)}
+                >
+                  智能挖掘
                 </Button>
-              </Dropdown>
 
-              <Button
-                type="primary"
-                icon={<BulbOutlined />}
-                onClick={() => setMiningWizardVisible(true)}
-              >
-                智能挖掘
-              </Button>
+                <Button
+                  icon={<BulbOutlined />}
+                  onClick={() => {
+                    setCurrentInsightWidget(null);
+                    setConditionPanelVisible(true);
+                  }}
+                  loading={generatingInsights}
+                >
+                  生成洞察
+                </Button>
 
-              <Button
-                icon={<BulbOutlined />}
-                onClick={() => {
-                  setCurrentInsightWidget(null);
-                  setConditionPanelVisible(true);
-                }}
-                loading={generatingInsights}
-              >
-                生成洞察
-              </Button>
+                <Divider type="vertical" />
 
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                onClick={() => setAddWidgetModalVisible(true)}
-              >
-                添加组件
-              </Button>
-
-              {isLayoutDirty && (
                 <Button
                   type="primary"
-                  icon={<SaveOutlined />}
-                  onClick={handleSaveLayout}
-                  loading={saving}
-                  danger
+                  icon={<PlusOutlined />}
+                  onClick={() => setAddWidgetModalVisible(true)}
                 >
-                  保存布局
+                  添加组件
                 </Button>
-              )}
 
-              <Button
-                icon={<SettingOutlined />}
-                onClick={() => navigate(`/dashboards/${dashboardId}/settings`)}
-              >
-                设置
-              </Button>
-            </Space>
+                {isLayoutDirty && (
+                  <Button
+                    type="primary"
+                    icon={<SaveOutlined />}
+                    onClick={handleSaveLayout}
+                    loading={saving}
+                    danger
+                  >
+                    保存布局
+                  </Button>
+                )}
+
+                <Button
+                  icon={<SettingOutlined />}
+                  onClick={() => navigate(`/dashboards/${dashboardId}/settings`)}
+                />
+              </Space>
+            </div>
           )}
-        </div>
-
-        {/* 状态栏 */}
-        <div style={{ ...styles.statusBar, marginTop: 12 }}>
-          <span>组件数: {dashboard.widgets.length}</span>
-          <span>更新时间: {new Date(dashboard.updated_at).toLocaleString()}</span>
-          {isLayoutDirty && <Badge status="warning" text="布局未保存" />}
-        </div>
-
-        {/* P1: 刷新控制面板 */}
-        <div style={{ marginTop: 16 }}>
-          <RefreshControlPanel
-            dashboardId={dashboardId}
-            config={refreshConfig}
-            onConfigChange={handleRefreshConfigChange}
-            onGlobalRefresh={handleGlobalRefresh}
-            isRefreshing={isGlobalRefreshing || isAutoRefreshing}
-            lastRefreshTime={lastRefreshTime}
-            nextRefreshIn={nextRefreshIn}
-            isPaused={isPaused}
-            onPause={pauseAutoRefresh}
-            onResume={resumeAutoRefresh}
-          />
-        </div>
       </div>
       )}
 

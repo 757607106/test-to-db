@@ -19,34 +19,184 @@ from langchain_core.messages import SystemMessage, HumanMessage
 class DashboardInsightService:
     """Dashboard洞察分析服务"""
     
+    def _build_table_column_whitelist(self, schema_context: dict) -> tuple[str, set, dict]:
+        """
+        构建表/列白名单，防止 LLM 幻觉
+        
+        Returns:
+            whitelist_str: 格式化的白名单字符串
+            valid_tables: 有效表名集合
+            valid_columns: {table_name: [column_names]} 字典
+        """
+        valid_tables = set()
+        valid_columns = {}  # {table_name: [column_names]}
+        
+        tables = schema_context.get("tables", [])
+        columns = schema_context.get("columns", [])
+        relationships = schema_context.get("relationships", [])
+        
+        # 构建表名集合
+        for t in tables:
+            table_name = t.get("name", "")
+            if table_name:
+                valid_tables.add(table_name)
+                valid_columns[table_name] = []
+        
+        # 构建列名映射
+        for c in columns:
+            table_name = c.get("table_name", "")
+            col_name = c.get("name", "")
+            if table_name and col_name:
+                if table_name not in valid_columns:
+                    valid_columns[table_name] = []
+                valid_columns[table_name].append(col_name)
+        
+        # 构建白名单字符串
+        whitelist_parts = []
+        whitelist_parts.append("=" * 60)
+        whitelist_parts.append("【重要】可用表和字段白名单（仅允许使用以下表和字段）")
+        whitelist_parts.append("=" * 60)
+        
+        for table_name in sorted(valid_tables):
+            cols = valid_columns.get(table_name, [])
+            # 找到表的描述
+            table_desc = ""
+            for t in tables:
+                if t.get("name") == table_name:
+                    table_desc = t.get("description", "")
+                    break
+            
+            whitelist_parts.append(f"\n表名: {table_name}")
+            if table_desc:
+                whitelist_parts.append(f"  描述: {table_desc}")
+            whitelist_parts.append(f"  可用字段: {', '.join(cols)}")
+        
+        # 添加关系信息
+        if relationships:
+            whitelist_parts.append("\n" + "-" * 40)
+            whitelist_parts.append("表间关系（JOIN 时必须使用这些关联字段）:")
+            # 遍历所有关系，不限制数量以确保 JOIN 准确性
+            for rel in relationships:
+                src = f"{rel.get('source_table', '')}.{rel.get('source_column', '')}"
+                tgt = f"{rel.get('target_table', '')}.{rel.get('target_column', '')}"
+                whitelist_parts.append(f"  - {src} -> {tgt}")
+        
+        whitelist_parts.append("\n" + "=" * 60)
+        whitelist_parts.append("【警告】严禁使用上述白名单之外的任何表或字段！")
+        whitelist_parts.append("=" * 60)
+        
+        return "\n".join(whitelist_parts), valid_tables, valid_columns
+    
+    def _validate_sql_against_whitelist(
+        self, 
+        sql: str, 
+        valid_tables: set, 
+        valid_columns: dict,
+        db_type: str = "MYSQL"
+    ) -> tuple[bool, str, list]:
+        """
+        验证 SQL 是否只使用了白名单中的表和列
+        
+        Returns:
+            is_valid: 是否有效
+            error_msg: 错误信息
+            invalid_refs: 无效引用列表
+        """
+        import re
+        
+        sql_upper = sql.upper()
+        invalid_refs = []
+        
+        # 1. 检查是否是 SELECT 语句
+        if not sql_upper.strip().startswith("SELECT"):
+            return False, "SQL 必须是 SELECT 语句", ["non-select"]
+        
+        # 2. 检查危险关键词
+        dangerous_keywords = ["DROP", "DELETE", "TRUNCATE", "UPDATE", "INSERT", "ALTER", "CREATE"]
+        for kw in dangerous_keywords:
+            if kw in sql_upper and "SELECT" not in sql_upper[:20]:
+                return False, f"检测到危险操作: {kw}", [kw]
+        
+        # 3. 提取 SQL 中的表名
+        # 匹配 FROM/JOIN 后的表名
+        table_pattern = r'(?:FROM|JOIN)\s+[`"\[]?([a-zA-Z_][a-zA-Z0-9_]*)[`"\]]?'
+        found_tables = re.findall(table_pattern, sql, re.IGNORECASE)
+        
+        # 检查表名是否在白名单中
+        valid_tables_lower = {t.lower() for t in valid_tables}
+        for table in found_tables:
+            if table.lower() not in valid_tables_lower:
+                invalid_refs.append(f"表 '{table}' 不在白名单中")
+        
+        # 4. 提取并检查列名（简化检查，只检查 table.column 格式）
+        # 匹配 table.column 或 alias.column 格式
+        col_pattern = r'([a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*[`"\[]?([a-zA-Z_][a-zA-Z0-9_]*)[`"\]]?'
+        found_cols = re.findall(col_pattern, sql, re.IGNORECASE)
+        
+        # 构建所有有效列名的小写集合
+        all_valid_cols_lower = set()
+        for cols in valid_columns.values():
+            for col in cols:
+                all_valid_cols_lower.add(col.lower())
+        
+        # 检查列名（容忍一些常见的别名）
+        common_aliases = {'t', 't1', 't2', 'a', 'b', 'c', 's', 'm', 'o', 'p', 'd', 'main', 'sub'}
+        for table_or_alias, col in found_cols:
+            # 如果是常见别名，只检查列名是否存在
+            if table_or_alias.lower() in common_aliases:
+                if col.lower() not in all_valid_cols_lower:
+                    invalid_refs.append(f"列 '{col}' 不在白名单中")
+            else:
+                # 检查表名和列名
+                table_lower = table_or_alias.lower()
+                col_lower = col.lower()
+                
+                # 在所有表中查找该列
+                col_found = False
+                for t_name, t_cols in valid_columns.items():
+                    if col_lower in [c.lower() for c in t_cols]:
+                        col_found = True
+                        break
+                
+                if not col_found and col_lower not in all_valid_cols_lower:
+                    invalid_refs.append(f"列 '{table_or_alias}.{col}' 不在白名单中")
+        
+        if invalid_refs:
+            return False, f"发现 {len(invalid_refs)} 个无效引用", invalid_refs
+        
+        return True, "", []
+    
     async def generate_mining_suggestions(self, db: Session, request: schemas.MiningRequest) -> schemas.MiningResponse:
-        """生成智能挖掘建议"""
-        # 0. 获取数据库连接信息，确定数据库类型
+        """生成智能挖掘建议（优化版：防幻觉 + SQL 验证）"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.info(f"[Mining] 开始生成挖掘建议, connection_id={request.connection_id}, intent={request.intent}")
+        
+        # 0. 获取数据库连接信息
         from app.models.db_connection import DBConnection
         connection = db.query(DBConnection).filter(DBConnection.id == request.connection_id).first()
-        db_type = connection.db_type.upper() if connection else "MySQL"
+        db_type = connection.db_type.upper() if connection else "MYSQL"
+        logger.info(f"[Mining] 数据库类型: {db_type}")
         
         # 1. 获取上下文
         if request.intent:
-            # 如果有明确意图，使用检索增强
             schema_context = retrieve_relevant_schema(db, request.connection_id, request.intent)
         else:
-            # 如果没有意图，获取所有表
             tables = crud.schema_table.get_by_connection(db=db, connection_id=request.connection_id)
             
             if not tables:
-                print(f"[Mining] No tables found for connection_id={request.connection_id}")
+                logger.warning(f"[Mining] 未找到表, connection_id={request.connection_id}")
                 return schemas.MiningResponse(suggestions=[])
             
-            print(f"[Mining] Found {len(tables)} tables for connection_id={request.connection_id}")
+            logger.info(f"[Mining] 找到 {len(tables)} 个表")
             
-            # 构建符合 format_schema_for_prompt 期望格式的 schema_context
             tables_list = []
             columns_list = []
             table_names = []
             
-            # 增加表数量限制到 20 个，确保有足够的数据
-            for table in tables[:20]:
+            # 遍历所有表，不限制数量以确保 SQL 生成准确性
+            for table in tables:
                 table_names.append(table.table_name)
                 tables_list.append({
                     "id": table.id,
@@ -67,7 +217,7 @@ class DashboardInsightService:
                         "table_name": table.table_name
                     })
             
-            # 获取表之间的关系（从 Neo4j 图谱）
+            # 获取表之间的关系
             relationships = []
             try:
                 relationship_context = graph_relationship_service.query_table_relationships(
@@ -83,9 +233,9 @@ class DashboardInsightService:
                             "target_column": rel.get("target_column"),
                             "relationship_type": rel.get("relationship_type", "references")
                         })
-                    print(f"[Mining] Found {len(relationships)} table relationships")
+                    logger.info(f"[Mining] 找到 {len(relationships)} 个表间关系")
             except Exception as e:
-                print(f"[Mining] Failed to get relationships: {e}")
+                logger.warning(f"[Mining] 获取表关系失败: {e}")
             
             schema_context = {
                 "tables": tables_list,
@@ -93,12 +243,15 @@ class DashboardInsightService:
                 "relationships": relationships
             }
         
-        # 检查是否有有效的 Schema
         if not schema_context.get("tables"):
-            print("[Mining] No tables in schema_context")
+            logger.warning("[Mining] schema_context 中无表")
             return schemas.MiningResponse(suggestions=[])
-
-        # 2. 格式化 Schema
+        
+        # 2. 构建表/列白名单（防幻觉核心）
+        whitelist_str, valid_tables, valid_columns = self._build_table_column_whitelist(schema_context)
+        logger.info(f"[Mining] 白名单包含 {len(valid_tables)} 个表, 共 {sum(len(cols) for cols in valid_columns.values())} 个字段")
+        
+        # 3. 格式化 Schema
         schema_str = format_schema_for_prompt(schema_context)
         
         # 3. 构建 Prompt（要求返回 JSON 格式）
@@ -181,15 +334,16 @@ SQL 语法注意事项（{db_type}）：
 - 使用标准的 JOIN 语法（INNER JOIN, LEFT JOIN）
 - 日期函数请根据实际数据库调整"""
         
-        prompt = f"""
-你是一个智能数据分析师。请基于以下数据库结构，推荐 {request.limit} 个有价值的数据分析视角（图表）。
+        prompt = f"""你是一个智能数据分析师。请基于以下数据库结构，推荐 {request.limit} 个有价值的数据分析视角（图表）。
 
 目标数据库类型：{db_type}
 {sql_syntax_guide}
 
 用户意图：{request.intent or "自动发现关键业务指标和趋势"}
 
-数据库结构：
+{whitelist_str}
+
+数据库结构详情：
 {schema_str}
 
 挖掘维度要求（请覆盖多个维度）：
@@ -198,18 +352,19 @@ SQL 语法注意事项（{db_type}）：
 - trend（趋势分析）：时间序列变化
 - semantic（语义关联）：基于字段语义发现的关联分析
 
-要求：
-1. 推荐的 SQL 必须是合法的 {db_type} SELECT 语句
-2. 图表类型从以下选择：bar, line, pie, scatter, table
-3. 每个推荐都要有明确的业务价值和推荐理由
-4. SQL 尽量包含聚合分析（SUM, COUNT, AVG, GROUP BY）
-5. 不要使用未知的表或列
-6. 严格遵循 {db_type} 的 SQL 语法规范
+【核心约束 - 必须严格遵守】：
+1. SQL 中的表名和列名必须严格匹配上述白名单，禁止使用任何白名单之外的表或字段
+2. JOIN 时必须使用白名单中指定的关联字段，不得自行推测
+3. 推荐的 SQL 必须是合法的 {db_type} SELECT 语句
+4. 图表类型从以下选择：bar, line, pie, scatter, table
+5. 每个推荐都要有明确的业务价值和推荐理由
+6. SQL 尽量包含聚合分析（SUM, COUNT, AVG, GROUP BY）
+7. 严格遵循 {db_type} 的 SQL 语法规范
 
 请以 JSON 格式返回，格式如下：
-{{
+{{{{
   "suggestions": [
-    {{
+    {{{{
       "title": "图表标题",
       "description": "简短描述（一句话）",
       "reasoning": "详细推荐理由：为什么这个分析对业务有价值，数据逻辑是什么",
@@ -222,9 +377,9 @@ SQL 语法注意事项（{db_type}）：
       "business_value": "这个分析能帮助业务做什么决策",
       "suggested_actions": ["建议动作1", "建议动作2"],
       "analysis_intent": "分析意图描述"
-    }}
+    }}}}
   ]
-}}
+}}}}
 
 只返回 JSON，不要有其他文字。
 """
@@ -287,28 +442,65 @@ SQL 语法注意事项（{db_type}）：
             response_text = response_text.strip()
             
             parsed = json.loads(response_text)
-            suggestions = [
-                schemas.MiningSuggestion(
-                    title=s.get("title", ""),
-                    description=s.get("description", ""),
-                    chart_type=s.get("chart_type", "bar"),
-                    sql=s.get("sql", ""),
-                    analysis_intent=s.get("analysis_intent", s.get("title", "数据分析")),
-                    # 增强字段
-                    reasoning=s.get("reasoning", s.get("description", "")),
-                    mining_dimension=s.get("mining_dimension", "business"),
-                    confidence=float(s.get("confidence", 0.8)),
-                    source_tables=s.get("source_tables", []),
-                    key_fields=s.get("key_fields", []),
-                    business_value=s.get("business_value", ""),
-                    suggested_actions=s.get("suggested_actions", [])
+            raw_suggestions = parsed.get("suggestions", [])
+            logger.info(f"[Mining] LLM 返回 {len(raw_suggestions)} 个原始建议")
+            
+            # 5. 验证每个 SQL 并过滤无效的
+            validated_suggestions = []
+            invalid_count = 0
+            
+            for idx, s in enumerate(raw_suggestions):
+                sql = s.get("sql", "")
+                title = s.get("title", f"建议{idx+1}")
+                
+                if not sql:
+                    logger.warning(f"[Mining] 建议 '{title}' 无 SQL，跳过")
+                    invalid_count += 1
+                    continue
+                
+                # 验证 SQL
+                is_valid, error_msg, invalid_refs = self._validate_sql_against_whitelist(
+                    sql, valid_tables, valid_columns, db_type
                 )
-                for s in parsed.get("suggestions", [])
-            ]
-            return schemas.MiningResponse(suggestions=suggestions)
+                
+                if not is_valid:
+                    logger.warning(f"[Mining] 建议 '{title}' SQL 验证失败: {error_msg}")
+                    for ref in invalid_refs[:3]:  # 最多显示3个无效引用
+                        logger.warning(f"[Mining]   - {ref}")
+                    invalid_count += 1
+                    # 降低置信度但仍然保留（让用户决定）
+                    s["confidence"] = max(0.3, float(s.get("confidence", 0.8)) - 0.4)
+                    s["reasoning"] = f"【警告】{error_msg}\n\n" + s.get("reasoning", "")
+                
+                validated_suggestions.append(
+                    schemas.MiningSuggestion(
+                        title=s.get("title", ""),
+                        description=s.get("description", ""),
+                        chart_type=s.get("chart_type", "bar"),
+                        sql=sql,
+                        analysis_intent=s.get("analysis_intent", s.get("title", "数据分析")),
+                        reasoning=s.get("reasoning", s.get("description", "")),
+                        mining_dimension=s.get("mining_dimension", "business"),
+                        confidence=float(s.get("confidence", 0.8)),
+                        source_tables=s.get("source_tables", []),
+                        key_fields=s.get("key_fields", []),
+                        business_value=s.get("business_value", ""),
+                        suggested_actions=s.get("suggested_actions", [])
+                    )
+                )
+            
+            # 按置信度排序，高置信度的排在前面
+            validated_suggestions.sort(key=lambda x: x.confidence, reverse=True)
+            
+            logger.info(f"[Mining] 最终返回 {len(validated_suggestions)} 个建议, {invalid_count} 个 SQL 验证失败")
+            return schemas.MiningResponse(suggestions=validated_suggestions)
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"[Mining] JSON 解析失败: {e}")
+            logger.error(f"[Mining] 原始响应: {response_text[:500]}...")
+            return schemas.MiningResponse(suggestions=[])
         except Exception as e:
-            print(f"Mining suggestion generation failed: {e}")
-            # Fallback empty response
+            logger.error(f"[Mining] 建议生成失败: {e}", exc_info=True)
             return schemas.MiningResponse(suggestions=[])
 
     def trigger_dashboard_insights(

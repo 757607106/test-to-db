@@ -3,7 +3,7 @@
  * P0功能：展示数据洞察的溯源信息，包括数据来源、SQL生成过程、执行元数据等
  */
 import React, { useState } from 'react';
-import { Card, Tag, Typography, Space, Collapse, Button, Tooltip, Divider, message } from 'antd';
+import { Card, Tag, Typography, Space, Button, Tooltip, Divider, message } from 'antd';
 import {
   DatabaseOutlined,
   CodeOutlined,
@@ -18,7 +18,6 @@ import {
 import type { InsightLineage } from '../types/dashboard';
 
 const { Text, Title, Paragraph } = Typography;
-const { Panel } = Collapse;
 
 interface InsightLineagePanelProps {
   lineage: InsightLineage;

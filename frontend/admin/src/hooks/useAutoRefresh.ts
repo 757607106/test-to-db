@@ -35,6 +35,11 @@ export function useAutoRefresh({
   
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const countdownRef = useRef<NodeJS.Timeout | null>(null);
+  const onRefreshRef = useRef(onRefresh);
+
+  useEffect(() => {
+    onRefreshRef.current = onRefresh;
+  }, [onRefresh]);
 
   // 执行刷新
   const executeRefresh = useCallback(async () => {
@@ -42,14 +47,14 @@ export function useAutoRefresh({
     
     setIsRefreshing(true);
     try {
-      await onRefresh();
+      await onRefreshRef.current();
       setLastRefreshTime(new Date());
     } catch (error) {
       console.error('Auto refresh failed:', error);
     } finally {
       setIsRefreshing(false);
     }
-  }, [onRefresh, isRefreshing]);
+  }, [isRefreshing]);
 
   // 手动刷新
   const manualRefresh = useCallback(async () => {

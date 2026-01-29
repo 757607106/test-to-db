@@ -3,7 +3,7 @@
  * 用于在Dashboard中展示智能数据洞察分析结果
  */
 import React, { useState } from 'react';
-import { Card, Button, Space, Tag, Typography, Collapse, Spin, message } from 'antd';
+import { Card, Button, Space, Tag, Typography, Spin, message } from 'antd';
 import {
   LineChartOutlined,
   AlertOutlined,
@@ -19,7 +19,6 @@ import {
 import type { InsightResult } from '../types/dashboard';
 
 const { Text, Title } = Typography;
-const { Panel } = Collapse;
 
 interface DashboardInsightWidgetProps {
   widgetId: number;

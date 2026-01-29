@@ -103,13 +103,22 @@ export const PredictionConfigPanel: React.FC<PredictionConfigPanelProps> = ({
     );
   }
 
-  if (!columnsData || (columnsData.dateColumns.length === 0 && columnsData.valueColumns.length === 0)) {
+  // 修复判断逻辑：时间列和数值列缺一不可
+  const missingDateColumns = !columnsData || columnsData.dateColumns.length === 0;
+  const missingValueColumns = !columnsData || columnsData.valueColumns.length === 0;
+  
+  if (missingDateColumns || missingValueColumns) {
+    // 生成更清晰的错误提示
+    let missingParts: string[] = [];
+    if (missingDateColumns) missingParts.push('时间列');
+    if (missingValueColumns) missingParts.push('数值列');
+    
     return (
       <Card className={className}>
         <Alert
           type="warning"
           message="无法进行预测"
-          description="当前Widget没有可用于预测的时间列或数值列。请确保数据包含日期/时间列和数值列。"
+          description={`当前Widget没有可用于预测的${missingParts.join('和')}。请确保数据包含日期/时间列（如"日期"、"月份"等）和数值列（如"销售额"、"数量"等）。`}
           showIcon
         />
       </Card>
@@ -172,12 +181,14 @@ export const PredictionConfigPanel: React.FC<PredictionConfigPanelProps> = ({
           label="预测周期数"
           tooltip="预测未来多少个时间点"
         >
-          <InputNumber
-            min={1}
-            max={365}
-            style={{ width: '100%' }}
-            addonAfter="个周期"
-          />
+          <Space.Compact style={{ width: '100%' }}>
+            <InputNumber
+              min={1}
+              max={365}
+              style={{ width: 'calc(100% - 70px)' }}
+            />
+            <Button disabled style={{ width: '70px', cursor: 'default', color: 'rgba(0, 0, 0, 0.45)', backgroundColor: '#fafafa', borderColor: '#d9d9d9' }}>个周期</Button>
+          </Space.Compact>
         </Form.Item>
 
         <Form.Item

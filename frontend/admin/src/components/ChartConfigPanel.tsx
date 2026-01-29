@@ -10,8 +10,6 @@ import {
   Input,
   Switch,
   Collapse,
-  ColorPicker,
-  InputNumber,
   Space,
   Button,
   Divider,
@@ -32,10 +30,8 @@ import {
   RobotOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
-import type { Color } from 'antd/es/color-picker';
 
 const { Option } = Select;
-const { Panel } = Collapse;
 
 // 支持的图表类型
 export const CHART_TYPES = [
@@ -268,136 +264,163 @@ export const ChartConfigPanel: React.FC<ChartConfigPanelProps> = ({
 
         <Divider />
 
-        <Collapse defaultActiveKey={['basic', 'data']} ghost>
-          {/* 基础设置 */}
-          <Panel header="基础设置" key="basic">
-            <Form.Item label="图表标题" name="title">
-              <Input placeholder="输入图表标题" />
-            </Form.Item>
+        <Collapse 
+          defaultActiveKey={['basic', 'data']} 
+          ghost
+          items={[
+            {
+              key: 'basic',
+              label: '基础设置',
+              children: (
+                <>
+                  <Form.Item label="图表标题" name="title">
+                    <Input placeholder="输入图表标题" />
+                  </Form.Item>
 
-            <Form.Item label="配色方案" name="color_scheme">
-              <Select>
-                {COLOR_SCHEMES.map((scheme) => (
-                  <Option key={scheme.name} value={scheme.name}>
-                    <Space>
-                      {scheme.name}
-                      <div style={{ display: 'flex', gap: 2 }}>
-                        {scheme.colors.slice(0, 5).map((color, i) => (
-                          <div
-                            key={i}
-                            style={{
-                              width: 12,
-                              height: 12,
-                              background: color,
-                              borderRadius: 2,
-                            }}
-                          />
-                        ))}
-                      </div>
-                    </Space>
-                  </Option>
-                ))}
-              </Select>
-            </Form.Item>
-          </Panel>
+                  <Form.Item label="配色方案" name="color_scheme">
+                    <Select>
+                      {COLOR_SCHEMES.map((scheme) => (
+                        <Option key={scheme.name} value={scheme.name}>
+                          <Space>
+                            {scheme.name}
+                            <div style={{ display: 'flex', gap: 2 }}>
+                              {scheme.colors.slice(0, 5).map((color, i) => (
+                                <div
+                                  key={i}
+                                  style={{
+                                    width: 12,
+                                    height: 12,
+                                    background: color,
+                                    borderRadius: 2,
+                                  }}
+                                />
+                              ))}
+                            </div>
+                          </Space>
+                        </Option>
+                      ))}
+                    </Select>
+                  </Form.Item>
+                </>
+              )
+            },
+            {
+              key: 'data',
+              label: '数据映射',
+              children: (
+                <>
+                  {columns.length > 0 && (
+                    <>
+                      <Form.Item label="X轴/分类字段" name="x_column">
+                        <Select placeholder="选择字段" allowClear>
+                          {columns.map((col) => (
+                            <Option key={col} value={col}>{col}</Option>
+                          ))}
+                        </Select>
+                      </Form.Item>
 
-          {/* 数据映射 */}
-          <Panel header="数据映射" key="data">
-            {columns.length > 0 && (
-              <>
-                <Form.Item label="X轴/分类字段" name="x_column">
-                  <Select placeholder="选择字段" allowClear>
-                    {columns.map((col) => (
-                      <Option key={col} value={col}>{col}</Option>
-                    ))}
-                  </Select>
-                </Form.Item>
+                      <Form.Item label="Y轴/数值字段" name="y_columns">
+                        <Select mode="multiple" placeholder="选择字段" allowClear>
+                          {columns.map((col) => (
+                            <Option key={col} value={col}>{col}</Option>
+                          ))}
+                        </Select>
+                      </Form.Item>
 
-                <Form.Item label="Y轴/数值字段" name="y_columns">
-                  <Select mode="multiple" placeholder="选择字段" allowClear>
-                    {columns.map((col) => (
-                      <Option key={col} value={col}>{col}</Option>
-                    ))}
-                  </Select>
-                </Form.Item>
+                      <Form.Item label="分组字段" name="category_column">
+                        <Select placeholder="选择字段" allowClear>
+                          {columns.map((col) => (
+                            <Option key={col} value={col}>{col}</Option>
+                          ))}
+                        </Select>
+                      </Form.Item>
+                    </>
+                  )}
+                </>
+              )
+            },
+            {
+              key: 'legend',
+              label: '图例',
+              children: (
+                <>
+                  <Form.Item label="显示图例" name="legend_show" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
 
-                <Form.Item label="分组字段" name="category_column">
-                  <Select placeholder="选择字段" allowClear>
-                    {columns.map((col) => (
-                      <Option key={col} value={col}>{col}</Option>
-                    ))}
-                  </Select>
-                </Form.Item>
-              </>
-            )}
-          </Panel>
+                  <Form.Item label="图例位置" name="legend_position">
+                    <Radio.Group>
+                      <Radio.Button value="top">上</Radio.Button>
+                      <Radio.Button value="bottom">下</Radio.Button>
+                      <Radio.Button value="left">左</Radio.Button>
+                      <Radio.Button value="right">右</Radio.Button>
+                    </Radio.Group>
+                  </Form.Item>
+                </>
+              )
+            },
+            ...(!['pie', 'radar', 'funnel', 'gauge', 'sunburst', 'treemap'].includes(selectedType) ? [{
+              key: 'axis',
+              label: '坐标轴',
+              children: (
+                <>
+                  <Form.Item label="X轴名称" name="x_axis_name">
+                    <Input placeholder="输入X轴名称" />
+                  </Form.Item>
 
-          {/* 图例设置 */}
-          <Panel header="图例" key="legend">
-            <Form.Item label="显示图例" name="legend_show" valuePropName="checked">
-              <Switch />
-            </Form.Item>
+                  <Form.Item label="Y轴名称" name="y_axis_name">
+                    <Input placeholder="输入Y轴名称" />
+                  </Form.Item>
 
-            <Form.Item label="图例位置" name="legend_position">
-              <Radio.Group>
-                <Radio.Button value="top">上</Radio.Button>
-                <Radio.Button value="bottom">下</Radio.Button>
-                <Radio.Button value="left">左</Radio.Button>
-                <Radio.Button value="right">右</Radio.Button>
-              </Radio.Group>
-            </Form.Item>
-          </Panel>
+                  <Form.Item label="显示网格线" name="show_grid" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                </>
+              )
+            }] : []),
+            {
+              key: 'series',
+              label: '系列配置',
+              children: (
+                <>
+                  {['line', 'area'].includes(selectedType) && (
+                    <Form.Item label="平滑曲线" name="smooth" valuePropName="checked">
+                      <Switch />
+                    </Form.Item>
+                  )}
 
-          {/* 坐标轴设置 */}
-          {!['pie', 'radar', 'funnel', 'gauge', 'sunburst', 'treemap'].includes(selectedType) && (
-            <Panel header="坐标轴" key="axis">
-              <Form.Item label="X轴名称" name="x_axis_name">
-                <Input placeholder="输入X轴名称" />
-              </Form.Item>
+                  {['bar', 'line', 'area'].includes(selectedType) && (
+                    <Form.Item label="堆叠显示" name="stack" valuePropName="checked">
+                      <Switch />
+                    </Form.Item>
+                  )}
 
-              <Form.Item label="Y轴名称" name="y_axis_name">
-                <Input placeholder="输入Y轴名称" />
-              </Form.Item>
+                  <Form.Item label="显示数据标签" name="show_label" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                </>
+              )
+            },
+            {
+              key: 'tooltip',
+              label: '提示框',
+              children: (
+                <>
+                  <Form.Item label="显示提示框" name="tooltip_show" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
 
-              <Form.Item label="显示网格线" name="show_grid" valuePropName="checked">
-                <Switch />
-              </Form.Item>
-            </Panel>
-          )}
-
-          {/* 系列配置 */}
-          <Panel header="系列配置" key="series">
-            {['line', 'area'].includes(selectedType) && (
-              <Form.Item label="平滑曲线" name="smooth" valuePropName="checked">
-                <Switch />
-              </Form.Item>
-            )}
-
-            {['bar', 'line', 'area'].includes(selectedType) && (
-              <Form.Item label="堆叠显示" name="stack" valuePropName="checked">
-                <Switch />
-              </Form.Item>
-            )}
-
-            <Form.Item label="显示数据标签" name="show_label" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-          </Panel>
-
-          {/* 提示框设置 */}
-          <Panel header="提示框" key="tooltip">
-            <Form.Item label="显示提示框" name="tooltip_show" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-
-            <Form.Item label="触发方式" name="tooltip_trigger">
-              <Radio.Group>
-                <Radio.Button value="item">数据项</Radio.Button>
-                <Radio.Button value="axis">坐标轴</Radio.Button>
-              </Radio.Group>
-            </Form.Item>
-          </Panel>
-        </Collapse>
+                  <Form.Item label="触发方式" name="tooltip_trigger">
+                    <Radio.Group>
+                      <Radio.Button value="item">数据项</Radio.Button>
+                      <Radio.Button value="axis">坐标轴</Radio.Button>
+                    </Radio.Group>
+                  </Form.Item>
+                </>
+              )
+            }
+          ]}
+        />
       </Form>
     </Drawer>
   );

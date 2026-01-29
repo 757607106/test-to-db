@@ -3,6 +3,7 @@
 P2功能：数据预测相关的API接口
 """
 from typing import Any
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -122,28 +123,67 @@ def get_prediction_columns(
                 sample_data=[]
             )
         
-        # 分析列类型
-        first_row = data[0]
+        # 增强版列类型检测 - 检查多行数据
         date_columns = []
         value_columns = []
         
-        date_keywords = ["date", "time", "day", "month", "year", "created", "updated", "日期", "时间"]
+        # 扩展的日期关键词（中英文）
+        date_keywords = [
+            "date", "time", "day", "month", "year", "week", "quarter",
+            "created", "updated", "timestamp", "period",
+            "日期", "时间", "年", "月", "周", "季度", "天", "期间",
+            "创建", "更新", "记录", "下单", "支付", "发货"
+        ]
         
-        for key, value in first_row.items():
-            # 检测时间列
-            is_date = any(kw in key.lower() for kw in date_keywords)
-            if is_date or _looks_like_date(value):
-                date_columns.append(key)
+        # 获取所有列名
+        all_columns = list(data[0].keys()) if data else []
+        
+        # 检查每一列
+        for col in all_columns:
+            col_lower = col.lower()
             
-            # 检测数值列
-            if isinstance(value, (int, float)):
-                value_columns.append(key)
-            elif isinstance(value, str):
-                try:
-                    float(value.replace(",", ""))
-                    value_columns.append(key)
-                except ValueError:
-                    pass
+            # 检测该列的多个值（最多检查10行）
+            sample_values = []
+            for row in data[:10]:
+                val = row.get(col)
+                if val is not None:
+                    sample_values.append(val)
+            
+            if not sample_values:
+                continue
+            
+            # 1. 检测日期列
+            is_date_col = False
+            
+            # 方法a: 列名包含日期关键词
+            if any(kw in col_lower for kw in date_keywords):
+                is_date_col = True
+            
+            # 方法b: 检查值是否像日期
+            if not is_date_col:
+                date_like_count = sum(1 for v in sample_values if _looks_like_date_enhanced(v))
+                if date_like_count >= len(sample_values) * 0.5:  # 超过50%像日期
+                    is_date_col = True
+            
+            if is_date_col:
+                date_columns.append(col)
+            
+            # 2. 检测数值列（排除已识别为日期的列）
+            if not is_date_col:
+                numeric_count = 0
+                for v in sample_values:
+                    if isinstance(v, (int, float)):
+                        numeric_count += 1
+                    elif isinstance(v, str):
+                        try:
+                            float(v.replace(",", "").replace("￥", "").replace("$", ""))
+                            numeric_count += 1
+                        except (ValueError, AttributeError):
+                            pass
+                
+                # 超过50%是数值则认为是数值列
+                if numeric_count >= len(sample_values) * 0.5:
+                    value_columns.append(col)
         
         return PredictionColumnsResponse(
             date_columns=date_columns,
@@ -159,22 +199,45 @@ def get_prediction_columns(
         raise HTTPException(status_code=500, detail=f"获取列信息失败: {str(e)}")
 
 
-def _looks_like_date(value: Any) -> bool:
-    """判断值是否看起来像日期"""
-    if not isinstance(value, str):
+def _looks_like_date_enhanced(value: Any) -> bool:
+    """增强版日期检测 - 支持更多格式"""
+    if value is None:
         return False
     
-    # 常见日期格式模式
+    # 如果是 datetime 对象
+    if isinstance(value, datetime):
+        return True
+    
+    if not isinstance(value, str):
+        # 检查是否是时间戳（大于2000年的数字）
+        if isinstance(value, (int, float)) and 946684800 < value < 4102444800:
+            return True  # 2000-2100年的Unix时间戳
+        return False
+    
     import re
+    value_str = str(value).strip()
+    
+    # 常见日期格式模式
     date_patterns = [
-        r"\d{4}-\d{2}-\d{2}",  # 2024-01-26
-        r"\d{4}/\d{2}/\d{2}",  # 2024/01/26
-        r"\d{2}-\d{2}-\d{4}",  # 26-01-2024
-        r"\d{2}/\d{2}/\d{4}",  # 26/01/2024
+        r"^\d{4}-\d{2}-\d{2}",           # 2024-01-26
+        r"^\d{4}/\d{2}/\d{2}",           # 2024/01/26
+        r"^\d{2}-\d{2}-\d{4}",           # 26-01-2024
+        r"^\d{2}/\d{2}/\d{4}",           # 26/01/2024
+        r"^\d{4}-\d{2}$",                 # 2024-01 (年月)
+        r"^\d{4}/\d{2}$",                 # 2024/01
+        r"^\d{6}$",                        # 202401
+        r"^\d{8}$",                        # 20240126
+        r"^\d{4}年",                       # 2024年...
+        r"^\d{1,2}月$",                    # 1月, 12月
+        r"^Q[1-4]",                        # Q1, Q2...
+        r"^\d{4}Q[1-4]",                  # 2024Q1
+        r"^\d{4}-Q[1-4]",                 # 2024-Q1
+        r"^\d{4}年\d{1,2}月",             # 2024年1月
+        r"^\d{4}年\d{1,2}月\d{1,2}日",  # 2024年1月26日
     ]
     
     for pattern in date_patterns:
-        if re.match(pattern, value):
+        if re.match(pattern, value_str):
             return True
     
     return False

@@ -115,33 +115,18 @@ export const RefreshControlPanel: React.FC<RefreshControlPanelProps> = ({
   };
 
   return (
-    <Card
-      className={className}
-      size="small"
-      style={{
-        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        borderRadius: 12,
-        border: 'none',
-        boxShadow: '0 4px 12px rgba(102, 126, 234, 0.3)',
-      }}
-      styles={{ body: { padding: '12px 16px' } }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        {/* 左侧：刷新按钮和状态 */}
-        <Space size={12}>
+    <div className={className} style={{ display: 'inline-flex', alignItems: 'center', position: 'relative' }}>
+      <Space size={8} split={<Divider type="vertical" />}>
+        {/* 左侧：刷新按钮 */}
+        <Space size={8}>
           <Tooltip title={isRefreshing ? '刷新中...' : '一键刷新所有数据'}>
             <Button
-              type="primary"
+              type="default"
               icon={<ReloadOutlined spin={isRefreshing} />}
               loading={isRefreshing}
               onClick={() => handleRefresh(false)}
-              style={{
-                background: 'rgba(255,255,255,0.2)',
-                border: '1px solid rgba(255,255,255,0.3)',
-                borderRadius: 8,
-              }}
             >
-              {isRefreshing ? '刷新中' : '一键刷新'}
+              {isRefreshing ? '刷新中' : '刷新数据'}
             </Button>
           </Tooltip>
 
@@ -151,111 +136,68 @@ export const RefreshControlPanel: React.FC<RefreshControlPanelProps> = ({
               size="small"
               onClick={() => handleRefresh(true)}
               disabled={isRefreshing}
-              style={{ color: 'rgba(255,255,255,0.85)' }}
             >
               强制刷新
             </Button>
           </Tooltip>
+        </Space>
 
-          <Divider type="vertical" style={{ background: 'rgba(255,255,255,0.3)', height: 24 }} />
-
-          {/* 自动刷新状态 */}
-          {config.enabled && (
-            <Space size={8}>
+        {/* 自动刷新状态 */}
+        <Space size={8} style={{ alignItems: 'center' }}>
+          {config.enabled ? (
+            <>
               <Tag
-                color={isPaused ? 'orange' : 'green'}
-                style={{ borderRadius: 4, margin: 0 }}
+                color={isPaused ? 'warning' : 'success'}
+                style={{ margin: 0 }}
+                icon={isPaused ? <PauseCircleOutlined /> : <ClockCircleOutlined />}
               >
-                {isPaused ? '已暂停' : '自动刷新'}
+                {isPaused ? '已暂停' : `自动刷新 (${config.intervalSeconds}s)`}
               </Tag>
               
               {!isPaused && nextRefreshIn > 0 && (
-                <Text style={{ color: 'rgba(255,255,255,0.85)', fontSize: 12 }}>
-                  <ClockCircleOutlined style={{ marginRight: 4 }} />
-                  {formatCountdown(nextRefreshIn)}后刷新
+                <Text type="secondary" style={{ fontSize: 12, width: 60, display: 'inline-block' }}>
+                  {formatCountdown(nextRefreshIn)}
                 </Text>
               )}
 
-              {isPaused ? (
-                <Tooltip title="恢复自动刷新">
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<PlayCircleOutlined />}
-                    onClick={onResume}
-                    style={{ color: 'rgba(255,255,255,0.85)' }}
-                  />
-                </Tooltip>
-              ) : (
-                <Tooltip title="暂停自动刷新">
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<PauseCircleOutlined />}
-                    onClick={onPause}
-                    style={{ color: 'rgba(255,255,255,0.85)' }}
-                  />
-                </Tooltip>
-              )}
-            </Space>
-          )}
-        </Space>
-
-        {/* 右侧：配置按钮和上次刷新时间 */}
-        <Space size={12}>
-          {lastRefreshTime && (
-            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12 }}>
-              上次刷新: {formatTime(lastRefreshTime)}
-            </Text>
+              <Tooltip title={isPaused ? '恢复自动刷新' : '暂停自动刷新'}>
+                <Button
+                  type="text"
+                  size="small"
+                  icon={isPaused ? <PlayCircleOutlined /> : <PauseCircleOutlined />}
+                  onClick={isPaused ? onResume : onPause}
+                />
+              </Tooltip>
+            </>
+          ) : (
+            <Text type="secondary" style={{ fontSize: 12 }}>自动刷新未开启</Text>
           )}
 
           <Tooltip title="刷新设置">
             <Button
               type="text"
               icon={<SettingOutlined />}
-              onClick={() => setShowSettings(!showSettings)}
-              style={{ color: 'rgba(255,255,255,0.85)' }}
+              onClick={() => setShowSettings(true)}
             />
           </Tooltip>
         </Space>
-      </div>
+      </Space>
 
-      {/* 刷新结果展示 */}
-      {refreshResult && !isRefreshing && (
-        <div
-          style={{
-            marginTop: 12,
-            padding: '8px 12px',
-            background: 'rgba(255,255,255,0.1)',
-            borderRadius: 8,
-          }}
-        >
-          <Space size={16}>
-            <span style={{ color: 'rgba(255,255,255,0.85)' }}>
-              <CheckCircleOutlined style={{ color: '#52c41a', marginRight: 4 }} />
-              成功: {refreshResult.successCount}
-            </span>
-            {refreshResult.failedCount > 0 && (
-              <span style={{ color: 'rgba(255,255,255,0.85)' }}>
-                <CloseCircleOutlined style={{ color: '#ff4d4f', marginRight: 4 }} />
-                失败: {refreshResult.failedCount}
-              </span>
-            )}
-            <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12 }}>
-              耗时: {refreshResult.totalDurationMs}ms
-            </span>
-          </Space>
-        </div>
-      )}
-
-      {/* 设置面板 */}
+      {/* 设置面板 (Modal style) */}
       {showSettings && (
         <div
           style={{
-            marginTop: 12,
+            position: 'absolute',
+            top: '100%',
+            right: 0,
+            zIndex: 1000,
+            marginTop: 8,
             padding: 16,
-            background: 'rgba(255,255,255,0.95)',
+            background: '#fff',
             borderRadius: 8,
+            boxShadow: '0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 9px 28px 8px rgba(0, 0, 0, 0.05)',
+            width: 300,
+            border: '1px solid #f0f0f0',
           }}
         >
           <Title level={5} style={{ marginBottom: 16, color: '#334155' }}>
@@ -305,7 +247,7 @@ export const RefreshControlPanel: React.FC<RefreshControlPanelProps> = ({
           </Space>
         </div>
       )}
-    </Card>
+    </div>
   );
 };
 

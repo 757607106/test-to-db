@@ -21,7 +21,6 @@ import {
   Space,
   Tag,
   Tooltip,
-  Collapse,
   Progress,
   Divider,
   Slider,
@@ -31,9 +30,7 @@ import {
   BulbOutlined,
   CheckCircleOutlined,
   SearchOutlined,
-  QuestionCircleOutlined,
   CodeOutlined,
-  TableOutlined,
   RightOutlined,
   DownOutlined,
   InfoCircleOutlined,
@@ -50,7 +47,6 @@ import { getConnections } from '../services/api';
 const { Step } = Steps;
 const { TextArea } = Input;
 const { Title, Text, Paragraph } = Typography;
-const { Panel } = Collapse;
 
 // 挖掘建议类型
 interface MiningSuggestion {

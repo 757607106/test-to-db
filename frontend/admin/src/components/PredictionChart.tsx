@@ -15,6 +15,9 @@ import {
   Divider,
   Tooltip,
   Button,
+  Collapse,
+  Alert,
+  Steps,
 } from 'antd';
 import {
   LineChartOutlined,
@@ -24,6 +27,10 @@ import {
   InfoCircleOutlined,
   DownloadOutlined,
   QuestionCircleOutlined,
+  BulbOutlined,
+  ExperimentOutlined,
+  CheckCircleOutlined,
+  WarningOutlined,
 } from '@ant-design/icons';
 import {
   LineChart,
@@ -41,6 +48,7 @@ import {
 import type { PredictionResult, PredictionDataPoint } from '../types/prediction';
 
 const { Text, Title } = Typography;
+const { Panel } = Collapse;
 
 interface PredictionChartProps {
   result: PredictionResult;
@@ -363,6 +371,191 @@ export const PredictionChart: React.FC<PredictionChartProps> = ({
           </div>
         </Col>
       </Row>
+
+      {/* 预测依据区块 - 新增 */}
+      {(result.explanation || result.methodSelectionReason) && (
+        <>
+          <Divider style={{ margin: '20px 0' }} />
+          <Collapse
+            defaultActiveKey={['explanation']}
+            bordered={false}
+            style={{ background: '#f8fafc', borderRadius: 8 }}
+          >
+            {/* 预测方法与依据 */}
+            <Panel
+              header={
+                <Space>
+                  <BulbOutlined style={{ color: '#6366f1' }} />
+                  <Text strong>预测依据与公式</Text>
+                </Space>
+              }
+              key="explanation"
+            >
+              {/* 方法选择理由 */}
+              {result.methodSelectionReason && (
+                <div style={{ marginBottom: 16 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>方法选择理由</Text>
+                  <Alert
+                    type="info"
+                    message={result.methodSelectionReason.reason}
+                    style={{ marginTop: 8 }}
+                    showIcon
+                    icon={<ExperimentOutlined />}
+                  />
+                  {/* 方法评分 */}
+                  {Object.keys(result.methodSelectionReason.methodScores).length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>方法评分对比：</Text>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                        {Object.entries(result.methodSelectionReason.methodScores).map(([method, score]) => {
+                          const methodNames: Record<string, string> = {
+                            linear: '线性回归',
+                            moving_average: '移动平均',
+                            exponential_smoothing: '指数平滑',
+                          };
+                          const isSelected = method === result.methodSelectionReason?.selectedMethod;
+                          return (
+                            <Tag
+                              key={method}
+                              color={isSelected ? 'purple' : 'default'}
+                              style={{ margin: 0 }}
+                            >
+                              {methodNames[method] || method}: {(score as number).toFixed(1)}分
+                              {isSelected && ' ✓'}
+                            </Tag>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 预测公式 */}
+              {result.explanation && (
+                <>
+                  <div style={{ marginBottom: 16 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>算法原理</Text>
+                    <div style={{ marginTop: 4, padding: 12, background: '#fff', borderRadius: 6, border: '1px solid #e0e0e0' }}>
+                      <Text>{result.explanation.methodExplanation}</Text>
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: 16 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>计算公式</Text>
+                    <div style={{ marginTop: 4, padding: 12, background: '#1e1e1e', borderRadius: 6, fontFamily: 'monospace' }}>
+                      <Text style={{ color: '#d4d4d4' }}>{result.explanation.formulaUsed}</Text>
+                    </div>
+                  </div>
+
+                  {/* 关键参数 */}
+                  {Object.keys(result.explanation.keyParameters).length > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>关键参数</Text>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                        {Object.entries(result.explanation.keyParameters).map(([key, value]) => (
+                          <Tag key={key} color="blue">
+                            {key}: {typeof value === 'number' ? value.toFixed(4) : String(value)}
+                          </Tag>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 计算步骤 */}
+                  {result.explanation.calculationSteps.length > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>计算步骤</Text>
+                      <Steps
+                        direction="vertical"
+                        size="small"
+                        current={result.explanation.calculationSteps.length}
+                        style={{ marginTop: 8 }}
+                        items={result.explanation.calculationSteps.map((step, idx) => ({
+                          title: `步骤 ${idx + 1}`,
+                          description: step,
+                          status: 'finish' as const,
+                        }))}
+                      />
+                    </div>
+                  )}
+
+                  {/* 置信区间解释 */}
+                  <div style={{ marginBottom: 16 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>置信区间说明</Text>
+                    <div style={{ marginTop: 4, padding: 12, background: '#fff', borderRadius: 6, border: '1px solid #e0e0e0' }}>
+                      <Text>{result.explanation.confidenceExplanation}</Text>
+                    </div>
+                  </div>
+
+                  {/* 可靠性评估 */}
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>可靠性评估</Text>
+                    <Alert
+                      type={result.accuracyMetrics.mape < 20 ? 'success' : result.accuracyMetrics.mape < 50 ? 'warning' : 'error'}
+                      message={result.explanation.reliabilityAssessment}
+                      style={{ marginTop: 8 }}
+                      showIcon
+                      icon={result.accuracyMetrics.mape < 20 ? <CheckCircleOutlined /> : <WarningOutlined />}
+                    />
+                  </div>
+                </>
+              )}
+            </Panel>
+
+            {/* 数据质量信息 */}
+            {result.dataQuality && (
+              <Panel
+                header={
+                  <Space>
+                    <InfoCircleOutlined style={{ color: '#6366f1' }} />
+                    <Text strong>数据质量报告</Text>
+                  </Space>
+                }
+                key="dataQuality"
+              >
+                <Row gutter={[16, 16]}>
+                  <Col span={8}>
+                    <Statistic
+                      title="原始数据点"
+                      value={result.dataQuality.totalPoints}
+                      suffix="个"
+                    />
+                  </Col>
+                  <Col span={8}>
+                    <Statistic
+                      title="有效数据点"
+                      value={result.dataQuality.validPoints}
+                      suffix="个"
+                      valueStyle={{ color: result.dataQuality.validPoints === result.dataQuality.totalPoints ? '#52c41a' : '#faad14' }}
+                    />
+                  </Col>
+                  <Col span={8}>
+                    <Statistic
+                      title="数据间隔"
+                      value={result.dataQuality.dateInterval || '未检测'}
+                    />
+                  </Col>
+                  {result.dataQuality.missingCount > 0 && (
+                    <Col span={12}>
+                      <Text type="secondary">缺失值处理：</Text>
+                      <Tag color="orange">
+                        {result.dataQuality.missingCount}个缺失值，使用{result.dataQuality.missingFilledMethod || '前向填充'}填充
+                      </Tag>
+                    </Col>
+                  )}
+                  {result.dataQuality.outlierCount > 0 && (
+                    <Col span={12}>
+                      <Text type="secondary">异常值检测：</Text>
+                      <Tag color="red">检测到{result.dataQuality.outlierCount}个异常点</Tag>
+                    </Col>
+                  )}
+                </Row>
+              </Panel>
+            )}
+          </Collapse>
+        </>
+      )}
     </Card>
   );
 };
