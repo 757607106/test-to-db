@@ -4,10 +4,13 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, func
 from datetime import datetime
 import time
+import logging
 
 from app.crud.base import CRUDBase
 from app.models.dashboard_widget import DashboardWidget
 from app.schemas.dashboard_widget import WidgetCreate, WidgetUpdate
+
+logger = logging.getLogger(__name__)
 
 
 class CRUDDashboardWidget(CRUDBase[DashboardWidget, WidgetCreate, WidgetUpdate]):
@@ -40,6 +43,9 @@ class CRUDDashboardWidget(CRUDBase[DashboardWidget, WidgetCreate, WidgetUpdate])
     ) -> DashboardWidget:
         """创建Widget并自动分配位置
         
+        P2-10修复: 添加事务异常处理
+        使用数据库锁防止并发位置冲突
+        
         Args:
             obj_in: Widget创建数据
             dashboard_id: Dashboard ID
@@ -47,22 +53,28 @@ class CRUDDashboardWidget(CRUDBase[DashboardWidget, WidgetCreate, WidgetUpdate])
         Returns:
             创建的Widget对象
         """
-        widget_data = obj_in.model_dump()
-        widget_data["dashboard_id"] = dashboard_id
-        
-        # 如果没有提供position_config,自动分配位置
-        if "position_config" not in widget_data or not widget_data["position_config"]:
-            widget_data["position_config"] = self._allocate_position(db, dashboard_id)
-        
-        widget = DashboardWidget(**widget_data)
-        db.add(widget)
-        db.commit()
-        db.refresh(widget)
-        
-        return widget
+        try:
+            widget_data = obj_in.model_dump()
+            widget_data["dashboard_id"] = dashboard_id
+            
+            # 如果没有提供position_config,自动分配位置
+            if "position_config" not in widget_data or not widget_data["position_config"]:
+                widget_data["position_config"] = self._allocate_position_safe(db, dashboard_id)
+            
+            widget = DashboardWidget(**widget_data)
+            db.add(widget)
+            db.commit()
+            db.refresh(widget)
+            
+            return widget
+        except Exception:
+            db.rollback()
+            raise
 
-    def _allocate_position(self, db: Session, dashboard_id: int) -> dict:
-        """自动分配Widget位置
+    def _allocate_position_safe(self, db: Session, dashboard_id: int) -> dict:
+        """安全地自动分配Widget位置
+        
+        使用 SELECT FOR UPDATE 防止并发冲突
         
         Args:
             dashboard_id: Dashboard ID
@@ -70,22 +82,35 @@ class CRUDDashboardWidget(CRUDBase[DashboardWidget, WidgetCreate, WidgetUpdate])
         Returns:
             position_config字典
         """
-        # 获取现有的所有Widget
-        existing_widgets = self.get_by_dashboard(db, dashboard_id=dashboard_id)
+        # 使用 FOR UPDATE 锁定相关行，防止并发冲突
+        existing_widgets = db.query(DashboardWidget).filter(
+            DashboardWidget.dashboard_id == dashboard_id
+        ).with_for_update().order_by(DashboardWidget.created_at).all()
         
         if not existing_widgets:
             # 第一个Widget,放在左上角
             return {"x": 0, "y": 0, "w": 6, "h": 4, "minW": 2, "minH": 2}
         
-        # 找到最大的y值
+        # 找到最大的y值（考虑每个 widget 的高度）
         max_y = 0
         for widget in existing_widgets:
-            pos = widget.position_config
+            pos = widget.position_config or {}
             widget_bottom = pos.get("y", 0) + pos.get("h", 4)
             max_y = max(max_y, widget_bottom)
         
         # 放置在最底部
         return {"x": 0, "y": max_y, "w": 6, "h": 4, "minW": 2, "minH": 2}
+
+    def _allocate_position(self, db: Session, dashboard_id: int) -> dict:
+        """自动分配Widget位置（向后兼容）
+        
+        Args:
+            dashboard_id: Dashboard ID
+            
+        Returns:
+            position_config字典
+        """
+        return self._allocate_position_safe(db, dashboard_id)
 
     def update_position(
         self,
@@ -158,31 +183,37 @@ class CRUDDashboardWidget(CRUDBase[DashboardWidget, WidgetCreate, WidgetUpdate])
     ) -> List[DashboardWidget]:
         """获取需要刷新的Widget列表
         
+        P0-FIX: 使用Python计算时间差，避免数据库特定函数兼容性问题
+        
         Args:
             limit: 最大数量
             
         Returns:
             需要刷新的Widget列表
         """
-        from sqlalchemy import func, case
-        
         now = datetime.utcnow()
         
-        # 查询需要刷新的Widget
-        # 条件: refresh_interval > 0 且 (last_refresh_at为空 或 当前时间-last_refresh_at >= refresh_interval)
+        # 查询所有启用了自动刷新的Widget
         widgets = db.query(DashboardWidget).filter(
-            DashboardWidget.refresh_interval > 0,
-            or_(
-                DashboardWidget.last_refresh_at.is_(None),
-                func.timestampdiff(
-                    'SECOND',
-                    DashboardWidget.last_refresh_at,
-                    now
-                ) >= DashboardWidget.refresh_interval
-            )
-        ).limit(limit).all()
+            DashboardWidget.refresh_interval > 0
+        ).limit(limit * 2).all()  # 查询更多，因为会在Python中过滤
         
-        return widgets
+        # 在Python中过滤需要刷新的Widget
+        need_refresh = []
+        for widget in widgets:
+            if widget.last_refresh_at is None:
+                # 从未刷新过，需要刷新
+                need_refresh.append(widget)
+            else:
+                # 计算距离上次刷新的秒数
+                elapsed_seconds = (now - widget.last_refresh_at).total_seconds()
+                if elapsed_seconds >= widget.refresh_interval:
+                    need_refresh.append(widget)
+            
+            if len(need_refresh) >= limit:
+                break
+        
+        return need_refresh
 
     def update_query_config(
         self,

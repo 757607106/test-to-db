@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.api import deps
 from app import crud
+from app.models.user import User
 from app.schemas.prediction import (
     PredictionRequest,
     PredictionResult,
@@ -25,7 +26,7 @@ async def create_prediction(
     db: Session = Depends(deps.get_db),
     dashboard_id: int,
     request: PredictionRequest,
-    current_user_id: int = 1
+    current_user: User = Depends(deps.get_current_active_user)
 ) -> Any:
     """
     创建预测分析
@@ -35,7 +36,7 @@ async def create_prediction(
     try:
         # 检查权限
         has_permission = crud.crud_dashboard.check_permission(
-            db, dashboard_id=dashboard_id, user_id=current_user_id, required_level="viewer"
+            db, dashboard_id=dashboard_id, user_id=current_user.id, required_level="viewer"
         )
         if not has_permission:
             raise HTTPException(status_code=403, detail="No permission")
@@ -92,7 +93,7 @@ def get_prediction_columns(
     *,
     db: Session = Depends(deps.get_db),
     widget_id: int,
-    current_user_id: int = 1
+    current_user: User = Depends(deps.get_current_active_user)
 ) -> Any:
     """
     获取可用于预测的列信息
@@ -107,14 +108,25 @@ def get_prediction_columns(
         
         # 检查权限
         has_permission = crud.crud_dashboard.check_permission(
-            db, dashboard_id=widget.dashboard_id, user_id=current_user_id, required_level="viewer"
+            db, dashboard_id=widget.dashboard_id, user_id=current_user.id, required_level="viewer"
         )
         if not has_permission:
             raise HTTPException(status_code=403, detail="No permission")
         
-        # 获取数据
+        # 获取数据 - 兼容data和rows两种格式
         data_cache = widget.data_cache or {}
-        data = data_cache.get("data", [])
+        data = data_cache.get("data") or data_cache.get("rows") or []
+        
+        # 如果data_cache本身就是列表，直接使用
+        if isinstance(data_cache, list) and data_cache:
+            data = data_cache
+        
+        # 调试信息
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Widget {widget_id} data_cache type: {type(data_cache)}, data length: {len(data) if data else 0}")
+        if data and len(data) > 0:
+            logger.info(f"Sample row keys: {list(data[0].keys()) if isinstance(data[0], dict) else 'Not a dict'}")
         
         if not data:
             return PredictionColumnsResponse(

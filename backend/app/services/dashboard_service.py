@@ -1,6 +1,7 @@
 """Dashboard业务服务"""
 from typing import List, Optional, Dict, Any, Tuple
 from sqlalchemy.orm import Session
+import logging
 
 from app import crud
 from app.schemas.dashboard import (
@@ -8,6 +9,8 @@ from app.schemas.dashboard import (
     DashboardListItem, DashboardDetail
 )
 from app.models.dashboard import Dashboard
+
+logger = logging.getLogger(__name__)
 
 
 class DashboardService:
@@ -25,6 +28,8 @@ class DashboardService:
     ) -> Tuple[List[DashboardListItem], int]:
         """获取用户的Dashboard列表
         
+        优化：使用批量权限查询，避免 N+1 问题
+        
         Returns:
             (Dashboard列表, 总数)
         """
@@ -39,20 +44,24 @@ class DashboardService:
             search=search
         )
         
+        # 批量获取权限
+        dashboard_ids = [d.id for d in dashboards]
+        permissions_map = crud.crud_dashboard.get_user_permission_batch(
+            db,
+            dashboard_ids=dashboard_ids,
+            user_id=user_id
+        )
+        
         # 转换为响应格式
         items = []
         for dashboard in dashboards:
-            # 获取widget数量
+            # 获取widget数量（已通过 joinedload 预加载）
             widget_count = len(dashboard.widgets) if dashboard.widgets else 0
             
-            # 获取用户权限
-            permission_level = crud.crud_dashboard.get_user_permission(
-                db,
-                dashboard_id=dashboard.id,
-                user_id=user_id
-            )
+            # 从批量查询结果获取权限
+            permission_level = permissions_map.get(dashboard.id)
             
-            # 构建owner信息
+            # 构建owner信息（已通过 joinedload 预加载）
             owner_info = None
             if dashboard.owner:
                 owner_info = {

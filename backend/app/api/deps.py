@@ -13,9 +13,13 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=Fals
 
 
 def get_db() -> Generator:
+    """P2-10修复: 添加异常时的rollback处理"""
+    db = SessionLocal()
     try:
-        db = SessionLocal()
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 

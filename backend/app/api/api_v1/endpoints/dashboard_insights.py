@@ -2,27 +2,30 @@
 from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
+import logging
 
 from app.api import deps
+from app.models.user import User
 from app import schemas, crud
 from app.services.dashboard_insight_service import dashboard_insight_service
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/dashboards/{dashboard_id}/insights/detail")
 def get_insight_detail(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     dashboard_id: int,
     widget_id: Optional[int] = None,
-    current_user_id: int = 1
 ) -> Any:
     """获取洞察详情（含数据溯源）- P0功能"""
     try:
         # 检查权限
         has_permission = crud.crud_dashboard.check_permission(
-            db, dashboard_id=dashboard_id, user_id=current_user_id, required_level="viewer"
+            db, dashboard_id=dashboard_id, user_id=current_user.id, required_level="viewer"
         )
         if not has_permission:
             raise HTTPException(status_code=403, detail="No permission to view this dashboard")
@@ -86,9 +89,9 @@ def get_insight_detail(
 def generate_dashboard_insights(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     dashboard_id: int,
     request: schemas.DashboardInsightRequest,
-    current_user_id: int = 1,  # TODO: 从认证中获取
     background_tasks: BackgroundTasks
 ) -> Any:
     """生成看板洞察分析 (异步后台处理)"""
@@ -97,7 +100,7 @@ def generate_dashboard_insights(
         response = dashboard_insight_service.trigger_dashboard_insights(
             db,
             dashboard_id=dashboard_id,
-            user_id=current_user_id,
+            user_id=current_user.id,
             request=request
         )
         
@@ -105,7 +108,7 @@ def generate_dashboard_insights(
         background_tasks.add_task(
             dashboard_insight_service.process_dashboard_insights_task,
             dashboard_id=dashboard_id,
-            user_id=current_user_id,
+            user_id=current_user.id,
             request=request,
             widget_id=response.widget_id
         )
@@ -116,8 +119,7 @@ def generate_dashboard_insights(
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"生成洞察失败: dashboard_id={dashboard_id}")
         raise HTTPException(status_code=500, detail=f"生成洞察失败: {str(e)}")
 
 
@@ -125,8 +127,8 @@ def generate_dashboard_insights(
 def get_dashboard_insights(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     dashboard_id: int,
-    current_user_id: int = 1  # TODO: 从认证中获取
 ) -> Any:
     """获取看板的洞察Widget"""
     try:
@@ -136,7 +138,7 @@ def get_dashboard_insights(
         has_permission = crud.crud_dashboard.check_permission(
             db,
             dashboard_id=dashboard_id,
-            user_id=current_user_id,
+            user_id=current_user.id,
             required_level="viewer"
         )
         if not has_permission:
@@ -171,9 +173,9 @@ def get_dashboard_insights(
 def refresh_insight_widget(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     widget_id: int,
     request: schemas.InsightRefreshRequest,
-    current_user_id: int = 1,  # TODO: 从认证中获取
     background_tasks: BackgroundTasks
 ) -> Any:
     """刷新洞察Widget（支持条件更新，异步）"""
@@ -192,7 +194,7 @@ def refresh_insight_widget(
         has_permission = crud.crud_dashboard.check_permission(
             db,
             dashboard_id=widget.dashboard_id,
-            user_id=current_user_id,
+            user_id=current_user.id,
             required_level="viewer"
         )
         if not has_permission:
@@ -208,7 +210,7 @@ def refresh_insight_widget(
         response = dashboard_insight_service.trigger_dashboard_insights(
             db,
             dashboard_id=widget.dashboard_id,
-            user_id=current_user_id,
+            user_id=current_user.id,
             request=insight_request
         )
         
@@ -216,7 +218,7 @@ def refresh_insight_widget(
         background_tasks.add_task(
             dashboard_insight_service.process_dashboard_insights_task,
             dashboard_id=widget.dashboard_id,
-            user_id=current_user_id,
+            user_id=current_user.id,
             request=insight_request,
             widget_id=response.widget_id
         )
@@ -226,8 +228,7 @@ def refresh_insight_widget(
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"刷新洞察失败: widget_id={widget_id}")
         raise HTTPException(status_code=500, detail=f"刷新洞察失败: {str(e)}")
 
 
@@ -235,24 +236,23 @@ def refresh_insight_widget(
 async def generate_mining_suggestions(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     dashboard_id: int,
     request: schemas.MiningRequest,
-    current_user_id: int = 1  # TODO: 从认证中获取
 ) -> Any:
     """生成智能挖掘建议"""
     try:
         from app import crud
         # 检查权限
         has_permission = crud.crud_dashboard.check_permission(
-            db, dashboard_id=dashboard_id, user_id=current_user_id, required_level="viewer"
+            db, dashboard_id=dashboard_id, user_id=current_user.id, required_level="viewer"
         )
         if not has_permission:
             raise HTTPException(status_code=403, detail="No permission to view this dashboard")
         
         return await dashboard_insight_service.generate_mining_suggestions(db, request)
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"生成挖掘建议失败: dashboard_id={dashboard_id}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -260,16 +260,16 @@ async def generate_mining_suggestions(
 def apply_mining_suggestions(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     dashboard_id: int,
     request: schemas.ApplyMiningRequest,
-    current_user_id: int = 1
 ) -> Any:
     """应用推荐，创建Widget"""
     try:
         from app import crud
         # 检查权限
         has_permission = crud.crud_dashboard.check_permission(
-            db, dashboard_id=dashboard_id, user_id=current_user_id, required_level="editor"
+            db, dashboard_id=dashboard_id, user_id=current_user.id, required_level="editor"
         )
         if not has_permission:
             raise HTTPException(status_code=403, detail="No permission to edit this dashboard")
@@ -299,6 +299,5 @@ def apply_mining_suggestions(
             
         return {"success": True, "count": len(created_widgets), "widget_ids": created_widgets}
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"应用挖掘建议失败: dashboard_id={dashboard_id}")
         raise HTTPException(status_code=500, detail=str(e))

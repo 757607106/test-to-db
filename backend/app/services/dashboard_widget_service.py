@@ -151,31 +151,37 @@ class DashboardWidgetService:
             # 执行查询
             result_data = execute_query(connection, generated_sql)
             
-            # 转换数据格式为前端需要的格式
+            # P0-FIX: 统一数据格式为 {"columns": [...], "data": [...], "row_count": ...}
             if result_data:
                 columns = list(result_data[0].keys()) if result_data else []
-                # 转换每个值为JSON可序列化格式
-                rows = [
-                    [convert_to_json_serializable(row[col]) for col in columns] 
+                # 转换每个值为JSON可序列化格式，使用字典格式
+                formatted_data = [
+                    {col: convert_to_json_serializable(row[col]) for col in columns}
                     for row in result_data
                 ]
                 data_cache = {
                     "columns": columns,
-                    "rows": rows
+                    "data": formatted_data,
+                    "row_count": len(formatted_data),
+                    "refreshed_at": datetime.utcnow().isoformat()
                 }
             else:
                 data_cache = {
                     "columns": [],
-                    "rows": []
+                    "data": [],
+                    "row_count": 0,
+                    "refreshed_at": datetime.utcnow().isoformat()
                 }
             
         except Exception as e:
             print(f"刷新Widget数据失败: {str(e)}")
-            # 如果查询失败，返回空数据，并附带错误信息
+            # P0-FIX: 统一错误时的数据格式
             data_cache = {
                 "columns": [],
-                "rows": [],
-                "error": str(e)
+                "data": [],
+                "row_count": 0,
+                "error": str(e),
+                "refreshed_at": datetime.utcnow().isoformat()
             }
         
         updated_widget, duration_ms = crud.crud_dashboard_widget.refresh_data(
@@ -204,7 +210,19 @@ class DashboardWidgetService:
         parameters: Optional[Dict[str, Any]],
         user_id: int
     ) -> Optional[DashboardWidget]:
-        """重新生成Widget查询"""
+        """重新生成Widget查询
+        
+        Args:
+            db: 数据库会话
+            widget_id: Widget ID
+            mode: 模式 - 'params'只更新参数, 'full'完全重新生成SQL
+            updated_query: 更新后的自然语言查询
+            parameters: 更新后的参数
+            user_id: 用户ID
+            
+        Returns:
+            更新后的Widget对象
+        """
         widget = crud.crud_dashboard_widget.get(db, id=widget_id)
         if not widget:
             return None
@@ -219,27 +237,118 @@ class DashboardWidgetService:
             return None
         
         # 构建新的query_config
-        new_query_config = widget.query_config.copy()
+        new_query_config = widget.query_config.copy() if widget.query_config else {}
         
         if mode == "params":
             # 只更新参数
             if parameters:
                 new_query_config["parameters"] = parameters
         elif mode == "full":
-            # 完全重新生成
+            # P1-FIX: 完全重新生成SQL
             if updated_query:
                 new_query_config["original_query"] = updated_query
             if parameters:
                 new_query_config["parameters"] = parameters
             
-            # TODO: 调用LangGraph重新生成SQL
-            # 这里暂时保持原SQL
+            # 调用SQL Generator重新生成SQL
+            generated_sql = self._regenerate_sql(
+                db=db,
+                connection_id=widget.connection_id,
+                query=updated_query or new_query_config.get("original_query", ""),
+                parameters=parameters
+            )
+            
+            if generated_sql:
+                new_query_config["generated_sql"] = generated_sql
+                new_query_config["regenerated_at"] = datetime.utcnow().isoformat()
         
         return crud.crud_dashboard_widget.update_query_config(
             db,
             widget_id=widget_id,
             query_config=new_query_config
         )
+
+    def _regenerate_sql(
+        self,
+        db: Session,
+        connection_id: int,
+        query: str,
+        parameters: Optional[Dict[str, Any]] = None
+    ) -> Optional[str]:
+        """
+        P1-FIX: 调用SQL Generator重新生成SQL
+        
+        Args:
+            db: 数据库会话
+            connection_id: 数据库连接ID
+            query: 自然语言查询
+            parameters: 可选参数
+            
+        Returns:
+            生成的SQL语句，失败返回None
+        """
+        import asyncio
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
+        if not query:
+            logger.warning("[_regenerate_sql] 没有提供查询语句")
+            return None
+        
+        try:
+            from app.agents.agents.sql_generator_agent import sql_generator_agent
+            from app.services.text2sql_utils import retrieve_relevant_schema
+            from app.models.db_connection import DBConnection
+            from langchain_core.messages import HumanMessage
+            
+            # 获取数据库类型
+            connection = db.query(DBConnection).filter(DBConnection.id == connection_id).first()
+            db_type = connection.db_type.lower() if connection else "mysql"
+            
+            # 获取相关的schema信息
+            schema_context = retrieve_relevant_schema(db, connection_id, query)
+            
+            # 构建state
+            state = {
+                "messages": [HumanMessage(content=query)],
+                "schema_info": schema_context,
+                "connection_id": connection_id,
+                "db_type": db_type,
+                "skip_sample_retrieval": False,
+                "error_recovery_context": None,
+                "current_stage": "sql_generation",
+            }
+            
+            # 尝试运行async方法
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # 如果已经在事件循环中，使用run_coroutine_threadsafe
+                    import concurrent.futures
+                    future = asyncio.run_coroutine_threadsafe(
+                        sql_generator_agent.process(state),
+                        loop
+                    )
+                    result = future.result(timeout=60)
+                else:
+                    result = loop.run_until_complete(sql_generator_agent.process(state))
+            except RuntimeError:
+                # 没有事件循环，创建新的
+                result = asyncio.run(sql_generator_agent.process(state))
+            
+            generated_sql = result.get("generated_sql")
+            
+            if generated_sql:
+                logger.info(f"[_regenerate_sql] SQL生成成功: {generated_sql[:100]}...")
+                return generated_sql
+            else:
+                logger.warning("[_regenerate_sql] SQL Generator未返回SQL")
+                return None
+                
+        except Exception as e:
+            logger.error(f"[_regenerate_sql] SQL重新生成失败: {e}")
+            return None
 
 
 # 创建全局实例

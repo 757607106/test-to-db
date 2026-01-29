@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from datetime import datetime
 
 from app.api import deps
+from app.models.user import User
 from app.services.hybrid_retrieval_service import (
     HybridRetrievalEngine, QAPairWithContext, RetrievalResult,
     extract_tables_from_sql, extract_entities_from_question, clean_sql, generate_qa_id
@@ -114,7 +115,8 @@ async def get_hybrid_engine(connection_id: int = None):
 @router.post("/qa-pairs/", response_model=Dict[str, Any])
 async def create_qa_pair(
     qa_create: QAPairCreate,
-    db: Session = Depends(deps.get_db)
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user)
 ):
     """创建新的问答对"""
     try:
@@ -158,7 +160,8 @@ async def create_qa_pair(
 @router.post("/qa-pairs/search", response_model=List[SimilarQAPairResponse])
 async def search_similar_qa_pairs(
     search_request: SearchRequest,
-    db: Session = Depends(deps.get_db)
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user)
 ):
     """搜索相似的问答对"""
     try:
@@ -208,7 +211,8 @@ async def search_similar_qa_pairs(
 @router.get("/qa-pairs/stats", response_model=Dict[str, Any])
 async def get_qa_pairs_stats(
     connection_id: Optional[int] = Query(None, description="数据库连接ID"),
-    db: Session = Depends(deps.get_db)
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user)
 ):
     """获取问答对统计信息"""
     try:
@@ -234,7 +238,8 @@ async def get_qa_pairs_stats(
 async def list_qa_pairs(
     connection_id: Optional[int] = Query(None, description="数据库连接ID"),
     limit: int = Query(100, description="返回数量限制"),
-    db: Session = Depends(deps.get_db)
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user)
 ):
     """获取问答对列表"""
     try:
@@ -250,7 +255,8 @@ async def list_qa_pairs(
 @router.post("/qa-pairs/feedback", response_model=Dict[str, Any])
 async def submit_feedback(
     feedback: FeedbackRequest,
-    db: Session = Depends(deps.get_db)
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user)
 ):
     """提交用户反馈"""
     try:
@@ -287,7 +293,8 @@ def classify_query_type_from_sql(sql: str) -> str:
 @router.post("/qa-pairs/from-feedback", response_model=Dict[str, Any])
 async def create_qa_pair_from_feedback(
     request: FeedbackCreateRequest,
-    db: Session = Depends(deps.get_db)
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user)
 ):
     """
     从用户反馈创建问答对
@@ -430,7 +437,8 @@ async def health_check():
 @router.post("/qa-pairs/batch-create", response_model=Dict[str, Any])
 async def batch_create_qa_pairs(
     qa_pairs: List[QAPairCreate],
-    db: Session = Depends(deps.get_db)
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user)
 ):
     """批量创建问答对"""
     try:
@@ -487,7 +495,8 @@ async def batch_create_qa_pairs(
 async def update_qa_pair(
     qa_id: str,
     qa_update: QAPairUpdate,
-    db: Session = Depends(deps.get_db)
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user)
 ):
     """更新问答对"""
     try:
@@ -522,7 +531,8 @@ async def update_qa_pair(
 @router.delete("/qa-pairs/{qa_id}", response_model=Dict[str, Any])
 async def delete_qa_pair(
     qa_id: str,
-    db: Session = Depends(deps.get_db)
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user)
 ):
     """删除问答对"""
     try:
@@ -544,7 +554,8 @@ async def delete_qa_pair(
 async def export_qa_pairs(
     connection_id: Optional[int] = Query(None, description="数据库连接ID"),
     format: str = Query("json", description="导出格式: json, csv"),
-    db: Session = Depends(deps.get_db)
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user)
 ):
     """导出问答对数据"""
     try:

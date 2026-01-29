@@ -2,8 +2,10 @@
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+import logging
 
 from app.api import deps
+from app.models.user import User
 from app.schemas.dashboard_widget import (
     WidgetCreate, WidgetUpdate, WidgetResponse,
     WidgetRefreshResponse, WidgetRegenerateRequest,
@@ -13,22 +15,23 @@ from app.services.dashboard_widget_service import dashboard_widget_service
 from app import crud
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/dashboards/{dashboard_id}/widgets", response_model=WidgetResponse)
 def create_widget(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     dashboard_id: int,
     widget_in: WidgetCreate,
-    current_user_id: int = 1  # TODO: 从认证中获取
 ) -> Any:
     """添加Widget到Dashboard"""
     widget = dashboard_widget_service.create_widget(
         db,
         dashboard_id=dashboard_id,
         obj_in=widget_in,
-        user_id=current_user_id
+        user_id=current_user.id
     )
     
     if not widget:
@@ -41,16 +44,16 @@ def create_widget(
 def update_widget(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     widget_id: int,
     widget_in: WidgetUpdate,
-    current_user_id: int = 1  # TODO: 从认证中获取
 ) -> Any:
     """更新Widget配置"""
     widget = dashboard_widget_service.update_widget(
         db,
         widget_id=widget_id,
         obj_in=widget_in,
-        user_id=current_user_id
+        user_id=current_user.id
     )
     
     if not widget:
@@ -63,14 +66,14 @@ def update_widget(
 def delete_widget(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     widget_id: int,
-    current_user_id: int = 1  # TODO: 从认证中获取
 ) -> Any:
     """删除Widget"""
     success = dashboard_widget_service.delete_widget(
         db,
         widget_id=widget_id,
-        user_id=current_user_id
+        user_id=current_user.id
     )
     
     if not success:
@@ -83,14 +86,14 @@ def delete_widget(
 def refresh_widget(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     widget_id: int,
-    current_user_id: int = 1  # TODO: 从认证中获取
 ) -> Any:
     """手动刷新Widget数据"""
     result = dashboard_widget_service.refresh_widget(
         db,
         widget_id=widget_id,
-        user_id=current_user_id
+        user_id=current_user.id
     )
     
     if not result:
@@ -103,9 +106,9 @@ def refresh_widget(
 def regenerate_widget_query(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     widget_id: int,
     regenerate_request: WidgetRegenerateRequest,
-    current_user_id: int = 1  # TODO: 从认证中获取
 ) -> Any:
     """重新生成Widget查询"""
     widget = dashboard_widget_service.regenerate_widget_query(
@@ -114,7 +117,7 @@ def regenerate_widget_query(
         mode=regenerate_request.mode,
         updated_query=regenerate_request.updated_query,
         parameters=regenerate_request.parameters,
-        user_id=current_user_id
+        user_id=current_user.id
     )
     
     if not widget:
@@ -127,6 +130,7 @@ def regenerate_widget_query(
 async def ai_recommend_chart(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     widget_id: int,
     request: AIChartRecommendRequest,
 ) -> Any:

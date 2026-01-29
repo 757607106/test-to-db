@@ -558,78 +558,241 @@ SQL 语法注意事项（{db_type}）：
     ):
         """
         后台任务：执行实际的洞察分析逻辑
+        
+        P1-FIX: 优化Session生命周期管理，使用上下文管理器和更健壮的错误处理
         """
-        db = SessionLocal()
-        try:
-            print(f"🚀 开始后台洞察分析 Task (Dashboard: {dashboard_id})")
-            
-            # 1. 获取数据
-            dashboard = crud.crud_dashboard.get(db, id=dashboard_id)
-            widgets = dashboard.widgets
-            
-            # 筛选Widgets
-            if request.included_widget_ids:
-                widgets = [w for w in widgets if w.id in request.included_widget_ids]
-            
-            data_widgets = [w for w in widgets if w.widget_type != "insight_analysis"]
-            
-            if not data_widgets:
-                print("⚠️ 无有效数据组件，跳过分析")
-                return
+        import logging
+        from contextlib import contextmanager
+        
+        logger = logging.getLogger(__name__)
+        max_retries = 2
+        retry_count = 0
+        
+        @contextmanager
+        def get_db_session():
+            """P1-FIX: 使用上下文管理器确保Session正确关闭"""
+            session = SessionLocal()
+            try:
+                yield session
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
+        
+        with get_db_session() as db:
+            try:
+                logger.info(f"🚀 开始后台洞察分析 Task (Dashboard: {dashboard_id}, Widget: {widget_id})")
+                
+                # 1. 获取数据
+                dashboard = crud.crud_dashboard.get(db, id=dashboard_id)
+                if not dashboard:
+                    raise ValueError(f"Dashboard {dashboard_id} not found")
+                
+                widgets = dashboard.widgets
+                
+                # 筛选Widgets
+                if request.included_widget_ids:
+                    widgets = [w for w in widgets if w.id in request.included_widget_ids]
+                
+                data_widgets = [w for w in widgets if w.widget_type != "insight_analysis"]
+                
+                if not data_widgets:
+                    logger.warning(f"⚠️ Dashboard {dashboard_id} 无有效数据组件，跳过分析")
+                    self._update_widget_status(db, widget_id, "completed", "无数据组件可分析")
+                    return
 
-            # 2. 聚合数据
-            aggregated_data = self._aggregate_widget_data(data_widgets, request.conditions)
-            
-            # 3. 图谱查询
-            relationship_context = None
-            relationship_count = 0
-            if request.use_graph_relationships and aggregated_data["table_names"]:
+                # 2. 聚合数据
+                aggregated_data = self._aggregate_widget_data(data_widgets, request.conditions)
+                logger.info(f"📊 聚合数据完成: {aggregated_data['total_rows']} 行, {len(aggregated_data['table_names'])} 个表")
+                
+                # 3. 图谱查询（带重试）
+                relationship_context = None
+                relationship_count = 0
+                if request.use_graph_relationships and aggregated_data["table_names"]:
+                    try:
+                        connection_id = data_widgets[0].connection_id
+                        relationship_context = graph_relationship_service.query_table_relationships(
+                            connection_id,
+                            aggregated_data["table_names"]
+                        )
+                        relationship_count = relationship_context.get("relationship_count", 0)
+                        logger.info(f"🔗 图谱关系查询完成: {relationship_count} 个关系")
+                    except Exception as e:
+                        logger.warning(f"⚠️ 图谱关系查询失败: {e}")
+
+                # 4. 洞察分析（带重试机制）
+                insights = None
+                while retry_count <= max_retries:
+                    try:
+                        insights = schemas.InsightResult(
+                            summary=schemas.InsightSummary(
+                                total_rows=aggregated_data["total_rows"],
+                                key_metrics=self._extract_key_metrics(aggregated_data),
+                                time_range="已分析"
+                            ),
+                            trends=self._analyze_trends(aggregated_data),
+                            anomalies=self._detect_anomalies(aggregated_data),
+                            correlations=self._find_correlations(aggregated_data, relationship_context),
+                            recommendations=[
+                                schemas.InsightRecommendation(
+                                    type="info",
+                                    content=f"已分析 {len(data_widgets)} 个数据组件，共 {aggregated_data['total_rows']} 条数据",
+                                    priority="medium"
+                                )
+                            ]
+                        )
+                        break
+                    except Exception as e:
+                        retry_count += 1
+                        if retry_count > max_retries:
+                            logger.error(f"❌ 洞察分析失败，已重试 {max_retries} 次: {e}")
+                            raise
+                        logger.warning(f"⚠️ 洞察分析失败，第 {retry_count} 次重试: {e}")
+                        await asyncio.sleep(1)  # 重试前等待
+                
+                # 5. 更新 Widget 状态为完成
+                self._update_insight_widget_result(
+                    db, 
+                    widget_id, 
+                    insights, 
+                    len(data_widgets),
+                    status="completed"
+                )
+                
+                logger.info(f"✅ 后台洞察分析完成 (Widget: {widget_id})")
+                
+            except Exception as e:
+                logger.exception(f"❌ 后台洞察分析失败: dashboard_id={dashboard_id}, widget_id={widget_id}")
+                # P1-FIX: 在同一个Session中更新失败状态
                 try:
-                    connection_id = data_widgets[0].connection_id
-                    relationship_context = graph_relationship_service.query_table_relationships(
-                        connection_id,
-                        aggregated_data["table_names"]
-                    )
-                    relationship_count = relationship_context.get("relationship_count", 0)
-                except Exception as e:
-                    print(f"⚠️ 图谱关系查询失败: {e}")
-
-            # 4. 简化的洞察分析（不使用dashboard_analyst_agent）
-            insights = schemas.InsightResult(
-                summary=schemas.InsightSummary(
-                    total_rows=aggregated_data["total_rows"],
-                    key_metrics={},
-                    time_range="已分析"
-                ),
-                trends=None,
-                anomalies=[],
-                correlations=[],
-                recommendations=[
-                    schemas.InsightRecommendation(
-                        type="info",
-                        content=f"已分析 {len(data_widgets)} 个数据组件",
-                        priority="medium"
-                    )
-                ]
-            )
+                    db.rollback()  # 先回滚之前的任何未提交的更改
+                    self._update_widget_status(db, widget_id, "failed", str(e))
+                except Exception as update_error:
+                    logger.error(f"更新失败状态时出错: {update_error}")
+    
+    def _extract_key_metrics(self, aggregated_data: dict) -> dict:
+        """从聚合数据中提取关键指标"""
+        key_metrics = {}
+        data = aggregated_data.get("data", [])
+        numeric_columns = aggregated_data.get("numeric_columns", [])
+        
+        if not data or not numeric_columns:
+            return key_metrics
+        
+        for col in numeric_columns[:5]:  # 最多5个指标
+            values = [row.get(col) for row in data if row.get(col) is not None]
+            if values:
+                try:
+                    numeric_values = [float(v) for v in values if v is not None]
+                    if numeric_values:
+                        key_metrics[col] = {
+                            "sum": round(sum(numeric_values), 2),
+                            "avg": round(sum(numeric_values) / len(numeric_values), 2),
+                            "max": round(max(numeric_values), 2),
+                            "min": round(min(numeric_values), 2),
+                            "count": len(numeric_values)
+                        }
+                except (ValueError, TypeError):
+                    pass
+        
+        return key_metrics
+    
+    def _analyze_trends(self, aggregated_data: dict) -> Optional[schemas.InsightTrend]:
+        """分析数据趋势"""
+        date_columns = aggregated_data.get("date_columns", [])
+        numeric_columns = aggregated_data.get("numeric_columns", [])
+        data = aggregated_data.get("data", [])
+        
+        if not date_columns or not numeric_columns or len(data) < 2:
+            return None
+        
+        # 简单趋势分析：比较首尾数据
+        try:
+            first_row = data[0]
+            last_row = data[-1]
             
-            # 5. 更新 Widget 状态为完成
-            self._update_insight_widget_result(
-                db, 
-                widget_id, 
-                insights, 
-                len(data_widgets),
-                status="completed"
-            )
-            
-            print(f"✅ 后台洞察分析完成 (Widget: {widget_id})")
-            
-        except Exception as e:
-            print(f"❌ 后台洞察分析失败: {str(e)}")
-            # 更新状态为失败
-            self._update_widget_status(db, widget_id, "failed", str(e))
-        finally:
-            db.close()
+            for num_col in numeric_columns[:1]:  # 取第一个数值列
+                first_val = first_row.get(num_col)
+                last_val = last_row.get(num_col)
+                
+                if first_val is not None and last_val is not None:
+                    first_val = float(first_val)
+                    last_val = float(last_val)
+                    
+                    if first_val != 0:
+                        change_rate = ((last_val - first_val) / first_val) * 100
+                        direction = "up" if change_rate > 0 else ("down" if change_rate < 0 else "stable")
+                        
+                        return schemas.InsightTrend(
+                            trend_direction=direction,
+                            total_growth_rate=round(change_rate, 2),
+                            description=f"{num_col} 从 {first_val} 变化到 {last_val}，变化率 {round(change_rate, 2)}%"
+                        )
+        except Exception:
+            pass
+        
+        return None
+    
+    def _detect_anomalies(self, aggregated_data: dict) -> List[schemas.InsightAnomaly]:
+        """检测数据异常"""
+        anomalies = []
+        data = aggregated_data.get("data", [])
+        numeric_columns = aggregated_data.get("numeric_columns", [])
+        
+        if not data or not numeric_columns:
+            return anomalies
+        
+        for col in numeric_columns[:3]:  # 最多检查3列
+            try:
+                values = [float(row.get(col)) for row in data if row.get(col) is not None]
+                if len(values) < 3:
+                    continue
+                
+                avg_val = sum(values) / len(values)
+                max_val = max(values)
+                min_val = min(values)
+                
+                # 简单异常检测：极值超过平均值的3倍
+                if avg_val > 0 and max_val > avg_val * 3:
+                    anomalies.append(schemas.InsightAnomaly(
+                        type="outlier",
+                        metric=col,
+                        description=f"{col} 存在极大值 {max_val}，远超平均值 {round(avg_val, 2)}",
+                        severity="medium"
+                    ))
+                
+                if avg_val > 0 and min_val < avg_val * 0.1:
+                    anomalies.append(schemas.InsightAnomaly(
+                        type="outlier",
+                        metric=col,
+                        description=f"{col} 存在极小值 {min_val}，远低于平均值 {round(avg_val, 2)}",
+                        severity="low"
+                    ))
+            except Exception:
+                pass
+        
+        return anomalies[:5]  # 最多返回5个异常
+    
+    def _find_correlations(self, aggregated_data: dict, relationship_context: Optional[dict]) -> List[schemas.InsightCorrelation]:
+        """发现数据关联"""
+        correlations = []
+        
+        # 基于图谱关系生成关联洞察
+        if relationship_context:
+            direct_rels = relationship_context.get("direct_relationships", [])
+            for rel in direct_rels[:3]:
+                src_table = rel.get("source_table", "")
+                tgt_table = rel.get("target_table", "")
+                if src_table and tgt_table:
+                    correlations.append(schemas.InsightCorrelation(
+                        type="cross_table",
+                        entities=[src_table, tgt_table],
+                        description=f"{src_table} 与 {tgt_table} 存在外键关联",
+                        strength=0.8
+                    ))
+        
+        return correlations
 
     def _check_permission(self, db: Session, dashboard_id: int, user_id: int):
         has_permission = crud.crud_dashboard.check_permission(
@@ -747,10 +910,27 @@ SQL 语法注意事项（{db_type}）：
         existing_widgets = crud.crud_dashboard_widget.get_by_dashboard(db, dashboard_id=dashboard_id)
         
         insight_widget = None
+        # P0-FIX: 从现有数据Widget中获取connection_id，避免硬编码
+        default_connection_id = None
         for widget in existing_widgets:
             if widget.widget_type == "insight_analysis":
                 insight_widget = widget
-                break
+            elif default_connection_id is None and widget.connection_id:
+                # 使用第一个数据Widget的connection_id作为默认值
+                default_connection_id = widget.connection_id
+        
+        # 如果没有找到任何数据Widget，尝试从Dashboard关联的connection获取
+        if default_connection_id is None:
+            dashboard = crud.crud_dashboard.get(db, id=dashboard_id)
+            if dashboard and dashboard.widgets:
+                for w in dashboard.widgets:
+                    if w.widget_type != "insight_analysis" and w.connection_id:
+                        default_connection_id = w.connection_id
+                        break
+        
+        # 最后降级到1（保持向后兼容）
+        if default_connection_id is None:
+            default_connection_id = 1
         
         # P0: 将溯源信息合并到 query_config
         query_config = {
@@ -799,7 +979,7 @@ SQL 语法注意事项（{db_type}）：
             widget_create = schemas.WidgetCreate(
                 widget_type="insight_analysis",
                 title="看板洞察分析",
-                connection_id=1,
+                connection_id=default_connection_id,  # P0-FIX: 使用动态获取的connection_id
                 query_config=query_config,
                 chart_config=None,
                 position_config={"x": 0, "y": 0, "w": 12, "h": 6},
@@ -817,27 +997,40 @@ SQL 语法注意事项（{db_type}）：
             return new_widget.id
 
     def _update_insight_widget_result(self, db: Session, widget_id: int, insights: schemas.InsightResult, count: int, status: str):
-        widget = crud.crud_dashboard_widget.get(db, id=widget_id)
-        if widget:
-            query_config = widget.query_config or {}
-            query_config["status"] = status
-            query_config["analyzed_widget_count"] = count
-            query_config["last_analysis_at"] = datetime.utcnow().isoformat()
-            
-            widget.query_config = query_config
-            widget.data_cache = insights.dict(exclude_none=True)
-            widget.last_refresh_at = datetime.utcnow()
-            db.commit()
+        """更新洞察 Widget 的分析结果"""
+        try:
+            widget = crud.crud_dashboard_widget.get(db, id=widget_id)
+            if widget:
+                query_config = widget.query_config or {}
+                query_config["status"] = status
+                query_config["analyzed_widget_count"] = count
+                query_config["last_analysis_at"] = datetime.utcnow().isoformat()
+                
+                widget.query_config = query_config
+                widget.data_cache = insights.dict(exclude_none=True)
+                widget.last_refresh_at = datetime.utcnow()
+                db.commit()
+        except Exception as e:
+            db.rollback()
+            raise
 
     def _update_widget_status(self, db: Session, widget_id: int, status: str, error: str = None):
-        widget = crud.crud_dashboard_widget.get(db, id=widget_id)
-        if widget:
-            query_config = widget.query_config or {}
-            query_config["status"] = status
-            if error:
-                query_config["error"] = error
-            widget.query_config = query_config
-            db.commit()
+        """更新 Widget 状态"""
+        try:
+            widget = crud.crud_dashboard_widget.get(db, id=widget_id)
+            if widget:
+                query_config = widget.query_config or {}
+                query_config["status"] = status
+                query_config["last_updated_at"] = datetime.utcnow().isoformat()
+                if error:
+                    # 限制错误信息长度，避免存储过大
+                    query_config["error"] = str(error)[:1000]
+                widget.query_config = query_config
+                db.commit()
+        except Exception as e:
+            db.rollback()
+            raise
+
 
 # 创建全局实例
 dashboard_insight_service = DashboardInsightService()

@@ -18,6 +18,15 @@ const api = axios.create({
   },
 });
 
+// 请求拦截器：添加 token
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('auth_token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 export const predictionService = {
   /**
    * 创建预测分析

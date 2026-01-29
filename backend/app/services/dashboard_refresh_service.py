@@ -1,6 +1,7 @@
 """
 Dashboard刷新服务
 P1功能：实现动态数据刷新机制，包括全局刷新和定时刷新
+优化：增加并发限流，防止数据库压力过大
 """
 import asyncio
 import time
@@ -15,9 +16,16 @@ from app.models.dashboard_widget import DashboardWidget
 
 logger = logging.getLogger(__name__)
 
+# 并发限制配置
+MAX_CONCURRENT_REFRESHES = 5  # 最大并发刷新数
+REFRESH_TIMEOUT_SECONDS = 60  # 单个 Widget 刷新超时时间
+
 
 class DashboardRefreshService:
     """Dashboard刷新服务"""
+    
+    def __init__(self):
+        self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_REFRESHES)
     
     async def global_refresh(
         self,
@@ -27,7 +35,7 @@ class DashboardRefreshService:
         widget_ids: Optional[List[int]] = None
     ) -> schemas.GlobalRefreshResponse:
         """
-        执行全局刷新
+        执行全局刷新（带并发限流）
         
         Args:
             db: 数据库会话
@@ -60,21 +68,39 @@ class DashboardRefreshService:
                 refresh_timestamp=datetime.utcnow()
             )
         
-        # 并行刷新所有Widget
+        logger.info(f"需要刷新 {len(data_widgets)} 个 Widget，并发限制: {MAX_CONCURRENT_REFRESHES}")
+        
+        # 使用信号量限制并发
         results: Dict[int, schemas.WidgetRefreshResult] = {}
         success_count = 0
         failed_count = 0
         
-        # 使用asyncio.gather并行执行
+        # 创建带限流的刷新任务
+        async def refresh_with_limit(widget: DashboardWidget):
+            async with self._semaphore:
+                return await self._refresh_single_widget(db, widget, force)
+        
+        # 使用asyncio.gather并行执行（受信号量限制）
         refresh_tasks = [
-            self._refresh_single_widget(db, widget, force)
+            asyncio.wait_for(
+                refresh_with_limit(widget),
+                timeout=REFRESH_TIMEOUT_SECONDS
+            )
             for widget in data_widgets
         ]
         
         task_results = await asyncio.gather(*refresh_tasks, return_exceptions=True)
         
         for widget, result in zip(data_widgets, task_results):
-            if isinstance(result, Exception):
+            if isinstance(result, asyncio.TimeoutError):
+                results[widget.id] = schemas.WidgetRefreshResult(
+                    widget_id=widget.id,
+                    success=False,
+                    error=f"刷新超时（>{REFRESH_TIMEOUT_SECONDS}秒）",
+                    duration_ms=REFRESH_TIMEOUT_SECONDS * 1000
+                )
+                failed_count += 1
+            elif isinstance(result, Exception):
                 results[widget.id] = schemas.WidgetRefreshResult(
                     widget_id=widget.id,
                     success=False,
@@ -109,6 +135,8 @@ class DashboardRefreshService:
         """
         刷新单个Widget
         
+        P1-FIX: 使用run_in_executor将同步操作转为异步，避免阻塞事件循环
+        
         Args:
             db: 数据库会话
             widget: Widget对象
@@ -133,15 +161,15 @@ class DashboardRefreshService:
                     duration_ms=0
                 )
             
-            # 执行SQL查询
-            from app.agents.agents.sql_executor_agent import execute_sql_query
-            
-            result_json = execute_sql_query.invoke({
-                "sql_query": sql,
-                "connection_id": widget.connection_id,
-                "timeout": 30,
-                "force_refresh": force
-            })
+            # P1-FIX: 使用run_in_executor执行同步的SQL查询
+            loop = asyncio.get_event_loop()
+            result_json = await loop.run_in_executor(
+                None,  # 使用默认线程池
+                self._execute_sql_sync,
+                sql,
+                widget.connection_id,
+                force
+            )
             
             result = json.loads(result_json)
             elapsed_ms = int((time.time() - start_time) * 1000)
@@ -193,10 +221,38 @@ class DashboardRefreshService:
                 error=str(e),
                 duration_ms=elapsed_ms
             )
+
+    def _execute_sql_sync(
+        self,
+        sql: str,
+        connection_id: int,
+        force: bool
+    ) -> str:
+        """
+        同步执行SQL查询（在线程池中运行）
+        
+        Args:
+            sql: SQL语句
+            connection_id: 连接ID
+            force: 是否强制刷新
+            
+        Returns:
+            JSON格式的结果字符串
+        """
+        from app.agents.agents.sql_executor_agent import execute_sql_query
+        
+        return execute_sql_query.invoke({
+            "sql_query": sql,
+            "connection_id": connection_id,
+            "timeout": 30,
+            "force_refresh": force
+        })
     
     def get_refresh_config(self, db: Session, dashboard_id: int) -> schemas.RefreshConfig:
         """
         获取Dashboard的刷新配置
+        
+        P1-8修复: 直接从独立字段读取，不再遍历layout_config
         
         Args:
             db: 数据库会话
@@ -209,22 +265,15 @@ class DashboardRefreshService:
         if not dashboard:
             return schemas.RefreshConfig()
         
-        # 从dashboard的layout_config或自定义字段中获取刷新配置
-        layout_config = dashboard.layout_config or []
+        # P1-8修复: 直接从refresh_config字段读取
+        refresh_config = dashboard.refresh_config
         
-        # 查找刷新配置（存储在layout_config的特殊项中）
-        refresh_config_item = None
-        for item in layout_config:
-            if isinstance(item, dict) and item.get("type") == "refresh_config":
-                refresh_config_item = item
-                break
-        
-        if refresh_config_item:
+        if refresh_config:
             return schemas.RefreshConfig(
-                enabled=refresh_config_item.get("enabled", False),
-                interval_seconds=refresh_config_item.get("interval_seconds", 300),
-                auto_refresh_widget_ids=refresh_config_item.get("auto_refresh_widget_ids", []),
-                last_global_refresh=refresh_config_item.get("last_global_refresh")
+                enabled=refresh_config.get("enabled", False),
+                interval_seconds=refresh_config.get("interval_seconds", 300),
+                auto_refresh_widget_ids=refresh_config.get("auto_refresh_widget_ids", []),
+                last_global_refresh=refresh_config.get("last_global_refresh")
             )
         
         return schemas.RefreshConfig()
@@ -238,6 +287,8 @@ class DashboardRefreshService:
         """
         更新Dashboard的刷新配置
         
+        P1-8修复: 直接更新独立字段，不再操作layout_config
+        
         Args:
             db: 数据库会话
             dashboard_id: Dashboard ID
@@ -250,23 +301,12 @@ class DashboardRefreshService:
         if not dashboard:
             raise ValueError(f"Dashboard {dashboard_id} not found")
         
-        layout_config = list(dashboard.layout_config or [])
-        
-        # 移除旧的刷新配置
-        layout_config = [
-            item for item in layout_config
-            if not (isinstance(item, dict) and item.get("type") == "refresh_config")
-        ]
-        
-        # 添加新的刷新配置
+        # P1-8修复: 直接更新refresh_config字段
         config_dict = config.dict()
-        config_dict["type"] = "refresh_config"
         if config_dict.get("last_global_refresh"):
             config_dict["last_global_refresh"] = config_dict["last_global_refresh"].isoformat()
-        layout_config.append(config_dict)
         
-        # 更新Dashboard
-        dashboard.layout_config = layout_config
+        dashboard.refresh_config = config_dict
         db.commit()
         db.refresh(dashboard)
         

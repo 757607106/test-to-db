@@ -15,6 +15,8 @@ class Dashboard(Base):
     description = Column(Text, nullable=True)
     owner_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
     layout_config = Column(JSON, nullable=False, default=list)
+    # P1-8修复: 刷新配置独立存储，不再嵌套在layout_config中
+    refresh_config = Column(JSON, nullable=True, default=dict, comment="刷新配置")
     is_public = Column(Boolean, nullable=False, default=False)
     tags = Column(JSON, nullable=True)
     created_at = Column(TIMESTAMP, nullable=False, server_default=func.now(), index=True)

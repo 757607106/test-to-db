@@ -1,9 +1,7 @@
 // Dashboard和Widget服务
 
-import axios from 'axios';
+import api from './api';
 import type {
-  Dashboard,
-  DashboardListItem,
   DashboardDetail,
   DashboardCreate,
   DashboardUpdate,
@@ -21,23 +19,12 @@ import type {
   DashboardInsightRequest,
   DashboardInsightResponse,
   InsightConditions,
-  AIChartRecommendRequest,
   AIChartRecommendResponse,
-  ChartConfig,
   EnhancedInsightResponse,
   RefreshConfig,
   GlobalRefreshRequest,
   GlobalRefreshResponse,
 } from '../types/dashboard';
-
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
-
-const api = axios.create({
-  baseURL: API_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
 
 // Dashboard服务
 export const dashboardService = {

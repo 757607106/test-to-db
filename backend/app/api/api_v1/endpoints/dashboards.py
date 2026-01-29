@@ -2,8 +2,10 @@
 from typing import Any, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+import logging
 
 from app.api import deps
+from app.models.user import User
 from app.schemas.dashboard import (
     DashboardCreate, DashboardUpdate,
     DashboardListResponse, DashboardDetail,
@@ -14,22 +16,23 @@ from app.services.dashboard_service import dashboard_service
 from app.services.dashboard_refresh_service import dashboard_refresh_service
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/", response_model=DashboardListResponse)
 def get_dashboards(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     scope: str = Query("mine", description="范围: mine/shared/public/all"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: str = Query(None, description="搜索关键词"),
-    current_user_id: int = 1  # TODO: 从认证中获取当前用户ID
 ) -> Any:
     """获取Dashboard列表"""
     items, total = dashboard_service.get_dashboards_by_user(
         db,
-        user_id=current_user_id,
+        user_id=current_user.id,
         scope=scope,
         page=page,
         page_size=page_size,
@@ -48,14 +51,14 @@ def get_dashboards(
 def get_dashboard(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     dashboard_id: int,
-    current_user_id: int = 1  # TODO: 从认证中获取
 ) -> Any:
     """获取Dashboard详情"""
     dashboard = dashboard_service.get_dashboard_detail(
         db,
         dashboard_id=dashboard_id,
-        user_id=current_user_id
+        user_id=current_user.id
     )
     
     if not dashboard:
@@ -68,21 +71,21 @@ def get_dashboard(
 def create_dashboard(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     dashboard_in: DashboardCreate,
-    current_user_id: int = 1  # TODO: 从认证中获取
 ) -> Any:
     """创建Dashboard"""
     dashboard = dashboard_service.create_dashboard(
         db,
         obj_in=dashboard_in,
-        owner_id=current_user_id
+        owner_id=current_user.id
     )
     
     # 返回详情
     return dashboard_service.get_dashboard_detail(
         db,
         dashboard_id=dashboard.id,
-        user_id=current_user_id
+        user_id=current_user.id
     )
 
 
@@ -90,16 +93,16 @@ def create_dashboard(
 def update_dashboard(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     dashboard_id: int,
     dashboard_in: DashboardUpdate,
-    current_user_id: int = 1  # TODO: 从认证中获取
 ) -> Any:
     """更新Dashboard基本信息"""
     dashboard = dashboard_service.update_dashboard(
         db,
         dashboard_id=dashboard_id,
         obj_in=dashboard_in,
-        user_id=current_user_id
+        user_id=current_user.id
     )
     
     if not dashboard:
@@ -108,7 +111,7 @@ def update_dashboard(
     return dashboard_service.get_dashboard_detail(
         db,
         dashboard_id=dashboard.id,
-        user_id=current_user_id
+        user_id=current_user.id
     )
 
 
@@ -116,14 +119,14 @@ def update_dashboard(
 def delete_dashboard(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     dashboard_id: int,
-    current_user_id: int = 1  # TODO: 从认证中获取
 ) -> Any:
     """删除Dashboard"""
     success = dashboard_service.delete_dashboard(
         db,
         dashboard_id=dashboard_id,
-        user_id=current_user_id
+        user_id=current_user.id
     )
     
     if not success:
@@ -136,16 +139,16 @@ def delete_dashboard(
 def update_dashboard_layout(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     dashboard_id: int,
     layout_request: LayoutUpdateRequest,
-    current_user_id: int = 1  # TODO: 从认证中获取
 ) -> Any:
     """更新Dashboard布局"""
     success = dashboard_service.update_layout(
         db,
         dashboard_id=dashboard_id,
         layout=layout_request.layout,
-        user_id=current_user_id
+        user_id=current_user.id
     )
     
     if not success:
@@ -160,15 +163,15 @@ def update_dashboard_layout(
 def get_refresh_config(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     dashboard_id: int,
-    current_user_id: int = 1
 ) -> Any:
     """获取Dashboard的刷新配置"""
     from app import crud
     
     # 检查权限
     has_permission = crud.crud_dashboard.check_permission(
-        db, dashboard_id=dashboard_id, user_id=current_user_id, required_level="viewer"
+        db, dashboard_id=dashboard_id, user_id=current_user.id, required_level="viewer"
     )
     if not has_permission:
         raise HTTPException(status_code=403, detail="No permission")
@@ -180,16 +183,16 @@ def get_refresh_config(
 def update_refresh_config(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     dashboard_id: int,
     config: RefreshConfig,
-    current_user_id: int = 1
 ) -> Any:
     """更新Dashboard的刷新配置"""
     from app import crud
     
     # 检查权限(需要编辑权限)
     has_permission = crud.crud_dashboard.check_permission(
-        db, dashboard_id=dashboard_id, user_id=current_user_id, required_level="editor"
+        db, dashboard_id=dashboard_id, user_id=current_user.id, required_level="editor"
     )
     if not has_permission:
         raise HTTPException(status_code=403, detail="No permission to edit")
@@ -204,16 +207,16 @@ def update_refresh_config(
 async def global_refresh(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     dashboard_id: int,
     request: GlobalRefreshRequest,
-    current_user_id: int = 1
 ) -> Any:
     """全局刷新Dashboard的所有Widget"""
     from app import crud
     
     # 检查权限
     has_permission = crud.crud_dashboard.check_permission(
-        db, dashboard_id=dashboard_id, user_id=current_user_id, required_level="viewer"
+        db, dashboard_id=dashboard_id, user_id=current_user.id, required_level="viewer"
     )
     if not has_permission:
         raise HTTPException(status_code=403, detail="No permission")
@@ -227,6 +230,5 @@ async def global_refresh(
         )
         return result
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"全局刷新失败: dashboard_id={dashboard_id}")
         raise HTTPException(status_code=500, detail=f"刷新失败: {str(e)}")

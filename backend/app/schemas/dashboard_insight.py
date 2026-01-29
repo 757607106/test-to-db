@@ -104,7 +104,8 @@ class InsightTrend(BaseModel):
 class InsightAnomaly(BaseModel):
     """异常检测"""
     type: str = Field(..., description="异常类型")
-    column: Optional[str] = Field(None, description="异常列")
+    metric: Optional[str] = Field(None, description="异常指标/列名")
+    column: Optional[str] = Field(None, description="异常列（兼容旧字段）")
     description: str = Field(..., description="异常描述")
     severity: Optional[str] = Field(None, description="严重程度: high/medium/low")
 
@@ -113,9 +114,11 @@ class InsightCorrelation(BaseModel):
     """关联分析"""
     type: str = Field(..., description="关联类型: cross_widget/cross_table")
     tables: Optional[List[str]] = Field(None, description="涉及的表")
+    entities: Optional[List[str]] = Field(None, description="涉及的实体（兼容字段）")
     relationship: Optional[str] = Field(None, description="关系描述")
-    insight: str = Field(..., description="关联洞察描述")
-    strength: Optional[str] = Field(None, description="关联强度: strong/medium/weak")
+    description: Optional[str] = Field(None, description="关联描述")
+    insight: Optional[str] = Field(None, description="关联洞察描述")
+    strength: Optional[Any] = Field(None, description="关联强度: strong/medium/weak 或 0-1 数值")
 
 
 class InsightRecommendation(BaseModel):
@@ -144,6 +147,8 @@ class DashboardInsightResponse(BaseModel):
     analysis_timestamp: datetime = Field(..., description="分析时间")
     applied_conditions: Optional[InsightConditions] = Field(None, description="应用的条件")
     relationship_count: int = Field(0, description="发现的表关系数量")
+    # P0-FIX: 添加 status 字段
+    status: str = Field("completed", description="分析状态: processing/completed/failed")
 
 
 # 洞察刷新请求Schema

@@ -3,12 +3,15 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_
 from datetime import datetime
+import logging
 
 from app.crud.base import CRUDBase
 from app.models.dashboard import Dashboard
 from app.models.dashboard_permission import DashboardPermission
 from app.models.user import User
 from app.schemas.dashboard import DashboardCreate, DashboardUpdate
+
+logger = logging.getLogger(__name__)
 
 
 class CRUDDashboard(CRUDBase[Dashboard, DashboardCreate, DashboardUpdate]):
@@ -26,6 +29,8 @@ class CRUDDashboard(CRUDBase[Dashboard, DashboardCreate, DashboardUpdate]):
     ) -> tuple[List[Dashboard], int]:
         """获取用户可访问的Dashboard列表
         
+        优化：使用 joinedload 预加载关联数据，避免 N+1 查询
+        
         Args:
             user_id: 用户ID
             scope: 范围 (mine/shared/public)
@@ -36,26 +41,30 @@ class CRUDDashboard(CRUDBase[Dashboard, DashboardCreate, DashboardUpdate]):
         Returns:
             (Dashboard列表, 总数)
         """
-        query = db.query(Dashboard).filter(Dashboard.deleted_at.is_(None))
+        # 基础查询，预加载 widgets、permissions 和 owner
+        base_query = db.query(Dashboard).options(
+            joinedload(Dashboard.widgets),
+            joinedload(Dashboard.owner)
+        ).filter(Dashboard.deleted_at.is_(None))
         
         # 根据scope过滤
         if scope == "mine":
-            query = query.filter(Dashboard.owner_id == user_id)
+            query = base_query.filter(Dashboard.owner_id == user_id)
         elif scope == "shared":
-            # 共享给我的Dashboard
-            query = query.join(
-                DashboardPermission,
-                Dashboard.id == DashboardPermission.dashboard_id
-            ).filter(
-                DashboardPermission.user_id == user_id,
+            # 共享给我的Dashboard - 需要单独处理以避免重复
+            shared_dashboard_ids = db.query(DashboardPermission.dashboard_id).filter(
+                DashboardPermission.user_id == user_id
+            ).subquery()
+            query = base_query.filter(
+                Dashboard.id.in_(shared_dashboard_ids),
                 Dashboard.owner_id != user_id
             )
         elif scope == "public":
             # 公开的Dashboard
-            query = query.filter(Dashboard.is_public == True)
+            query = base_query.filter(Dashboard.is_public == True)
         else:
             # 全部可访问的
-            query = query.filter(
+            query = base_query.filter(
                 or_(
                     Dashboard.owner_id == user_id,
                     Dashboard.is_public == True,
@@ -67,22 +76,120 @@ class CRUDDashboard(CRUDBase[Dashboard, DashboardCreate, DashboardUpdate]):
                 )
             )
         
-        # 搜索过滤
+        # 搜索过滤 - 使用参数化查询防止 SQL 注入
         if search:
+            search_pattern = f"%{search}%"
             query = query.filter(
                 or_(
-                    Dashboard.name.like(f"%{search}%"),
-                    Dashboard.description.like(f"%{search}%")
+                    Dashboard.name.ilike(search_pattern),
+                    Dashboard.description.ilike(search_pattern)
                 )
             )
         
-        # 获取总数
-        total = query.count()
+        # 获取总数（在分页前）
+        # 使用子查询避免 joinedload 影响 count
+        count_query = db.query(Dashboard.id).filter(Dashboard.deleted_at.is_(None))
+        if scope == "mine":
+            count_query = count_query.filter(Dashboard.owner_id == user_id)
+        elif scope == "shared":
+            shared_ids = db.query(DashboardPermission.dashboard_id).filter(
+                DashboardPermission.user_id == user_id
+            ).subquery()
+            count_query = count_query.filter(
+                Dashboard.id.in_(shared_ids),
+                Dashboard.owner_id != user_id
+            )
+        elif scope == "public":
+            count_query = count_query.filter(Dashboard.is_public == True)
+        else:
+            count_query = count_query.filter(
+                or_(
+                    Dashboard.owner_id == user_id,
+                    Dashboard.is_public == True,
+                    Dashboard.id.in_(
+                        db.query(DashboardPermission.dashboard_id).filter(
+                            DashboardPermission.user_id == user_id
+                        )
+                    )
+                )
+            )
+        
+        if search:
+            search_pattern = f"%{search}%"
+            count_query = count_query.filter(
+                or_(
+                    Dashboard.name.ilike(search_pattern),
+                    Dashboard.description.ilike(search_pattern)
+                )
+            )
+        
+        total = count_query.count()
         
         # 分页和排序
         items = query.order_by(Dashboard.updated_at.desc()).offset(skip).limit(limit).all()
         
         return items, total
+
+    def get_user_permission_batch(
+        self,
+        db: Session,
+        *,
+        dashboard_ids: List[int],
+        user_id: int
+    ) -> Dict[int, str]:
+        """批量获取用户对多个 Dashboard 的权限级别
+        
+        优化：一次查询获取所有权限，避免 N+1
+        
+        Args:
+            dashboard_ids: Dashboard ID 列表
+            user_id: 用户ID
+            
+        Returns:
+            {dashboard_id: permission_level} 字典
+        """
+        if not dashboard_ids:
+            return {}
+        
+        result = {}
+        
+        # 1. 查询用户拥有的 Dashboard
+        owned_dashboards = db.query(Dashboard.id).filter(
+            Dashboard.id.in_(dashboard_ids),
+            Dashboard.owner_id == user_id,
+            Dashboard.deleted_at.is_(None)
+        ).all()
+        
+        for (dashboard_id,) in owned_dashboards:
+            result[dashboard_id] = "owner"
+        
+        # 2. 查询显式权限
+        remaining_ids = [did for did in dashboard_ids if did not in result]
+        if remaining_ids:
+            permissions = db.query(
+                DashboardPermission.dashboard_id,
+                DashboardPermission.permission_level
+            ).filter(
+                DashboardPermission.dashboard_id.in_(remaining_ids),
+                DashboardPermission.user_id == user_id
+            ).all()
+            
+            for dashboard_id, level in permissions:
+                result[dashboard_id] = level
+        
+        # 3. 查询公开的 Dashboard
+        remaining_ids = [did for did in dashboard_ids if did not in result]
+        if remaining_ids:
+            public_dashboards = db.query(Dashboard.id).filter(
+                Dashboard.id.in_(remaining_ids),
+                Dashboard.is_public == True,
+                Dashboard.deleted_at.is_(None)
+            ).all()
+            
+            for (dashboard_id,) in public_dashboards:
+                result[dashboard_id] = "viewer"
+        
+        return result
 
     def get_with_details(
         self,
@@ -139,6 +246,8 @@ class CRUDDashboard(CRUDBase[Dashboard, DashboardCreate, DashboardUpdate]):
     ) -> Dashboard:
         """创建Dashboard并自动添加owner权限
         
+        P2-10修复: 添加事务异常处理
+        
         Args:
             obj_in: Dashboard创建数据
             owner_id: 创建者ID
@@ -146,27 +255,31 @@ class CRUDDashboard(CRUDBase[Dashboard, DashboardCreate, DashboardUpdate]):
         Returns:
             创建的Dashboard对象
         """
-        # 创建Dashboard
-        dashboard_data = obj_in.model_dump()
-        dashboard_data["owner_id"] = owner_id
-        dashboard_data["layout_config"] = []  # 初始化为空数组
-        
-        dashboard = Dashboard(**dashboard_data)
-        db.add(dashboard)
-        db.flush()
-        
-        # 创建owner权限
-        permission = DashboardPermission(
-            dashboard_id=dashboard.id,
-            user_id=owner_id,
-            permission_level="owner",
-            granted_by=owner_id
-        )
-        db.add(permission)
-        db.commit()
-        db.refresh(dashboard)
-        
-        return dashboard
+        try:
+            # 创建Dashboard
+            dashboard_data = obj_in.model_dump()
+            dashboard_data["owner_id"] = owner_id
+            dashboard_data["layout_config"] = []  # 初始化为空数组
+            
+            dashboard = Dashboard(**dashboard_data)
+            db.add(dashboard)
+            db.flush()
+            
+            # 创建owner权限
+            permission = DashboardPermission(
+                dashboard_id=dashboard.id,
+                user_id=owner_id,
+                permission_level="owner",
+                granted_by=owner_id
+            )
+            db.add(permission)
+            db.commit()
+            db.refresh(dashboard)
+            
+            return dashboard
+        except Exception:
+            db.rollback()
+            raise
 
     def soft_delete(self, db: Session, *, dashboard_id: int) -> bool:
         """软删除Dashboard

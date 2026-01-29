@@ -8,6 +8,7 @@ from neo4j import GraphDatabase
 from app import crud
 from app.api import deps
 from app.core.config import settings
+from app.models.user import User
 
 router = APIRouter()
 
@@ -16,14 +17,17 @@ router = APIRouter()
 def get_graph_data(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     connection_id: int,
 ) -> Any:
     """
     Get graph visualization data for a specific connection from Neo4j.
     Returns nodes and edges in a format suitable for visualization.
     """
-    # Check if connection exists
-    connection = crud.db_connection.get(db=db, id=connection_id)
+    # Check if connection exists and belongs to user's tenant
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    connection = crud.db_connection.get_by_tenant(db=db, id=connection_id, tenant_id=current_user.tenant_id)
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
 
