@@ -417,18 +417,24 @@ const DashboardEditorPage: React.FC = () => {
   // 同步Widgets到Layout
   useEffect(() => {
     if (dashboard?.widgets) {
-      const newLayouts = dashboard.widgets.map((widget) => ({
-        i: String(widget.id),
-        x: widget.position_config?.x ?? 0,
-        y: widget.position_config?.y ?? 0,
-        w: widget.position_config?.w ?? DEFAULT_WIDGET_SIZE.w,
-        h: widget.position_config?.h ?? DEFAULT_WIDGET_SIZE.h,
-        minW: widget.position_config?.minW ?? DEFAULT_WIDGET_SIZE.minW,
-        minH: widget.position_config?.minH ?? DEFAULT_WIDGET_SIZE.minH,
-        maxW: widget.position_config?.maxW ?? DEFAULT_WIDGET_SIZE.maxW,
-        maxH: widget.position_config?.maxH ?? DEFAULT_WIDGET_SIZE.maxH,
-        static: widget.widget_type === 'insight_analysis', // 洞察组件固定
-      }));
+      const newLayouts = dashboard.widgets.map((widget) => {
+        // 确保使用合理的默认值，防止组件过小
+        const w = widget.position_config?.w || DEFAULT_WIDGET_SIZE.w;
+        const h = widget.position_config?.h || DEFAULT_WIDGET_SIZE.h;
+        
+        return {
+          i: String(widget.id),
+          x: widget.position_config?.x ?? 0,
+          y: widget.position_config?.y ?? 0,
+          w: w < DEFAULT_WIDGET_SIZE.minW ? DEFAULT_WIDGET_SIZE.w : w,
+          h: h < DEFAULT_WIDGET_SIZE.minH ? DEFAULT_WIDGET_SIZE.h : h,
+          minW: widget.position_config?.minW ?? DEFAULT_WIDGET_SIZE.minW,
+          minH: widget.position_config?.minH ?? DEFAULT_WIDGET_SIZE.minH,
+          maxW: widget.position_config?.maxW ?? DEFAULT_WIDGET_SIZE.maxW,
+          maxH: widget.position_config?.maxH ?? DEFAULT_WIDGET_SIZE.maxH,
+          static: widget.widget_type === 'insight_analysis', // 洞察组件固定
+        };
+      });
       setLayouts(newLayouts);
     }
   }, [dashboard?.widgets]);

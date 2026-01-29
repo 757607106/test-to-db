@@ -1823,7 +1823,7 @@ const SchemaManagementPage = () => {
           </div>
 
           {/* 右侧画布 */}
-          <div style={{ flex: 1, border: '1px solid #d9d9d9', borderRadius: '4px', position: 'relative' }} ref={reactFlowWrapper}>
+          <div style={{ flex: 1, border: '1px solid #d9d9d9', borderRadius: '4px', position: 'relative', background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 50%, #e2e8f0 100%)' }} ref={reactFlowWrapper}>
             <ReactFlow
               nodes={nodes}
               edges={edges}
@@ -1853,7 +1853,7 @@ const SchemaManagementPage = () => {
                   {isFullScreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
                 </button>
               </Controls>
-              <Background color="#f5f5f5" gap={16} />
+              <Background color="#cbd5e1" gap={16} />
               <Panel position="top-right">
                 <div className="schema-controls">
                   <Button

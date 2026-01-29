@@ -1,6 +1,6 @@
 import React from 'react';
 import { useLocation } from 'react-router-dom';
-import { SearchOutlined, BellOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
+import { SearchOutlined, BellOutlined } from '@ant-design/icons';
 import GlobalConnectionSelector from '../GlobalConnectionSelector';
 
 const IOSTopBar: React.FC = () => {
@@ -8,15 +8,20 @@ const IOSTopBar: React.FC = () => {
   const [selectedId, setSelectedId] = React.useState<number | null>(null);
 
   const getTitle = (pathname: string) => {
-    switch (pathname) {
-      case '/': return '首页概览';
-      case '/hybrid-qa': return '智能训练中心';
-      case '/schema': return '数据建模';
-      case '/graph-visualization': return '知识图谱';
-      case '/connections': return '连接管理';
-      case '/value-mappings': return '数据映射';
-      default: return '仪表盘';
-    }
+    // Handle sub-paths by matching the start of the pathname
+    if (pathname === '/') return '首页';
+    if (pathname.startsWith('/intelligent-tuning')) return '智能调优中心';
+    if (pathname.startsWith('/schema')) return '数据建模';
+    if (pathname.startsWith('/graph-visualization')) return '知识图谱';
+    if (pathname.startsWith('/skills')) return 'Skills';
+    if (pathname.startsWith('/dashboards')) return 'BI仪表盘';
+    if (pathname.startsWith('/connections')) return '连接管理';
+    if (pathname.startsWith('/value-mappings')) return '数据映射';
+    if (pathname.startsWith('/llm-config')) return '模型配置';
+    if (pathname.startsWith('/agent-profile')) return '智能体配置';
+    if (pathname.startsWith('/users')) return '用户管理';
+    
+    return '仪表盘';
   };
 
   const styles = {
@@ -46,7 +51,7 @@ const IOSTopBar: React.FC = () => {
       color: 'var(--text-primary)',
       letterSpacing: '-0.01em',
       fontFamily: 'var(--font-stack)',
-      marginLeft: '12px',
+      marginLeft: '0px',
     },
     rightSection: {
       display: 'flex',
@@ -62,15 +67,7 @@ const IOSTopBar: React.FC = () => {
   return (
     <header style={styles.header} className="ios-layout-topbar">
       <div style={styles.leftGroup}>
-        {/* Navigation History Buttons (Imitation) */}
-        <div style={styles.navControls}>
-          <button className="macos-toolbar-btn">
-            <LeftOutlined style={{ fontSize: '14px' }} />
-          </button>
-          <button className="macos-toolbar-btn">
-            <RightOutlined style={{ fontSize: '14px' }} />
-          </button>
-        </div>
+        {/* Navigation History Buttons removed as per user request */}
         <div style={styles.title}>{getTitle(location.pathname)}</div>
       </div>
       

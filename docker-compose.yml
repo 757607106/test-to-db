@@ -18,7 +18,7 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./backend/init-mysql.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./backend/scripts/init-mysql.sql:/docker-entrypoint-initdb.d/init.sql:ro
     command: 
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
@@ -48,7 +48,7 @@ services:
       - "5433:5432"  # 使用5433避免与其他PostgreSQL冲突
     volumes:
       - postgres_checkpointer_data:/var/lib/postgresql/data
-      - ./backend/init-checkpointer-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./backend/scripts/init-checkpointer-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U langgraph -d langgraph_checkpoints"]

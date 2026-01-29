@@ -15,7 +15,7 @@ import {
   AppstoreOutlined,
   LogoutOutlined,
 } from '@ant-design/icons';
-import { message, Popconfirm } from 'antd';
+import { message, Dropdown, type MenuProps, Modal } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -25,10 +25,28 @@ const IOSSidebar: React.FC = () => {
   const { user, logout } = useAuth();
 
   const handleLogout = () => {
-    logout();
-    message.success('已退出登录');
-    navigate('/login');
+    Modal.confirm({
+      title: '退出登录',
+      content: '确定要退出登录吗？',
+      okText: '确定',
+      cancelText: '取消',
+      onOk: () => {
+        logout();
+        message.success('已退出登录');
+        navigate('/login');
+      }
+    });
   };
+
+  const userMenu: MenuProps['items'] = [
+    {
+      key: 'logout',
+      label: '退出登录',
+      icon: <LogoutOutlined />,
+      danger: true,
+      onClick: handleLogout,
+    },
+  ];
 
   // Menu permission mapping
   const menuPermissionMap: Record<string, string> = {
@@ -142,7 +160,7 @@ const IOSSidebar: React.FC = () => {
       <div style={{ height: '38px', WebkitAppRegion: 'drag' } as any} /> 
       
       <div style={styles.logoArea}>
-        <span style={styles.logoText}>RWX Admin</span>
+        <span style={styles.logoText}>慧眼数据</span>
       </div>
 
       <ul style={styles.menuList}>
@@ -180,19 +198,10 @@ const IOSSidebar: React.FC = () => {
           </div>
           <span style={{ fontWeight: 500 }}>{user?.display_name || user?.username || '用户'}</span>
         </div>
-        <Popconfirm
-          title="退出登录"
-          description="确定要退出登录吗？"
-          onConfirm={handleLogout}
-          okText="确定"
-          cancelText="取消"
-          placement="topRight"
-        >
-          <div className="macos-sidebar-item" style={{ cursor: 'pointer' }}>
-            <LogoutOutlined className="sidebar-icon" style={{ fontSize: '18px', color: 'var(--text-tertiary)' }} />
-            <span style={{ fontWeight: 500, color: 'var(--text-tertiary)' }}>退出登录</span>
-          </div>
-        </Popconfirm>
+        <div className="macos-sidebar-item" style={{ cursor: 'pointer' }} onClick={handleLogout}>
+          <LogoutOutlined className="sidebar-icon" style={{ fontSize: '18px', color: 'var(--text-tertiary)' }} />
+          <span style={{ fontWeight: 500, color: 'var(--text-tertiary)' }}>退出登录</span>
+        </div>
       </div>
     </aside>
   );

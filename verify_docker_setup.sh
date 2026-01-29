@@ -80,8 +80,8 @@ main() {
     print_info "检查核心配置文件..."
     check_file "docker-compose.yml" "Docker Compose 配置"
     check_file "backend/.env" "环境变量配置"
-    check_file "backend/init-mysql.sql" "MySQL 初始化脚本"
-    check_file "backend/init-checkpointer-db.sql" "PostgreSQL 初始化脚本"
+    check_file "backend/scripts/init-mysql.sql" "MySQL 初始化脚本"
+    check_file "backend/scripts/init-checkpointer-db.sql" "PostgreSQL 初始化脚本"
     
     # 2. 检查启动脚本
     echo ""

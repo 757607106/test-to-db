@@ -17,6 +17,7 @@ import {
   ApiOutlined
 } from '@ant-design/icons';
 import { createSessionCode } from '../services/auth';
+import '../styles/HomePage.css';
 
 const { Title: AntTitle, Paragraph } = Typography;
 
@@ -26,25 +27,25 @@ const HomePage: React.FC = () => {
       icon: <BulbOutlined />,
       title: '智能查询',
       description: '自然语言转SQL，让数据查询变得简单直观',
-      color: '#1890ff'
+      color: '#6366f1' // Indigo
     },
     {
       icon: <DatabaseOutlined />,
       title: '数据建模',
       description: '智能识别数据结构，自动构建数据模型',
-      color: '#52c41a'
+      color: '#2dd4bf' // Teal
     },
     {
       icon: <ShareAltOutlined />,
       title: '图可视化',
       description: '直观展示数据关系，洞察数据价值',
-      color: '#faad14'
+      color: '#f59e0b' // Amber
     },
     {
       icon: <ApiOutlined />,
       title: '智能问答',
       description: '基于知识图谱的智能问答系统',
-      color: '#f5222d'
+      color: '#ec4899' // Pink
     }
   ];
 
@@ -61,19 +62,22 @@ const HomePage: React.FC = () => {
   };
 
   return (
-    <div style={{ padding: '20px', minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+    <div className="homepage-container">
       {/* 头部标题区域 */}
-      <div style={{ textAlign: 'center', marginBottom: '40px' }}>
-        <Card style={{ borderRadius: '20px', background: 'rgba(255, 255, 255, 0.95)' }}>
+      <div className="hero-section">
+        <Card className="hero-card" variant="borderless">
           <Space direction="vertical" size="large" style={{ width: '100%' }}>
-            <ApiOutlined style={{ fontSize: '80px', color: '#1890ff' }} />
+            <div className="hero-icon-wrapper">
+              <ApiOutlined className="hero-icon" />
+            </div>
 
-            <AntTitle level={1} style={{ margin: 0, background: 'linear-gradient(45deg, #1890ff, #722ed1)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+            <AntTitle level={1} className="hero-title">
               任我行智能BI分析系统
             </AntTitle>
 
-            <Paragraph style={{ fontSize: '18px', color: '#666', maxWidth: '600px', margin: '0 auto' }}>
-              基于人工智能的下一代数据分析平台，让数据洞察触手可及
+            <Paragraph className="hero-subtitle">
+              基于人工智能的下一代数据分析平台，让数据洞察触手可及。<br/>
+              连接您的数据源，开启智能对话之旅。
             </Paragraph>
 
             <Button
@@ -81,12 +85,7 @@ const HomePage: React.FC = () => {
               size="large"
               icon={<RocketOutlined />}
               onClick={handleStartChat}
-              style={{
-                height: '60px',
-                fontSize: '20px',
-                borderRadius: '30px',
-                padding: '0 40px'
-              }}
+              className="start-button"
             >
               开始对话
             </Button>
@@ -95,34 +94,37 @@ const HomePage: React.FC = () => {
       </div>
 
       {/* 功能特性区域 */}
-      <div style={{ marginBottom: '40px' }}>
-        <AntTitle level={2} style={{ textAlign: 'center', color: 'white', marginBottom: '30px' }}>
+      <div className="features-section">
+        <AntTitle level={2} className="section-title">
           核心功能
         </AntTitle>
         <Row gutter={[24, 24]}>
           {features.map((feature, index) => (
             <Col xs={24} sm={12} md={6} key={index}>
-              <Card
-                style={{
-                  minHeight: '250px',
-                  borderRadius: '20px',
-                  background: 'rgba(255, 255, 255, 0.95)',
-                  textAlign: 'center'
-                }}
-              >
-                <div style={{ fontSize: '48px', color: feature.color, marginBottom: '15px' }}>
+              <Card className="feature-card" variant="borderless">
+                <div 
+                  className="feature-icon-wrapper" 
+                  style={{ 
+                    color: feature.color,
+                    background: `${feature.color}15` // 10% opacity
+                  }}
+                >
                   {feature.icon}
                 </div>
-                <AntTitle level={4} style={{ margin: '10px 0', color: '#333' }}>
+                <AntTitle level={4} className="feature-title">
                   {feature.title}
                 </AntTitle>
-                <Paragraph style={{ color: '#666', fontSize: '14px' }}>
+                <Paragraph className="feature-desc">
                   {feature.description}
                 </Paragraph>
               </Card>
             </Col>
           ))}
         </Row>
+      </div>
+
+      <div className="footer-section">
+        © 2024 任我行智能BI平台 · Powered by LLM & Knowledge Graph
       </div>
     </div>
   );

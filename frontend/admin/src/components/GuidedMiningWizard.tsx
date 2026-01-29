@@ -308,7 +308,7 @@ export const GuidedMiningWizard: React.FC<GuidedMiningWizardProps> = ({
               const dimConfig = getDimensionConfig(item.mining_dimension);
 
               return (
-                <Col span={24} key={index}>
+                <Col span={12} key={index}>
                   <Card
                     hoverable
                     size="small"
@@ -316,12 +316,13 @@ export const GuidedMiningWizard: React.FC<GuidedMiningWizardProps> = ({
                       border: isSelected ? '2px solid #1890ff' : '1px solid #e8e8e8',
                       backgroundColor: isSelected ? '#f0f7ff' : '#fff',
                       borderRadius: 10,
+                      height: '100%',
                     }}
-                    styles={{ body: { padding: '12px 16px' } }}
+                    styles={{ body: { padding: '12px 16px', height: '100%', display: 'flex', flexDirection: 'column' } }}
                   >
                     {/* 卡片头部：基础信息 */}
                     <div
-                      style={{ display: 'flex', alignItems: 'flex-start', cursor: 'pointer' }}
+                      style={{ display: 'flex', alignItems: 'flex-start', cursor: 'pointer', flex: 1 }}
                       onClick={() => {
                         const newSelected = isSelected
                           ? selectedSuggestions.filter((i) => i !== index)
@@ -330,37 +331,33 @@ export const GuidedMiningWizard: React.FC<GuidedMiningWizardProps> = ({
                       }}
                     >
                       <Checkbox checked={isSelected} style={{ marginTop: 4, marginRight: 12 }} />
-                      <div style={{ flex: 1 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                          <Text strong style={{ fontSize: 14 }}>
+                          <Text strong style={{ fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '120px' }} title={item.title}>
                             {item.title}
                           </Text>
-                          <Tag color={dimConfig.color} style={{ marginLeft: 'auto' }}>
-                            {dimConfig.icon} {dimConfig.label}
+                          <Tag color={dimConfig.color} style={{ marginLeft: 'auto', marginRight: 0, fontSize: 10, transform: 'scale(0.9)' }}>
+                            {dimConfig.label}
                           </Tag>
-                          <Tag>{CHART_ICONS[item.chart_type]} {item.chart_type}</Tag>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+                           <Tag style={{ marginRight: 0, fontSize: 10, transform: 'scale(0.9)' }}>{CHART_ICONS[item.chart_type]} {item.chart_type}</Tag>
                         </div>
 
-                        <Text type="secondary" style={{ fontSize: 12 }}>
+                        <Text type="secondary" style={{ fontSize: 12, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', minHeight: '36px' }} title={item.description}>
                           {item.description}
                         </Text>
-
+                        
                         {/* 置信度和数据来源（直接显示） */}
                         {(item.confidence || item.source_tables?.length) && (
-                          <div style={{ marginTop: 8, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                          <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                             {item.confidence && (
                               <Tooltip title="AI 推荐置信度">
                                 <span style={{ fontSize: 12, color: '#666' }}>
                                   <ThunderboltOutlined style={{ color: '#faad14', marginRight: 4 }} />
-                                  置信度 {Math.round(item.confidence * 100)}%
+                                  {Math.round(item.confidence * 100)}%
                                 </span>
                               </Tooltip>
-                            )}
-                            {item.source_tables && item.source_tables.length > 0 && (
-                              <span style={{ fontSize: 12, color: '#666' }}>
-                                <TableOutlined style={{ marginRight: 4 }} />
-                                {item.source_tables.join(', ')}
-                              </span>
                             )}
                           </div>
                         )}

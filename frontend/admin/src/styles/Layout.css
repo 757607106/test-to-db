@@ -1,0 +1,44 @@
+@import './theme.css';
+
+.app-layout {
+  display: flex;
+  min-height: 100vh;
+  position: relative;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.main-content {
+  margin-left: calc(var(--sidebar-width) + 20px);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0; /* Prevent flex overflow */
+  transition: margin-left var(--transition-base);
+}
+
+.content-wrapper {
+  flex: 1;
+  padding: 24px;
+  overflow: auto;
+  position: relative;
+  /* 继承 glass-panel 的样式，但这里我们通过类名组合来实现，或者在这里重新定义特定的覆盖 */
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  border-radius: var(--border-radius-lg);
+  transition: var(--transition-base);
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+  .app-layout {
+    padding: 10px;
+  }
+  
+  .main-content {
+    margin-left: 0;
+  }
+}
