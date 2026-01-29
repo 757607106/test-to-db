@@ -360,7 +360,7 @@ class SQLValidator:
             if table_lower not in valid_tables:
                 # 检查是否是别名
                 if not self._is_table_alias(sql, table):
-                    result.add_error(f"表 '{table}' 不存在。可用的表: {', '.join(sorted(valid_tables)[:10])}")
+                    result.add_error(f"表 '{table}' 不存在。可用的表: {', '.join(sorted(valid_tables))}")
         
         # 提取 SQL 中的列名并验证
         sql_columns = self._extract_column_references(sql)
@@ -372,7 +372,7 @@ class SQLValidator:
                 table_lower = table_ref.lower()
                 if table_lower in valid_columns:
                     if col_lower not in valid_columns[table_lower] and col_lower != '*':
-                        available_cols = ', '.join(sorted(valid_columns[table_lower])[:10])
+                        available_cols = ', '.join(sorted(valid_columns[table_lower]))
                         result.add_error(f"列 '{table_ref}.{col_name}' 不存在。表 '{table_ref}' 的可用列: {available_cols}")
             else:
                 # 无表名前缀，检查是否在任何表中存在

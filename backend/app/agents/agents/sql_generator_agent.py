@@ -408,7 +408,8 @@ def generate_sql_query(
             tables=tables_data,
             columns=columns_data,
             relationships=relationships_data,
-            db_type=db_type
+            db_type=db_type,
+            user_query=user_query  # 传递用户查询用于业务语义推导
         )
         
         # 构建列名白名单（用于后续验证）
@@ -462,12 +463,12 @@ def generate_sql_query(
 【字段可选值参考】
 以下字段有预定义的可选值，生成 WHERE 条件时请使用正确的值：
 """
-                for enum_col in enum_columns[:10]:  # 最多 10 个字段
+                for enum_col in enum_columns:  # 不限制字段数量
                     col_name = enum_col.get('column_name', '')
                     table_name = enum_col.get('table_name', '')
                     values = enum_col.get('values', [])
                     
-                    # 限制每个字段的枚举值数量
+                    # 限制每个字段的枚举值数量（避免 token 过多）
                     if len(values) > enhancement_settings.enum_max_values:
                         values = values[:enhancement_settings.enum_max_values]
                         values.append("...")
@@ -597,44 +598,22 @@ def generate_sql_query(
         
         available_tables_str = ", ".join(available_tables) if available_tables else "未知"
         
-        # 构建 SQL 生成提示
-        prompt = f"""
-基于以下信息生成 SQL 查询：
+        # 构建 SQL 生成提示 - 简化版（借鉴旧版本的简洁风格）
+        prompt = f"""根据用户查询生成 SQL。
 
 用户查询: {user_query}
+数据库类型: {db_type}
 
-{context}
-{metrics_prompt}
-{enum_prompt}
-{sample_context}
-{skill_rules_prompt}
+{schema_prompt}
 {db_rules_prompt}
 {error_recovery_hint}
 
-【严格约束 - 必须遵守】
-⚠️ 只能使用以下表: {available_tables_str}
-⚠️ 禁止使用任何未在上述列表中的表名
-⚠️ 如果用户需要的数据在提供的表中不存在，请使用最接近的可用表
-
-请生成一个准确、高效的 SQL 查询语句。要求：
-1. 只返回 SQL 语句，不要其他解释
-2. 【最重要】只能使用上面提供的表和字段，禁止虚构表名
-3. 【最重要】必须严格遵守上述 {db_type.upper()} 数据库的语法规则
-4. 如果有预定义的业务指标，必须使用指标公式
-5. 使用适当的连接和过滤条件
-6. 限制结果数量（除非用户明确要求全部数据）
-7. 使用正确的值映射和枚举值
-
-【禁止假设 - 严格遵守】
-- 禁止在 SQL 中添加任何注释（如 "-- 假设..."、"-- 替换为..."）
-- 禁止使用占位符值（如 "1, 2, 3, 4, 5" 代替实际ID）
-- 禁止假设字段的业务含义（如假设 status=1 表示某种状态）
-- 禁止生成需要用户手动修改的 SQL
-
-如果信息不足以生成完整 SQL：
-- 对于缺少具体值的情况（如"前5个产品"但未指定哪5个），使用子查询动态获取
-- 对于状态字段，如果不知道具体值含义，不要添加状态过滤条件
-- 生成可直接执行的 SQL，不需要任何人工修改
+【约束】
+1. 只能使用上面列出的表名和列名，禁止虚构
+2. 主键通常是 `id`，外键通常是 `关联表_id`
+3. 添加 LIMIT 100 限制结果数量
+4. 只返回 SQL 语句，不要注释或解释
+{skill_rules_prompt}
 """
         
         # 使用指数退避重试调用 LLM

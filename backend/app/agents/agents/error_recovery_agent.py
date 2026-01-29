@@ -663,6 +663,7 @@ class ErrorRecoveryAgent:
                     }
                 else:
                     # 无法自动修复或已达到重试限制
+                    # ✅ 关键修复：设置 current_stage 为 error_recovery，让路由器决定是否进入兜底节点
                     user_message = self._get_user_friendly_message(primary_action, is_retrying=False)
                     
                     # 如果达到重试限制，添加额外说明
@@ -673,7 +674,8 @@ class ErrorRecoveryAgent:
                     
                     return {
                         "messages": [AIMessage(content=user_message)],
-                        "current_stage": "completed",
+                        "current_stage": "error_recovery",  # ✅ 保持 error_recovery 状态，让路由器决定下一步
+                        "retry_count": retry_count,  # 保持当前重试次数
                         "error_history": error_history + [{
                             "stage": "error_recovery",
                             "error": f"恢复失败: {primary_action}",
@@ -684,18 +686,18 @@ class ErrorRecoveryAgent:
             else:
                 # 错误分析失败，但仍尝试一次自动修复
                 if retry_count < max_retries:
-                    logger.warning(f"错误分析失败，但仍尝试重新生成 SQL (重试 {retry_count + 1}/{max_retries})")
+                    logger.warning(f"错误分析失败，但仍尝试重新生成 SQL (重试 {retry_count}/{max_retries})")
                     
                     return {
                         "messages": [AIMessage(content="正在重新尝试生成查询...")],
                         "current_stage": "sql_generation",
-                        "retry_count": retry_count + 1,
+                        "retry_count": retry_count,  # ✅ 修复：不再递增，因为已在 sql_generator_agent 中递增
                         "error_recovery_context": {
                             "error_type": "unknown",
                             "error_message": str(error_history[-1].get("error", "") if error_history else ""),
                             "failed_sql": failed_sql,
                             "recovery_action": "regenerate_sql",
-                            "retry_count": retry_count + 1
+                            "retry_count": retry_count
                         },
                         "generated_sql": None
                     }
@@ -705,7 +707,8 @@ class ErrorRecoveryAgent:
                 
                 return {
                     "messages": [AIMessage(content=user_message)],
-                    "current_stage": "completed"
+                    "current_stage": "error_recovery",  # ✅ 保持 error_recovery 状态
+                    "retry_count": retry_count
                 }
             
         except Exception as e:
@@ -716,11 +719,11 @@ class ErrorRecoveryAgent:
             max_retries = state.get("max_retries", 3)
             
             if retry_count < max_retries:
-                logger.warning(f"错误恢复异常，但仍尝试重新生成 SQL (重试 {retry_count + 1}/{max_retries})")
+                logger.warning(f"错误恢复异常，但仍尝试重新生成 SQL (重试 {retry_count}/{max_retries})")
                 return {
                     "messages": [AIMessage(content="正在重新尝试生成查询...")],
                     "current_stage": "sql_generation",
-                    "retry_count": retry_count + 1,
+                    "retry_count": retry_count,  # ✅ 修复：不再递增
                     "generated_sql": None
                 }
             
@@ -728,7 +731,8 @@ class ErrorRecoveryAgent:
             
             return {
                 "messages": [AIMessage(content=user_message)],
-                "current_stage": "completed",
+                "current_stage": "error_recovery",  # ✅ 保持 error_recovery 状态
+                "retry_count": state.get("retry_count", 0),
                 "error_history": state.get("error_history", []) + [{
                     "stage": "error_recovery",
                     "error": str(e),

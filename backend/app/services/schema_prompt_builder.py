@@ -1,14 +1,13 @@
 """
 Schema Prompt 构建器
 
-专门用于构建防幻觉的 Schema 提示词。
+用于构建简洁的 Schema 提示词。
 
-核心策略：
-1. 显式列出所有可用列名
-2. 明确标注主键和外键
-3. 提供 JOIN 关系提示
-4. 使用负面约束（禁止使用的模式）
-5. 提供常见错误示例
+设计原则：
+1. 简洁明了，减少干扰信息
+2. 完整展示所有列名和类型
+3. 明确标注主键和外键
+4. 提供 JOIN 关系提示
 """
 from typing import Dict, Any, List, Optional
 import logging
@@ -20,153 +19,76 @@ def build_schema_prompt(
     tables: List[Dict[str, Any]],
     columns: List[Dict[str, Any]],
     relationships: List[Dict[str, Any]] = None,
-    db_type: str = "mysql"
+    db_type: str = "mysql",
+    user_query: str = None
 ) -> str:
     """
-    构建防幻觉的 Schema 提示词
+    构建简洁的 Schema 提示词（旧版本风格）
+    
+    简洁风格的优势：
+    - 信息密度高，LLM 更容易理解
+    - 所有列都完整展示，不会遗漏
+    - 减少干扰信息，降低幻觉率
     
     Args:
         tables: 表信息列表
         columns: 列信息列表
         relationships: 关系信息列表
         db_type: 数据库类型
+        user_query: 用户原始查询（暂不使用，保留接口兼容）
         
     Returns:
         格式化的 Schema 提示词
     """
-    # 构建表-列映射
-    table_columns_map = {}
-    table_pk_map = {}  # 主键映射
-    table_fk_map = {}  # 外键映射
-    all_column_names = set()  # 所有列名集合
-    
+    # 按表分组列
+    columns_by_table = {}
     for col in columns:
         table_name = col.get('table_name', '')
-        col_name = col.get('column_name', '')
-        
-        if table_name not in table_columns_map:
-            table_columns_map[table_name] = []
-            table_pk_map[table_name] = []
-            table_fk_map[table_name] = []
-        
-        col_info = {
-            'name': col_name,
-            'type': col.get('data_type', ''),
-            'is_pk': col.get('is_primary_key', False),
-            'is_fk': col.get('is_foreign_key', False),
-            'description': col.get('description', ''),
-        }
-        table_columns_map[table_name].append(col_info)
-        all_column_names.add(f"{table_name}.{col_name}")
-        
-        if col_info['is_pk']:
-            table_pk_map[table_name].append(col_info['name'])
-        if col_info['is_fk']:
-            table_fk_map[table_name].append(col_info['name'])
+        if table_name not in columns_by_table:
+            columns_by_table[table_name] = []
+        columns_by_table[table_name].append(col)
     
-    # 构建详细的 Schema 描述
-    lines = []
-    lines.append("=" * 70)
-    lines.append("【数据库表结构 - 请严格按照以下列名生成 SQL，禁止猜测列名】")
-    lines.append("=" * 70)
-    lines.append("")
-    
-    # 先输出所有表名列表
-    table_names = [t.get('table_name', '') for t in tables]
-    lines.append(f"可用的表: {', '.join(table_names)}")
-    lines.append("")
+    # 格式化表结构（简洁的 SQL 注释风格）
+    schema_str = ""
     
     for table in tables:
         table_name = table.get('table_name', '')
         table_desc = table.get('description', '')
-        cols = table_columns_map.get(table_name, [])
-        pks = table_pk_map.get(table_name, [])
-        fks = table_fk_map.get(table_name, [])
+        desc_str = f" ({table_desc})" if table_desc else ""
         
-        lines.append("-" * 50)
-        lines.append(f"表: `{table_name}`")
-        if table_desc:
-            lines.append(f"描述: {table_desc}")
+        schema_str += f"-- 表: {table_name}{desc_str}\n"
+        schema_str += "-- 列:\n"
         
-        # 主键信息 - 强调主键通常是 id
-        if pks:
-            lines.append(f"主键: {', '.join(pks)}")
-        else:
-            lines.append(f"主键: id (默认，不是 {table_name}_id)")
+        if table_name in columns_by_table:
+            for col in columns_by_table[table_name]:
+                col_name = col.get('column_name', '')
+                col_type = col.get('data_type', '')
+                col_desc = col.get('description', '')
+                is_pk = col.get('is_primary_key', False)
+                is_fk = col.get('is_foreign_key', False)
+                
+                desc_str = f" ({col_desc})" if col_desc else ""
+                pk_flag = " PK" if is_pk else ""
+                fk_flag = " FK" if is_fk else ""
+                
+                schema_str += f"--   {col_name} {col_type}{pk_flag}{fk_flag}{desc_str}\n"
         
-        # 列信息 - 详细列出每一列
-        lines.append("列名列表 (只能使用以下列名):")
-        for col in cols:
-            col_name = col['name']
-            col_type = col['type']
-            markers = []
-            if col['is_pk']:
-                markers.append("主键")
-            if col['is_fk']:
-                markers.append("外键")
-            marker_str = f" [{', '.join(markers)}]" if markers else ""
-            desc_str = f" -- {col['description']}" if col.get('description') else ""
-            lines.append(f"    • {col_name}: {col_type}{marker_str}{desc_str}")
-        
-        lines.append("")
+        schema_str += "\n"
     
     # 添加关系信息
     if relationships:
-        lines.append("=" * 70)
-        lines.append("【表关系 - JOIN 时请使用以下关联条件】")
-        lines.append("=" * 70)
-        lines.append("")
-        
+        schema_str += "-- 关系:\n"
         for rel in relationships:
-            source = f"{rel.get('source_table', '')}.{rel.get('source_column', '')}"
-            target = f"{rel.get('target_table', '')}.{rel.get('target_column', '')}"
-            lines.append(f"  {source} → {target}")
-        lines.append("")
+            source_table = rel.get('source_table', '')
+            source_col = rel.get('source_column', '')
+            target_table = rel.get('target_table', '')
+            target_col = rel.get('target_column', '')
+            rel_type = rel.get('relationship_type', '')
+            type_str = f" ({rel_type})" if rel_type else ""
+            
+            schema_str += f"-- {source_table}.{source_col} -> {target_table}.{target_col}{type_str}\n"
     
-    # 添加防幻觉约束 - 更强的约束
-    lines.append("=" * 70)
-    lines.append("【⚠️ 严格约束 - 违反将导致 SQL 执行失败】")
-    lines.append("=" * 70)
-    lines.append("")
-    lines.append("1. 【列名约束】只能使用上面明确列出的列名，禁止猜测或虚构")
-    lines.append("2. 【主键约束】大多数表的主键是 `id`，不是 `表名_id`")
-    lines.append("   例如: product 表的主键是 `id`，不是 `product_id`")
-    lines.append("3. 【外键约束】外键通常命名为 `关联表名_id`")
-    lines.append("   例如: sales_order_detail 表中引用 product 的外键是 `product_id`")
-    lines.append("4. 【JOIN 约束】JOIN 时必须使用正确的关联字段")
-    lines.append("5. 【别名约束】使用表别名时，确保引用的列在该表中存在")
-    lines.append("")
-    lines.append("【⚠️ 特别警告 - 常见幻觉列名】")
-    lines.append("以下列名经常被错误使用，请特别注意：")
-    lines.append("  ❌ total_inventory → 不存在！请使用 quantity 或 SUM(quantity)")
-    lines.append("  ❌ total_sales → 不存在！请使用 SUM(amount) 或 SUM(quantity * unit_price)")
-    lines.append("  ❌ avg_daily_sales → 不存在！请使用 AVG(...) 计算")
-    lines.append("  ❌ product_name → 可能不存在！请检查是否是 name")
-    lines.append("  ❌ category_name → 可能不存在！请检查是否是 name")
-    lines.append("")
-    
-    # 常见错误示例 - 更具体的例子
-    lines.append("【❌ 常见错误示例 - 请避免】")
-    lines.append("")
-    lines.append("错误1: 使用不存在的列名")
-    lines.append("  ❌ SELECT i.quantity_on_hand FROM inventory i")
-    lines.append("  ✓ SELECT i.quantity FROM inventory i  (正确的列名是 quantity)")
-    lines.append("")
-    lines.append("错误2: 错误的主键列名")
-    lines.append("  ❌ SELECT p.product_id FROM product p")
-    lines.append("  ✓ SELECT p.id FROM product p  (主键是 id)")
-    lines.append("")
-    lines.append("错误3: 错误的 JOIN 条件")
-    lines.append("  ❌ JOIN sales_order so ON so.sales_order_id = ...")
-    lines.append("  ✓ JOIN sales_order so ON so.id = ...  (主键是 id)")
-    lines.append("")
-    lines.append("错误4: 混淆主键和外键")
-    lines.append("  ❌ FROM product p JOIN inventory i ON p.product_id = i.product_id")
-    lines.append("  ✓ FROM product p JOIN inventory i ON p.id = i.product_id")
-    lines.append("     (product 的主键是 id，inventory 的外键是 product_id)")
-    lines.append("")
-    
-    return "\n".join(lines)
+    return schema_str
 
 
 def build_column_whitelist(columns: List[Dict[str, Any]]) -> Dict[str, List[str]]:
@@ -248,7 +170,7 @@ def validate_sql_columns(
                 else:
                     errors.append(
                         f"列 `{alias_or_table}.{column}` 不存在于表 `{table_name}` 中。"
-                        f"可用列: {', '.join(column_whitelist[table_name][:10])}"
+                        f"可用列: {', '.join(column_whitelist[table_name])}"
                     )
         else:
             # 表名可能是别名，尝试在所有表中查找

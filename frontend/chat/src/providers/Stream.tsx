@@ -1,3 +1,12 @@
+/**
+ * Stream Provider
+ * 提供 LangGraph 流式通信上下文
+ * 
+ * 模块结构：
+ * - stream/types.ts: 类型定义
+ * - stream/utils.ts: 辅助函数
+ */
+
 import React, {
   createContext,
   useContext,
@@ -7,8 +16,7 @@ import React, {
   useCallback,
   useRef,
 } from "react";
-import { useStream, type UseStream } from "@langchain/langgraph-sdk/react";
-import { type Message } from "@langchain/langgraph-sdk";
+import { useStream } from "@langchain/langgraph-sdk/react";
 import {
   uiMessageReducer,
   isUIMessage,
@@ -22,27 +30,34 @@ import { Button } from "@/components/ui/button";
 import { LangGraphLogoSVG } from "@/components/icons/langgraph";
 import { Label } from "@/components/ui/label";
 import { ArrowRight } from "lucide-react";
-import { PasswordInput } from "@/components/ui/password-input";
 import { getApiKey } from "@/lib/api-key";
 import { useThreads } from "./Thread";
 import { toast } from "sonner";
 import {
   type QueryContext,
   type StreamEvent,
-  type CacheHitEvent,
-  type NodeStatusEvent,
   createEmptyQueryContext,
   isStreamEvent,
 } from "@/types/stream-events";
 
-export type StateType = { messages: Message[]; ui?: UIMessage[] };
+// 从拆分模块导入类型和辅助函数
+import {
+  type StateType,
+  type BagType,
+  type ExtendedStreamContextType,
+} from "./stream/types";
+import {
+  sleep,
+  checkGraphStatus,
+  getStorageKey,
+  DEFAULT_API_URL,
+  DEFAULT_ASSISTANT_ID,
+} from "./stream/utils";
 
-// 扩展的上下文类型，包含查询上下文
-export type ExtendedStreamContextType = StreamContextType & {
-  queryContext: QueryContext;
-  resetQueryContext: () => void;
-};
+// 重新导出类型，保持向后兼容
+export type { StateType, ExtendedStreamContextType } from "./stream/types";
 
+// 创建类型化的 useStream hook
 const useTypedStream = useStream<
   StateType,
   {
@@ -55,42 +70,9 @@ const useTypedStream = useStream<
   }
 >;
 
-// 使用 UseStream 类型（包含完整的 getMessagesMetadata, setBranch 等方法）
-// 而不是 ReturnType<typeof useTypedStream>（TypeScript 会推断为 UseStreamCustom，缺少这些方法）
-type BagType = {
-  UpdateType: {
-    messages?: Message[] | Message | string;
-    ui?: (UIMessage | RemoveUIMessage)[] | UIMessage | RemoveUIMessage;
-    context?: Record<string, unknown>;
-  };
-  CustomEventType: UIMessage | RemoveUIMessage;
-};
-type StreamContextType = UseStream<StateType, BagType>;
+import { type Message } from "@langchain/langgraph-sdk";
+
 const StreamContext = createContext<ExtendedStreamContextType | undefined>(undefined);
-
-async function sleep(ms = 4000) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function checkGraphStatus(
-  apiUrl: string,
-  apiKey: string | null,
-): Promise<boolean> {
-  try {
-    const res = await fetch(`${apiUrl}/info`, {
-      ...(apiKey && {
-        headers: {
-          "X-Api-Key": apiKey,
-        },
-      }),
-    });
-
-    return res.ok;
-  } catch (e) {
-    console.error(e);
-    return false;
-  }
-}
 
 const StreamSession = ({
   children,
@@ -111,11 +93,6 @@ const StreamSession = ({
   
   // 同步跟踪已处理的 SQL 步骤，避免状态更新异步导致的重复添加
   const processedStepsRef = useRef<Set<string>>(new Set());
-  
-  // localStorage key 生成函数
-  // 修复 (2026-01-23): 使用更具体的前缀避免与其他应用冲突
-  const STORAGE_PREFIX = "chat-to-db:queryContext:";
-  const getStorageKey = (tid: string) => `${STORAGE_PREFIX}${tid}`;
   
   // 保存 queryContext 到 localStorage
   const saveQueryContextToStorage = useCallback((tid: string | null, ctx: QueryContext) => {
@@ -378,10 +355,6 @@ const StreamSession = ({
     </StreamContext.Provider>
   );
 };
-
-// Default values for the form
-const DEFAULT_API_URL = "http://localhost:2024";
-const DEFAULT_ASSISTANT_ID = "agent";
 
 export const StreamProvider: React.FC<{ children: ReactNode }> = ({
   children,

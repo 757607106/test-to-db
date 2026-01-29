@@ -22,6 +22,7 @@ import UsersPage from './pages/UsersPage';
 import MetricsPage from './pages/MetricsPage';
 import SkillsPage from './pages/SkillsPage';
 import SQLEnhancementConfigPage from './pages/SQLEnhancementConfigPage';
+import IntelligentTuningCenter from './pages/IntelligentTuningCenter';
 
 // Layout wrapper that uses IOSLayout with Outlet
 const ProtectedLayout: React.FC = () => {
@@ -43,6 +44,8 @@ const App: React.FC = () => {
         <Route element={<ProtectedLayout />}>
           <Route path="/" element={<HomePage />} />
           <Route path="/text2sql" element={<IntelligentQueryPage />} />
+          <Route path="/intelligent-tuning" element={<IntelligentTuningCenter />} />
+          {/* 保留原有路由以向后兼容 */}
           <Route path="/hybrid-qa" element={<HybridQAPage />} />
           <Route path="/connections" element={<ConnectionsPage />} />
           <Route path="/schema" element={<SchemaManagementPage />} />

@@ -18,7 +18,8 @@ import {
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
 
-const SQLEnhancementConfigPage: React.FC = () => {
+// 内容组件 - 供复用（无外层 padding）
+export const SQLEnhancementConfigContent: React.FC = () => {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -89,7 +90,7 @@ const SQLEnhancementConfigPage: React.FC = () => {
   );
 
   return (
-    <div style={{ padding: '24px', maxWidth: 900 }}>
+    <div style={{ maxWidth: 900 }}>
       <Card
         title={
           <Space>
@@ -283,6 +284,15 @@ const SQLEnhancementConfigPage: React.FC = () => {
           </Form>
         </Spin>
       </Card>
+    </div>
+  );
+};
+
+// 独立页面组件 - 保持向后兼容
+const SQLEnhancementConfigPage: React.FC = () => {
+  return (
+    <div style={{ padding: '24px', maxWidth: 900 }}>
+      <SQLEnhancementConfigContent />
     </div>
   );
 };

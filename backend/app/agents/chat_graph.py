@@ -47,6 +47,9 @@ from app.agents.nodes.worker_nodes import (
     clarification_node_wrapper,
 )
 
+# 导入兜底响应节点
+from app.agents.nodes.fallback_response_node import fallback_response_node
+
 # P2: 导入规划节点
 from app.agents.nodes.query_planning_node import query_planning_node
 # P2.1: 导入结果聚合节点
@@ -306,8 +309,9 @@ def supervisor_route(state: SQLMessageState) -> str:
         retry_count = state.get("retry_count", 0)
         max_retries = state.get("max_retries", 3)
         if retry_count >= max_retries:
-            logger.info(f"[Route] 达到重试上限 ({retry_count}/{max_retries}) → FINISH")
-            return "FINISH"
+            # ✅ 关键修复：达到重试上限时，进入兜底响应节点而不是直接结束
+            logger.info(f"[Route] 达到重试上限 ({retry_count}/{max_retries}) → fallback_response")
+            return "fallback_response"
         
         # ✅ 关键修复：检查错误类型，如果是 Schema 相关错误，重新执行 schema_agent
         error_recovery_context = state.get("error_recovery_context") or {}
@@ -428,6 +432,7 @@ def create_hub_spoke_graph() -> CompiledStateGraph:
     graph.add_node("clarification", clarification_node_wrapper)
     graph.add_node("recommendation", question_recommendation_node)
     graph.add_node("result_aggregator", result_aggregator_node)  # P2.1: 结果聚合节点
+    graph.add_node("fallback_response", fallback_response_node)  # 兜底响应节点
     
     # 入口点
     graph.set_entry_point("supervisor")
@@ -439,6 +444,7 @@ def create_hub_spoke_graph() -> CompiledStateGraph:
         "data_analyst", "chart_generator", "error_recovery",
         "general_chat", "clarification", "recommendation",
         "result_aggregator",  # P2.1: 结果聚合节点
+        "fallback_response",  # 兜底响应节点
     ]
     for node in worker_nodes:
         graph.add_edge(node, "supervisor")
@@ -459,6 +465,7 @@ def create_hub_spoke_graph() -> CompiledStateGraph:
             "clarification": "clarification",
             "recommendation": "recommendation",
             "result_aggregator": "result_aggregator",  # P2.1: 结果聚合
+            "fallback_response": "fallback_response",  # 兜底响应
             "FINISH": END
         }
     )

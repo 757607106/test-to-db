@@ -1,6 +1,16 @@
+/**
+ * Thread 组件
+ * 主要的聊天对话界面
+ * 
+ * 模块结构：
+ * - helpers.tsx: 辅助组件 (StickyToBottomContent, ScrollToBottom, OpenGitHubRepo)
+ * - messages/: 消息组件 (ai.tsx, human.tsx, etc.)
+ * - history/: 历史记录组件
+ * - artifact.tsx: Artifact 相关组件
+ */
 
 import { v4 as uuidv4 } from "uuid";
-import React, { ReactNode, useEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useStreamContext, StateType } from "@/providers/Stream";
@@ -16,7 +26,6 @@ import {
 import { LangGraphLogoSVG } from "../icons/langgraph";
 import { TooltipIconButton } from "./tooltip-icon-button";
 import {
-  ArrowDown,
   LoaderCircle,
   PanelRightOpen,
   PanelRightClose,
@@ -25,19 +34,12 @@ import {
   Plus,
 } from "lucide-react";
 import { useQueryState, parseAsBoolean, parseAsInteger } from "nuqs";
-import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
+import { StickToBottom } from "use-stick-to-bottom";
 import ThreadHistory from "./history";
 import { toast } from "sonner";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
-import { GitHubSVG } from "../icons/github";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "../ui/tooltip";
 import { useFileUpload } from "@/hooks/use-file-upload";
 import { ContentBlocksPreview } from "./ContentBlocksPreview";
 import {
@@ -49,70 +51,8 @@ import {
 import { DatabaseConnectionSelector } from "@/components/database-connection-selector";
 import { AgentSelector } from "@/components/ui/agent-selector";
 
-function StickyToBottomContent(props: {
-  content: ReactNode;
-  footer?: ReactNode;
-  className?: string;
-  contentClassName?: string;
-}) {
-  const context = useStickToBottomContext();
-  return (
-    <div
-      ref={context.scrollRef}
-      style={{ width: "100%", height: "100%" }}
-      className={props.className}
-    >
-      <div
-        ref={context.contentRef}
-        className={props.contentClassName}
-      >
-        {props.content}
-      </div>
-
-      {props.footer}
-    </div>
-  );
-}
-
-function ScrollToBottom(props: { className?: string }) {
-  const { isAtBottom, scrollToBottom } = useStickToBottomContext();
-
-  if (isAtBottom) return null;
-  return (
-    <Button
-      variant="outline"
-      className={props.className}
-      onClick={() => scrollToBottom()}
-    >
-      <ArrowDown className="h-4 w-4" />
-      <span>Scroll to bottom</span>
-    </Button>
-  );
-}
-
-function OpenGitHubRepo() {
-  return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <a
-            href="#"
-            target="_blank"
-            className="flex items-center justify-center"
-          >
-            <GitHubSVG
-              width="24"
-              height="24"
-            />
-          </a>
-        </TooltipTrigger>
-        <TooltipContent side="left">
-          <p>Open GitHub repo</p>
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-}
+// 辅助组件（已拆分到 helpers.tsx）
+import { StickyToBottomContent, ScrollToBottom } from "./helpers";
 
 export function Thread() {
   const [artifactContext, setArtifactContext] = useArtifactContext();

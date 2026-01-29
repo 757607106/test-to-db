@@ -45,7 +45,8 @@ import type { DBConnection } from '../../types/api';
 const { TextArea } = Input;
 const { Option } = Select;
 
-const HybridQAPage: React.FC = () => {
+// 内容组件 - 供复用（无外层 padding）
+export const HybridQAContent: React.FC = () => {
   const [qaPairs, setQaPairs] = useState<QAPair[]>([]);
   const [loading, setLoading] = useState(false);
   const [createModalVisible, setCreateModalVisible] = useState(false);
@@ -418,7 +419,7 @@ const HybridQAPage: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: '24px' }}>
+    <div>
       <Card title="混合检索问答对管理" style={{ marginBottom: '24px' }}>
         {/* 数据库连接选择器 */}
         <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -910,5 +911,13 @@ const HybridQAPage: React.FC = () => {
   );
 };
 
-export default HybridQAPage;
+// 独立页面组件 - 保持向后兼容
+const HybridQAPage: React.FC = () => {
+  return (
+    <div style={{ padding: '24px' }}>
+      <HybridQAContent />
+    </div>
+  );
+};
 
+export default HybridQAPage;

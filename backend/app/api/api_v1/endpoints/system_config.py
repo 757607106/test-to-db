@@ -17,17 +17,17 @@ router = APIRouter()
 class SQLEnhancementConfig(BaseModel):
     """SQL 增强功能配置"""
     # QA 样本检索配置
-    qa_sample_enabled: bool = False
+    qa_sample_enabled: bool = False  # 关闭：避免样本干扰 LLM 判断
     qa_sample_min_similarity: float = 0.85
     qa_sample_top_k: int = 3
     qa_sample_verified_only: bool = True
     
     # 指标库配置
-    metrics_enabled: bool = False
+    metrics_enabled: bool = False  # 关闭：避免指标定义干扰 LLM 判断
     metrics_max_count: int = 3
     
     # 枚举值提示配置
-    enum_hints_enabled: bool = True
+    enum_hints_enabled: bool = False  # 关闭：避免枚举值干扰 LLM 判断
     enum_max_values: int = 20
     
     # 简化流程配置

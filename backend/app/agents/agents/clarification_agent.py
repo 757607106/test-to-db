@@ -99,39 +99,29 @@ CLARIFICATION_WITH_SCHEMA_PROMPT = """你是一个专业的数据查询意图分
 
 **数据库连接ID**: {connection_id}
 
-**数据库结构信息** (仅供你理解数据，不要暴露给用户):
+**数据库结构信息**:
 {schema_context}
 
-**检测的模糊类型** (按优先级排序):
-1. 时间范围模糊: 如"最近"、"近期"等
-2. 筛选条件模糊: 如"大客户"等主观描述
-3. 字段/指标模糊: 如"查看数据"但没说明具体内容
-4. 分组维度模糊: 如"按地区"但不明确层级
-5. 排序/数量模糊: 如"前几名"等不明确的数量
+**🔴🔴🔴 最重要的规则：澄清选项必须来自上面的数据库结构！**
+- 如果要澄清字段选择，选项必须是上面列出的实际字段名
+- 如果要澄清筛选条件，选项必须是上面列出的字段可选值
+- 如果要澄清时间范围，选项必须基于上面列出的日期字段范围
+- 禁止生成数据库中不存在的选项！这会导致查询失败！
 
-**重要判断原则**:
-- 如果查询已经足够明确，可以直接生成SQL，则不需要澄清
-- 只有当模糊性会显著影响查询结果时才需要澄清
-- 简单查询（如"查询所有用户"）通常不需要澄清
-- 包含具体时间、具体数值、具体条件的查询不需要澄清
-- 只处理高/中严重度的模糊性，低严重度可以忽略
+**🔴 默认不需要澄清！只有以下情况才需要澄清**:
+1. 用户提到的概念在数据库中有多个可能的字段对应，需要确认用哪个
+2. 用户使用了主观描述词（如"大客户"），但数据库中有明确的分类字段可以选择
+3. 时间范围模糊，且数据库中有日期字段需要确定范围
 
-**问题生成规则 (极其重要)**:
-- 最多生成 3 个澄清问题
-- 问题和选项必须使用用户能理解的业务语言
-- 禁止在问题或选项中出现任何技术术语：表名、字段名、SQL、数据库等
-- 选项应该描述用户的业务需求，而不是数据来源
-- 每个问题需要唯一的ID（如 q1, q2, q3）
+**🟢 以下情况不需要澄清（直接返回 needs_clarification: false）**:
+- 查询意图明确，可以直接映射到数据库字段
+- 包含具体数字、具体时间、"所有/全部"等明确词汇
+- 数据库结构信息不足以生成有意义的澄清选项
 
-**错误示例** (不要这样写):
-- "当前库存数量（来自 inventory 表）" 
-- "按产品（product 表）"
-- "库存及对应产品信息（关联 product...）"
-
-**正确示例** (应该这样写):
-- "当前库存数量"
-- "按产品分类"
-- "库存详情（含产品名称）"
+**问题生成规则** (如果确实需要澄清):
+- 最多生成 2 个澄清问题
+- 选项必须100%来自上面的数据库结构信息
+- 使用用户能理解的业务语言描述选项
 
 请以JSON格式返回分析结果:
 {{
@@ -139,26 +129,28 @@ CLARIFICATION_WITH_SCHEMA_PROMPT = """你是一个专业的数据查询意图分
     "reason": "需要/不需要澄清的原因",
     "ambiguities": [
         {{
-            "type": "时间范围|字段选择|筛选条件|分组维度|排序数量",
+            "type": "字段选择|筛选条件|时间范围",
             "description": "具体描述模糊之处",
-            "severity": "high|medium|low"
+            "severity": "high|medium|low",
+            "related_schema": "关联的表名或字段名"
         }}
     ],
     "questions": [
         {{
             "id": "q1",
-            "question": "您想查看哪个时间范围的数据？",
+            "question": "您想查看哪种类型的客户？",
             "type": "choice",
-            "options": ["最近7天", "最近30天", "本月", "本季度"],
-            "related_ambiguity": "时间范围模糊"
+            "options": ["从数据库字段可选值中提取的选项"],
+            "related_ambiguity": "筛选条件模糊",
+            "source_field": "来源字段名（如 customer_type）"
         }}
     ]
 }}
 
 **注意**:
-- 如果 needs_clarification 为 false，questions 数组应为空
-- 如果 needs_clarification 为 true，必须提供 questions 数组
-- 所有面向用户的文字必须是业务语言，不能包含任何技术细节
+- 默认返回 needs_clarification: false
+- 只有 high 严重度且能从数据库结构生成有效选项时才澄清
+- 如果数据库结构信息不足，宁可不澄清也不要瞎猜选项
 
 只返回JSON，不要其他内容。"""
 
@@ -247,14 +239,14 @@ def _quick_clarification_check_impl(
         # 获取模糊性分析
         ambiguities = result.get("ambiguities", [])
         
-        # 只处理高/中严重度的模糊性
+        # ✅ 只处理 high 严重度的模糊性
         significant_ambiguities = [
             a for a in ambiguities 
-            if a.get("severity") in ["high", "medium"]
+            if a.get("severity") == "high"
         ]
         
         if not significant_ambiguities:
-            logger.info("只有低严重度模糊性，不需要澄清")
+            logger.info("无高严重度模糊性，不需要澄清")
             return {
                 "needs_clarification": False,
                 "questions": [],
@@ -270,6 +262,17 @@ def _quick_clarification_check_impl(
                 "questions": [],
                 "reason": "无法生成澄清问题"
             }
+        
+        # ✅ 验证问题选项是否来自 Schema（防止越界）
+        if schema_info:
+            questions = _validate_clarification_options(questions, schema_info)
+            if not questions:
+                logger.warning("澄清选项验证失败，跳过澄清")
+                return {
+                    "needs_clarification": False,
+                    "questions": [],
+                    "reason": "无法生成有效的澄清选项"
+                }
         
         logger.info(f"需要澄清，生成了 {len(questions)} 个问题")
         
@@ -293,6 +296,9 @@ def _build_schema_context_for_clarification(schema_info: Optional[Dict[str, Any]
     """
     构建用于澄清的 Schema 上下文
     
+    重要：这个上下文决定了澄清选项的边界！
+    澄清问题的选项必须100%来自这里的信息，不能凭空生成。
+    
     Args:
         schema_info: Schema 信息
         
@@ -300,78 +306,181 @@ def _build_schema_context_for_clarification(schema_info: Optional[Dict[str, Any]
         格式化的 Schema 上下文字符串
     """
     if not schema_info:
-        return "（无 Schema 信息）"
+        return "（无 Schema 信息，无法生成澄清选项，请直接执行查询）"
     
     lines = []
     
-    # 1. 表信息
+    # 1. 表信息 - 列出所有可用的表（不限制数量）
     tables = schema_info.get("tables", [])
     if tables:
-        lines.append("**可用的数据表**:")
-        for t in tables[:10]:  # 最多显示10个表
+        lines.append("【可用的数据表】（澄清时只能涉及这些表）:")
+        for t in tables:
             table_name = t.get("table_name", t.get("name", ""))
             description = t.get("description", t.get("comment", ""))
             if description:
-                lines.append(f"- {table_name}: {description}")
+                lines.append(f"  - {table_name}: {description}")
             else:
-                lines.append(f"- {table_name}")
+                lines.append(f"  - {table_name}")
     
-    # 2. 关键字段信息
+    # 2. 字段信息 - 按表分组，列出所有字段（不限制数量）
     columns = schema_info.get("columns", [])
     if columns:
-        # 按表分组，只显示重要字段
-        important_columns = [c for c in columns if c.get("description") or c.get("comment")]
-        if important_columns:
-            lines.append("\n**关键字段**:")
-            for c in important_columns[:20]:  # 最多显示20个字段
-                table_name = c.get("table_name", "")
+        lines.append("\n【可用的字段】（澄清字段选择时只能从这里选）:")
+        # 按表分组
+        table_columns = {}
+        for c in columns:
+            table_name = c.get("table_name", "")
+            if table_name not in table_columns:
+                table_columns[table_name] = []
+            table_columns[table_name].append(c)
+        
+        for table_name, cols in table_columns.items():
+            col_names = []
+            for c in cols:
                 col_name = c.get("column_name", c.get("name", ""))
                 description = c.get("description", c.get("comment", ""))
-                data_type = c.get("data_type", c.get("type", ""))
-                lines.append(f"- {table_name}.{col_name} ({data_type}): {description}")
+                if description:
+                    col_names.append(f"{col_name}({description})")
+                else:
+                    col_names.append(col_name)
+            lines.append(f"  - {table_name}: {', '.join(col_names)}")
     
-    # 3. 语义层信息（枚举值、日期范围等）
+    # 3. 枚举值 - 列出所有枚举字段（不限制数量）
     semantic_layer = schema_info.get("semantic_layer", {})
-    
-    # 枚举字段
     enum_columns = semantic_layer.get("enum_columns", [])
     if enum_columns:
-        lines.append("\n**字段可选值**:")
-        for enum_col in enum_columns[:5]:  # 最多显示5个枚举字段
+        lines.append("\n【字段可选值】（澄清筛选条件时只能用这些值作为选项）:")
+        for enum_col in enum_columns:
             table_name = enum_col.get("table_name", "")
             col_name = enum_col.get("column_name", "")
             values = enum_col.get("values", [])
             if values:
-                values_str = ", ".join(str(v) for v in values[:10])
-                if len(values) > 10:
-                    values_str += "..."
-                lines.append(f"- {table_name}.{col_name}: {values_str}")
+                # 显示所有值，让 LLM 知道边界
+                values_str = ", ".join(str(v) for v in values)
+                lines.append(f"  - {table_name}.{col_name}: [{values_str}]")
     
-    # 日期字段范围
+    # 4. 日期字段范围 - 列出所有日期字段（不限制数量）
     date_columns = semantic_layer.get("date_columns", [])
     if date_columns:
-        lines.append("\n**日期字段范围**:")
-        for date_col in date_columns[:5]:
+        lines.append("\n【日期字段及数据范围】（澄清时间范围时参考）:")
+        for date_col in date_columns:
             table_name = date_col.get("table_name", "")
             col_name = date_col.get("column_name", "")
             date_min = date_col.get("date_min", "")
             date_max = date_col.get("date_max", "")
             if date_min or date_max:
-                lines.append(f"- {table_name}.{col_name}: {date_min} ~ {date_max}")
+                lines.append(f"  - {table_name}.{col_name}: 数据范围 {date_min} ~ {date_max}")
     
-    # 业务指标
-    metrics = semantic_layer.get("metrics", [])
-    if metrics:
-        lines.append("\n**业务指标**:")
-        for m in metrics[:5]:
-            name = m.get("business_name", m.get("name", ""))
-            description = m.get("description", "")
-            if description:
-                lines.append(f"- {name}: {description}")
+    if not lines:
+        return "（Schema 信息不足，无法生成有效的澄清选项，请直接执行查询）"
+    
+    # 添加强调说明
+    lines.append("\n⚠️ 重要：澄清问题的所有选项必须来自上述信息，禁止生成不存在的选项！")
+    
+    return "\n".join(lines)
+
+
+def _validate_clarification_options(
+    questions: List[Dict[str, Any]], 
+    schema_info: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """
+    验证澄清问题的选项是否来自 Schema 信息
+    
+    防止 LLM 生成数据库中不存在的选项，导致查询失败。
+    
+    Args:
+        questions: LLM 生成的澄清问题列表
+        schema_info: Schema 信息
+        
+    Returns:
+        验证通过的问题列表（移除无效选项的问题）
+    """
+    if not questions or not schema_info:
+        return questions
+    
+    # 收集所有有效的值
+    valid_values = set()
+    
+    # 1. 收集表名
+    tables = schema_info.get("tables", [])
+    for t in tables:
+        table_name = t.get("table_name", t.get("name", ""))
+        if table_name:
+            valid_values.add(table_name.lower())
+    
+    # 2. 收集字段名和描述
+    columns = schema_info.get("columns", [])
+    for c in columns:
+        col_name = c.get("column_name", c.get("name", ""))
+        description = c.get("description", c.get("comment", ""))
+        if col_name:
+            valid_values.add(col_name.lower())
+        if description:
+            valid_values.add(description.lower())
+    
+    # 3. 收集枚举值（最重要！）
+    semantic_layer = schema_info.get("semantic_layer", {})
+    enum_columns = semantic_layer.get("enum_columns", [])
+    for enum_col in enum_columns:
+        values = enum_col.get("values", [])
+        for v in values:
+            if v is not None:
+                valid_values.add(str(v).lower())
+    
+    # 4. 添加通用时间选项（这些是安全的）
+    safe_time_options = [
+        "最近7天", "最近30天", "本月", "上月", "本季度", "本年", 
+        "今年", "去年", "最近3个月", "最近6个月", "全部"
+    ]
+    for opt in safe_time_options:
+        valid_values.add(opt.lower())
+    
+    # 验证每个问题
+    validated_questions = []
+    for q in questions:
+        q_type = q.get("type", "text")
+        
+        # 文本题不需要验证选项
+        if q_type != "choice":
+            validated_questions.append(q)
+            continue
+        
+        options = q.get("options", [])
+        if not options:
+            # 没有选项的选择题，跳过
+            logger.warning(f"选择题没有选项，跳过: {q.get('question', '')}")
+            continue
+        
+        # 检查选项是否有效
+        # 宽松验证：只要选项中的关键词在 valid_values 中出现即可
+        valid_options = []
+        for opt in options:
+            opt_lower = str(opt).lower()
+            # 检查选项本身或其中的关键词是否有效
+            is_valid = opt_lower in valid_values
+            if not is_valid:
+                # 检查选项中是否包含有效值
+                for valid_val in valid_values:
+                    if valid_val in opt_lower or opt_lower in valid_val:
+                        is_valid = True
+                        break
+            
+            if is_valid:
+                valid_options.append(opt)
             else:
-                lines.append(f"- {name}")
+                logger.warning(f"澄清选项不在 Schema 中，移除: {opt}")
+        
+        # 如果有效选项少于2个，这个问题没意义
+        if len(valid_options) < 2:
+            logger.warning(f"有效选项不足，跳过问题: {q.get('question', '')}")
+            continue
+        
+        # 更新选项
+        q["options"] = valid_options
+        validated_questions.append(q)
     
-    return "\n".join(lines) if lines else "（无详细 Schema 信息）"
+    return validated_questions
 
 
 def _enrich_query_with_clarification_impl(
@@ -598,9 +707,10 @@ def should_skip_clarification(query: str) -> bool:
     """
     快速判断是否可以跳过澄清检测
     
-    修改 (2026-01-28): 
-    - 移除关键词匹配逻辑，统一由 LLM 判断
-    - 只保留极端情况的快速过滤（如空查询、纯闲聊）
+    简化版 (2026-01-28): 
+    - 只过滤极端情况（空查询、纯闲聊）
+    - 其他情况交给 LLM 根据实际情况判断
+    - 不依赖复杂的关键词匹配
     
     Args:
         query: 用户查询
@@ -611,16 +721,16 @@ def should_skip_clarification(query: str) -> bool:
     query_lower = query.lower().strip()
     query_len = len(query)
     
-    # 1. 空查询或极短查询（小于3个字符）- 跳过澄清
-    if query_len < 3:
+    # 1. 空查询或极短查询（小于5个字符）- 跳过澄清
+    if query_len < 5:
         return True
     
-    # 2. 纯闲聊关键词 - 跳过澄清
-    chat_keywords = ['你好', 'hello', 'hi', '谢谢', 'thanks', '再见', 'bye']
+    # 2. 纯闲聊 - 跳过澄清
+    chat_keywords = ['你好', 'hello', 'hi', '谢谢', 'thanks', '再见', 'bye', '帮助', 'help']
     if query_lower in chat_keywords:
         return True
     
-    # 3. 其他所有情况 - 交给 LLM 判断
+    # 3. 其他情况 - 交给 LLM 判断
     return False
 
 

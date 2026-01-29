@@ -62,7 +62,8 @@ const CATEGORY_OPTIONS = [
   { value: '其他', label: '其他' },
 ];
 
-const MetricsPage: React.FC = () => {
+// 内容组件 - 供复用（无外层 padding）
+export const MetricsContent: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [connections, setConnections] = useState<any[]>([]);
@@ -273,7 +274,7 @@ const MetricsPage: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: '0 0 24px 0' }}>
+    <div>
       <div style={{ marginBottom: 24 }}>
         <Title level={4} style={{ margin: 0 }}>
           <FunctionOutlined style={{ marginRight: 8 }} />
@@ -472,6 +473,15 @@ const MetricsPage: React.FC = () => {
         metricName={selectedMetricForAlert?.name || ''}
         onClose={() => setAlertPanelVisible(false)}
       />
+    </div>
+  );
+};
+
+// 独立页面组件 - 保持向后兼容
+const MetricsPage: React.FC = () => {
+  return (
+    <div style={{ padding: '0 0 24px 0' }}>
+      <MetricsContent />
     </div>
   );
 };

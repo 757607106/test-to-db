@@ -122,7 +122,8 @@ class Settings(BaseSettings):
     # ==========================================
     
     # 是否启用QA样本召回（关闭后SQL生成将不使用历史样本）
-    QA_SAMPLE_ENABLED: bool = os.getenv("QA_SAMPLE_ENABLED", "true").lower() == "true"
+    # 默认关闭：避免样本干扰 LLM 判断，降低幻觉率
+    QA_SAMPLE_ENABLED: bool = os.getenv("QA_SAMPLE_ENABLED", "false").lower() == "true"
     
     # 最小相似度阈值（0.0-1.0，低于此值的样本将被过滤）
     QA_SAMPLE_MIN_SIMILARITY: float = float(os.getenv("QA_SAMPLE_MIN_SIMILARITY", "0.6"))

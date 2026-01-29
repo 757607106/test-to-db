@@ -7,26 +7,33 @@ import {
   ShareAltOutlined,
   DatabaseOutlined,
   SwapOutlined,
-  SettingOutlined,
   UserOutlined,
   DashboardOutlined,
   ApiOutlined,
   RobotOutlined,
   TeamOutlined,
-  FunctionOutlined,
   AppstoreOutlined,
+  LogoutOutlined,
 } from '@ant-design/icons';
-import { message } from 'antd';
+import { message, Popconfirm } from 'antd';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 
 const IOSSidebar: React.FC = () => {
   const location = useLocation();
-  const { user } = useAuth();
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
+
+  const handleLogout = () => {
+    logout();
+    message.success('已退出登录');
+    navigate('/login');
+  };
 
   // Menu permission mapping
   const menuPermissionMap: Record<string, string> = {
     '/': 'chat',
-    '/hybrid-qa': 'training',
+    '/intelligent-tuning': 'training',
     '/schema': 'training',
     '/graph-visualization': 'training',
     '/dashboards': 'chat',
@@ -55,16 +62,14 @@ const IOSSidebar: React.FC = () => {
 
   const allMenuItems = [
     { key: '/', icon: <HomeOutlined />, label: '首页', to: '/' },
-    { key: '/hybrid-qa', icon: <BulbOutlined />, label: '智能训练', to: '/hybrid-qa' },
+    { key: '/intelligent-tuning', icon: <BulbOutlined />, label: '智能调优中心', to: '/intelligent-tuning' },
     { key: '/schema', icon: <TableOutlined />, label: '数据建模', to: '/schema' },
     { key: '/graph-visualization', icon: <ShareAltOutlined />, label: '知识图谱', to: '/graph-visualization' },
-    { key: '/metrics', icon: <FunctionOutlined />, label: '指标库', to: '/metrics' },
     { key: '/skills', icon: <AppstoreOutlined />, label: 'Skills', to: '/skills' },
     { key: '/dashboards', icon: <DashboardOutlined />, label: 'BI仪表盘', to: '/dashboards' },
     { key: '/connections', icon: <DatabaseOutlined />, label: '连接管理', to: '/connections' },
     { key: '/value-mappings', icon: <SwapOutlined />, label: '数据映射', to: '/value-mappings' },
     { key: '/llm-config', icon: <ApiOutlined />, label: '模型配置', to: '/llm-config' },
-    { key: '/sql-enhancement', icon: <SettingOutlined />, label: 'SQL增强配置', to: '/sql-enhancement' },
     { key: '/agent-profile', icon: <RobotOutlined />, label: '智能体配置', to: '/agent-profile' },
     { key: '/users', icon: <TeamOutlined />, label: '用户管理', to: '/users', adminOnly: true },
   ];
@@ -160,10 +165,6 @@ const IOSSidebar: React.FC = () => {
 
       <div style={styles.bottomSection}>
         <div className="macos-sidebar-item">
-          <SettingOutlined className="sidebar-icon" style={{ fontSize: '18px' }} />
-          <span style={{ fontWeight: 500 }}>设置</span>
-        </div>
-        <div className="macos-sidebar-item">
           <div style={{ 
             width: '24px', 
             height: '24px', 
@@ -179,6 +180,19 @@ const IOSSidebar: React.FC = () => {
           </div>
           <span style={{ fontWeight: 500 }}>{user?.display_name || user?.username || '用户'}</span>
         </div>
+        <Popconfirm
+          title="退出登录"
+          description="确定要退出登录吗？"
+          onConfirm={handleLogout}
+          okText="确定"
+          cancelText="取消"
+          placement="topRight"
+        >
+          <div className="macos-sidebar-item" style={{ cursor: 'pointer' }}>
+            <LogoutOutlined className="sidebar-icon" style={{ fontSize: '18px', color: 'var(--text-tertiary)' }} />
+            <span style={{ fontWeight: 500, color: 'var(--text-tertiary)' }}>退出登录</span>
+          </div>
+        </Popconfirm>
       </div>
     </aside>
   );

@@ -199,38 +199,39 @@ async def _generate_questions_with_llm(
     - 当前用户查询
     - 数据库 Schema 信息
     - 生成的 SQL 结构
+    
+    优化说明：
+    - 提取可用字段供 LLM 参考，减少幻觉
+    - 要求不同维度的问题，避免重复
     """
     try:
         llm = get_default_model()
         
         # 提取表名和字段信息
-        tables_info = _extract_tables_info(schema_info)
+        tables_info, available_fields = _extract_tables_info_enhanced(schema_info, generated_sql)
         
-        prompt = f"""你是一个智能查询助手。基于用户当前的查询，推荐 {count} 个相关的问题，帮助用户进一步探索数据。
+        prompt = f"""你是一个智能查询助手。基于用户当前的查询，推荐 {count} 个相关的后续问题。
 
-**用户当前查询**: {user_query}
+【用户当前查询】
+{user_query}
 
-**数据库表信息**:
-{tables_info}
-
-**生成的 SQL 参考**:
-```sql
+【参考 SQL】
 {generated_sql[:500] if generated_sql else "无"}
-```
 
-**要求**:
-1. 推荐的问题应该与当前查询相关，但探索不同的维度或角度
-2. 问题应该具体、可执行，能够用 SQL 查询回答
-3. 考虑用户可能感兴趣的：
-   - 时间趋势（如：最近一周/月的变化）
-   - 排名对比（如：Top 10、最高/最低）
-   - 分组统计（如：按类别/地区统计）
-   - 条件筛选（如：符合某条件的记录）
+【可用字段】
+{available_fields}
 
-**输出格式** (只输出问题，每行一个，不要编号):
-问题1
-问题2
-问题3"""
+【推荐要求】
+1. 每个问题应来自不同维度（从下面选择3个）：
+   - 金额统计：如汇总、平均、最大/最小
+   - 时间分析：如按月统计、趋势变化
+   - 排名对比：如 Top 10、最高/最低
+   - 分组统计：如按类别、按状态
+2. 问题必须能用上述字段回答
+3. 问题要简洁，不超过15字
+
+【输出格式】
+直接输出{count}个问题，每行一个，不要编号："""
 
         response = await llm.ainvoke([HumanMessage(content=prompt)])
         
@@ -242,10 +243,11 @@ async def _generate_questions_with_llm(
             line = line.strip()
             # 移除可能的编号前缀
             if line and not line.startswith('#'):
-                # 移除常见的编号格式：1. 2. 3. 或 1) 2) 3)
+                # 移除常见的编号格式：1. 2. 3. 或 1) 2) 3) 或 - 
                 import re
                 cleaned = re.sub(r'^[\d]+[.)\s]+', '', line).strip()
-                if cleaned and len(cleaned) > 5:  # 确保问题有一定长度
+                cleaned = re.sub(r'^[-\*\u2022]\s*', '', cleaned).strip()
+                if cleaned and len(cleaned) > 5 and len(cleaned) < 50:  # 确保问题有一定长度且不过长
                     questions.append(cleaned)
         
         return questions[:count]
@@ -255,52 +257,96 @@ async def _generate_questions_with_llm(
         return []
 
 
-def _extract_tables_info(schema_info: Optional[Dict[str, Any]]) -> str:
-    """从 schema_info 提取表信息"""
+def _extract_tables_info_enhanced(
+    schema_info: Optional[Dict[str, Any]],
+    generated_sql: str = ""
+) -> tuple:
+    """
+    增强版表信息提取
+    
+    从 schema_info 和 generated_sql 中提取可用字段
+    
+    Returns:
+        (tables_info_str, available_fields_str)
+    """
+    table_lines = []
+    field_lines = []
+    
     if not schema_info:
-        return "无表信息"
+        # 尝试从 SQL 中提取表名和字段
+        if generated_sql:
+            import re
+            # 提取 SELECT 字段
+            select_match = re.search(r'SELECT\s+(.+?)\s+FROM', generated_sql, re.IGNORECASE | re.DOTALL)
+            if select_match:
+                fields = select_match.group(1)
+                field_lines.append(f"查询字段: {fields[:200]}")
+            
+            # 提取 FROM/JOIN 表名
+            table_matches = re.findall(r'(?:FROM|JOIN)\s+`?(\w+)`?', generated_sql, re.IGNORECASE)
+            if table_matches:
+                table_lines.append(f"涉及表: {', '.join(set(table_matches))}")
+        
+        tables_info = '\n'.join(table_lines) if table_lines else "无表信息"
+        fields_info = '\n'.join(field_lines) if field_lines else "请参考SQL中的字段"
+        return tables_info, fields_info
     
-    # 尝试从不同格式的 schema_info 中提取
-    if hasattr(schema_info, 'tables'):
-        tables = schema_info.tables
-    elif isinstance(schema_info, dict):
-        tables = schema_info.get('tables', {})
-    else:
-        return "无表信息"
+    # 从schema_info提取
+    tables = []
+    columns = []
     
-    if not tables:
-        return "无表信息"
+    if isinstance(schema_info, dict):
+        tables = schema_info.get('tables', [])
+        columns = schema_info.get('columns', [])
     
-    info_lines = []
-    
-    # 处理字典格式
-    if isinstance(tables, dict):
-        for table_name, table_info in list(tables.items())[:5]:  # 最多5个表
-            if isinstance(table_info, dict):
-                columns = table_info.get('columns', [])
-                if columns:
-                    col_names = [c.get('name', c) if isinstance(c, dict) else str(c) for c in columns[:10]]
-                    info_lines.append(f"- {table_name}: {', '.join(col_names)}")
-                else:
-                    info_lines.append(f"- {table_name}")
-            else:
-                info_lines.append(f"- {table_name}")
-    
-    # 处理列表格式
-    elif isinstance(tables, list):
-        for table in tables[:5]:
+    # 提取表名
+    if isinstance(tables, list) and tables:
+        for table in tables[:5]:  # 最多5个表
             if isinstance(table, dict):
-                name = table.get('name', '')
-                columns = table.get('columns', [])
-                if columns:
-                    col_names = [c.get('name', c) if isinstance(c, dict) else str(c) for c in columns[:10]]
-                    info_lines.append(f"- {name}: {', '.join(col_names)}")
-                else:
-                    info_lines.append(f"- {name}")
-            else:
-                info_lines.append(f"- {table}")
+                name = table.get('table_name', table.get('name', ''))
+                desc = table.get('description', '')
+                if name:
+                    if desc and 'Auto-discovered' not in desc:
+                        table_lines.append(f"- {name}: {desc}")
+                    else:
+                        table_lines.append(f"- {name}")
     
-    return '\n'.join(info_lines) if info_lines else "无表信息"
+    # 提取核心字段（按表分组）
+    table_columns_map = {}
+    if isinstance(columns, list):
+        for col in columns:
+            if isinstance(col, dict):
+                table_name = col.get('table_name', '')
+                col_name = col.get('column_name', col.get('name', ''))
+                col_type = col.get('data_type', '')
+                
+                # 只保留核心字段（金额、日期、数量、名称、状态）
+                is_core = any(kw in col_name.lower() for kw in 
+                    ['amount', 'quantity', 'date', 'name', 'status', 'total', 'price', 'count', 'id'])
+                
+                if is_core and table_name:
+                    if table_name not in table_columns_map:
+                        table_columns_map[table_name] = []
+                    table_columns_map[table_name].append(col_name)
+    
+    # 构建字段信息
+    for table_name, cols in list(table_columns_map.items())[:4]:
+        field_lines.append(f"{table_name}: {', '.join(cols[:8])}")
+    
+    tables_info = '\n'.join(table_lines) if table_lines else "无表信息"
+    fields_info = '\n'.join(field_lines) if field_lines else "请参考SQL中的字段"
+    
+    return tables_info, fields_info
+
+
+def _extract_tables_info(schema_info: Optional[Dict[str, Any]]) -> str:
+    """
+    从schema_info提取表信息（兼容旧接口）
+    
+    已废弃，请使用 _extract_tables_info_enhanced
+    """
+    tables_info, _ = _extract_tables_info_enhanced(schema_info, "")
+    return tables_info
 
 
 def _merge_and_deduplicate(
