@@ -135,9 +135,26 @@ async def sql_executor_node(state: SQLMessageState, writer: StreamWriter) -> Dic
         # 发送成功事件
         row_count = 0
         if exec_result:
-            data = getattr(exec_result, 'data', None) if hasattr(exec_result, 'data') else exec_result.get('data')
-            if data:
-                row_count = len(data)
+            rows_affected = (
+                getattr(exec_result, "rows_affected", None)
+                if hasattr(exec_result, "rows_affected")
+                else exec_result.get("rows_affected")
+            )
+            if isinstance(rows_affected, int):
+                row_count = rows_affected
+            else:
+                data = (
+                    getattr(exec_result, "data", None)
+                    if hasattr(exec_result, "data")
+                    else exec_result.get("data")
+                )
+                if isinstance(data, dict):
+                    if isinstance(data.get("row_count"), int):
+                        row_count = data["row_count"]
+                    elif isinstance(data.get("data"), list):
+                        row_count = len(data["data"])
+                elif isinstance(data, list):
+                    row_count = len(data)
         
         writer(create_sql_step_event(
             step="sql_executor",

@@ -5,7 +5,7 @@ from app.api.api_v1.endpoints import (
     graph_visualization, relationship_tips, hybrid_qa,
     dashboards, dashboard_widgets, dashboard_insights,
     llm_configs, agent_profiles, system_config, auth, tenant_users,
-    semantic_layer, predictions, skills
+    semantic_layer, predictions, skills, inventory_analysis
 )
 
 # 强制重新加载 - 修复API路由问题
@@ -52,3 +52,4 @@ api_router.include_router(system_config.router, prefix="/system-config", tags=["
 api_router.include_router(semantic_layer.router, prefix="/semantic-layer", tags=["semantic-layer"])
 api_router.include_router(predictions.router, prefix="", tags=["predictions"])
 api_router.include_router(skills.router, prefix="/skills", tags=["skills"])
+api_router.include_router(inventory_analysis.router, prefix="", tags=["inventory-analysis"])

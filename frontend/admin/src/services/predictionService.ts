@@ -7,6 +7,8 @@ import type {
   PredictionRequest,
   PredictionResult,
   PredictionColumnsResponse,
+  CategoricalAnalysisRequest,
+  CategoricalAnalysisResult,
 } from '../types/prediction';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
@@ -116,8 +118,26 @@ export const predictionService = {
     return {
       dateColumns: data.date_columns || [],
       valueColumns: data.value_columns || [],
+      categoryColumns: data.category_columns || [],
       sampleData: data.sample_data,
+      suggestedAnalysis: data.suggested_analysis || 'none',
     };
+  },
+
+  /**
+   * 分类数据统计分析
+   */
+  async analyzeCategorical(
+    widgetId: number,
+    request: CategoricalAnalysisRequest
+  ): Promise<CategoricalAnalysisResult> {
+    const response = await api.post(`/widgets/${widgetId}/categorical-analysis`, {
+      widget_id: request.widgetId,
+      category_column: request.categoryColumn,
+      value_column: request.valueColumn,
+      include_outliers: request.includeOutliers ?? true,
+    });
+    return response.data;
   },
 };
 

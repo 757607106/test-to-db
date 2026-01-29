@@ -85,5 +85,73 @@ export interface PredictionResult {
 export interface PredictionColumnsResponse {
   dateColumns: string[];
   valueColumns: string[];
+  categoryColumns: string[];
   sampleData?: Record<string, any>[];
+  suggestedAnalysis: 'time_series' | 'categorical' | 'none';
+}
+
+// ==================== 分类统计分析 ====================
+
+export interface CategoricalAnalysisRequest {
+  widgetId: number;
+  categoryColumn: string;
+  valueColumn: string;
+  includeOutliers?: boolean;
+}
+
+export interface CategoryStatistics {
+  category: string;
+  count: number;
+  sum: number;
+  mean: number;
+  std: number;
+  min: number;
+  max: number;
+  median: number;
+  q1: number;
+  q3: number;
+  pct_of_total: number;
+}
+
+export interface DistributionInfo {
+  skewness: number;
+  kurtosis: number;
+  is_normal: boolean;
+  normality_pvalue: number;
+}
+
+export interface OutlierInfo {
+  category: string;
+  value: number;
+  z_score: number;
+  deviation_pct: number;
+}
+
+export interface ComparisonResult {
+  top_category: string;
+  bottom_category: string;
+  range_ratio: number;
+  cv: number;
+  anova_fvalue?: number;
+  anova_pvalue?: number;
+  significant_difference: boolean;
+}
+
+export interface CategoricalAnalysisResult {
+  total_records: number;
+  category_count: number;
+  total_sum: number;
+  overall_mean: number;
+  overall_std: number;
+  category_stats: CategoryStatistics[];
+  distribution: DistributionInfo;
+  comparison: ComparisonResult;
+  outliers: OutlierInfo[];
+  chart_data: {
+    bar: { categories: string[]; values: number[]; totals: number[] };
+    pie: { labels: string[]; values: number[] };
+    boxplot: { categories: string[]; data: number[][] };
+  };
+  summary: string;
+  generated_at: string;
 }

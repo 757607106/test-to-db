@@ -1005,3 +1005,203 @@ class PredictionService:
 
 # 创建全局实例
 prediction_service = PredictionService()
+
+
+# ==================== 分类统计分析服务 ====================
+
+class CategoricalAnalysisService:
+    """分类数据统计分析服务"""
+    
+    def analyze(
+        self,
+        data: List[Dict[str, Any]],
+        category_column: str,
+        value_column: str,
+        include_outliers: bool = True
+    ) -> Dict[str, Any]:
+        """
+        执行分类统计分析
+        
+        Args:
+            data: 原始数据
+            category_column: 分类列名
+            value_column: 数值列名
+            include_outliers: 是否检测异常值
+            
+        Returns:
+            分析结果字典
+        """
+        import numpy as np
+        from scipy import stats as scipy_stats
+        
+        # 提取数据
+        categories = []
+        values = []
+        for row in data:
+            cat = row.get(category_column)
+            val = row.get(value_column)
+            if cat is not None and val is not None:
+                try:
+                    val_float = float(str(val).replace(',', '').replace('￥', '').replace('$', ''))
+                    categories.append(str(cat))
+                    values.append(val_float)
+                except (ValueError, TypeError):
+                    pass
+        
+        if not values:
+            raise ValueError("没有有效的数值数据")
+        
+        values_arr = np.array(values)
+        
+        # 基本统计
+        total_sum = float(np.sum(values_arr))
+        overall_mean = float(np.mean(values_arr))
+        overall_std = float(np.std(values_arr, ddof=1)) if len(values_arr) > 1 else 0.0
+        
+        # 按分类统计
+        category_data = {}
+        for cat, val in zip(categories, values):
+            if cat not in category_data:
+                category_data[cat] = []
+            category_data[cat].append(val)
+        
+        category_stats = []
+        for cat, cat_values in category_data.items():
+            arr = np.array(cat_values)
+            cat_stat = {
+                "category": cat,
+                "count": len(arr),
+                "sum": float(np.sum(arr)),
+                "mean": float(np.mean(arr)),
+                "std": float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0,
+                "min": float(np.min(arr)),
+                "max": float(np.max(arr)),
+                "median": float(np.median(arr)),
+                "q1": float(np.percentile(arr, 25)),
+                "q3": float(np.percentile(arr, 75)),
+                "pct_of_total": float(np.sum(arr) / total_sum * 100) if total_sum > 0 else 0.0
+            }
+            category_stats.append(cat_stat)
+        
+        # 按均值排序
+        category_stats.sort(key=lambda x: x['mean'], reverse=True)
+        
+        # 分布分析
+        skewness = float(scipy_stats.skew(values_arr)) if len(values_arr) > 2 else 0.0
+        kurtosis = float(scipy_stats.kurtosis(values_arr)) if len(values_arr) > 3 else 0.0
+        
+        # 正态性检验 (Shapiro-Wilk)
+        if len(values_arr) >= 3 and len(values_arr) <= 5000:
+            _, normality_pvalue = scipy_stats.shapiro(values_arr[:5000])
+        else:
+            normality_pvalue = 0.0
+        
+        distribution = {
+            "skewness": round(skewness, 4),
+            "kurtosis": round(kurtosis, 4),
+            "is_normal": normality_pvalue > 0.05,
+            "normality_pvalue": round(normality_pvalue, 4)
+        }
+        
+        # 分类比较
+        means = [s['mean'] for s in category_stats]
+        top_cat = category_stats[0]['category'] if category_stats else ""
+        bottom_cat = category_stats[-1]['category'] if category_stats else ""
+        min_mean = min(means) if means else 1
+        max_mean = max(means) if means else 1
+        range_ratio = max_mean / min_mean if min_mean > 0 else 0
+        cv = float(np.std(means) / np.mean(means) * 100) if means and np.mean(means) > 0 else 0
+        
+        # ANOVA检验（分类数 >= 2 且每组有数据）
+        groups = [np.array(v) for v in category_data.values() if len(v) > 0]
+        if len(groups) >= 2:
+            try:
+                f_val, p_val = scipy_stats.f_oneway(*groups)
+                anova_fvalue = float(f_val) if not np.isnan(f_val) else None
+                anova_pvalue = float(p_val) if not np.isnan(p_val) else None
+                significant = p_val < 0.05 if not np.isnan(p_val) else False
+            except Exception:
+                anova_fvalue = None
+                anova_pvalue = None
+                significant = False
+        else:
+            anova_fvalue = None
+            anova_pvalue = None
+            significant = False
+        
+        comparison = {
+            "top_category": top_cat,
+            "bottom_category": bottom_cat,
+            "range_ratio": round(range_ratio, 2),
+            "cv": round(cv, 2),
+            "anova_fvalue": round(anova_fvalue, 4) if anova_fvalue else None,
+            "anova_pvalue": round(anova_pvalue, 4) if anova_pvalue else None,
+            "significant_difference": significant
+        }
+        
+        # 异常值检测 (Z-score)
+        outliers = []
+        if include_outliers and overall_std > 0:
+            for cat, val in zip(categories, values):
+                z = (val - overall_mean) / overall_std
+                if abs(z) > 2.5:  # Z > 2.5 视为异常
+                    outliers.append({
+                        "category": cat,
+                        "value": round(val, 2),
+                        "z_score": round(z, 2),
+                        "deviation_pct": round((val - overall_mean) / overall_mean * 100, 2) if overall_mean != 0 else 0
+                    })
+        
+        # 可视化数据
+        chart_data = {
+            "bar": {
+                "categories": [s['category'] for s in category_stats],
+                "values": [s['mean'] for s in category_stats],
+                "totals": [s['sum'] for s in category_stats]
+            },
+            "pie": {
+                "labels": [s['category'] for s in category_stats],
+                "values": [s['pct_of_total'] for s in category_stats]
+            },
+            "boxplot": {
+                "categories": [s['category'] for s in category_stats],
+                "data": [
+                    [s['min'], s['q1'], s['median'], s['q3'], s['max']]
+                    for s in category_stats
+                ]
+            }
+        }
+        
+        # 生成摘要
+        summary_parts = [
+            f"共{len(category_data)}个分类，{len(values)}条记录。",
+            f"'{top_cat}'均值最高({category_stats[0]['mean']:.2f})，",
+            f"'{bottom_cat}'均值最低({category_stats[-1]['mean']:.2f})。" if len(category_stats) > 1 else "",
+        ]
+        
+        if significant:
+            summary_parts.append(f"统计检验显示分类间存在显著差异(p={anova_pvalue:.4f})。")
+        
+        if outliers:
+            summary_parts.append(f"检测到{len(outliers)}个异常值。")
+        
+        summary = "".join(summary_parts)
+        
+        return {
+            "total_records": len(values),
+            "category_count": len(category_data),
+            "total_sum": round(total_sum, 2),
+            "overall_mean": round(overall_mean, 2),
+            "overall_std": round(overall_std, 2),
+            "category_stats": category_stats,
+            "distribution": distribution,
+            "comparison": comparison,
+            "outliers": outliers[:10],  # 最多返回10个
+            "chart_data": chart_data,
+            "summary": summary,
+            "generated_at": datetime.utcnow().isoformat()
+        }
+
+
+# 创建全局实例
+categorical_analysis_service = CategoricalAnalysisService()

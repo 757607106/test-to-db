@@ -137,7 +137,7 @@ export interface DashboardListResponse {
 export interface Widget {
   id: number;
   dashboard_id: number;
-  widget_type: 'chart' | 'table' | 'text' | 'insight_analysis';
+  widget_type: 'chart' | 'table' | 'text' | 'insight_analysis' | 'inventory_analysis';
   title: string;
   connection_id: number;
   query_config: WidgetQueryConfig;
@@ -176,7 +176,7 @@ export interface WidgetPositionConfig {
 }
 
 export interface WidgetCreate {
-  widget_type: 'chart' | 'table' | 'text' | 'insight_analysis';
+  widget_type: 'chart' | 'table' | 'text' | 'insight_analysis' | 'inventory_analysis';
   title: string;
   connection_id: number;
   query_config: WidgetQueryConfig;

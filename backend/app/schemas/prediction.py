@@ -16,6 +16,12 @@ class PredictionMethod(str, Enum):
     EXPONENTIAL_SMOOTHING = "exponential_smoothing"
 
 
+class AnalysisType(str, Enum):
+    """分析类型枚举"""
+    TIME_SERIES = "time_series"  # 时序预测
+    CATEGORICAL = "categorical"  # 分类统计分析
+
+
 class PredictionRequest(BaseModel):
     """预测请求"""
     widget_id: int = Field(..., description="数据来源Widget ID")
@@ -105,4 +111,91 @@ class PredictionColumnsResponse(BaseModel):
     """可用于预测的列信息"""
     date_columns: List[str] = Field(default_factory=list, description="时间类型列")
     value_columns: List[str] = Field(default_factory=list, description="数值类型列")
+    category_columns: List[str] = Field(default_factory=list, description="分类类型列")
     sample_data: Optional[List[Dict[str, Any]]] = Field(None, description="样本数据(前5行)")
+    suggested_analysis: str = Field(
+        "time_series", 
+        description="建议的分析类型: time_series/categorical"
+    )
+
+
+# ==================== 分类统计分析 ====================
+
+class CategoricalAnalysisRequest(BaseModel):
+    """分类统计分析请求"""
+    widget_id: int = Field(..., description="数据来源Widget ID")
+    category_column: str = Field(..., description="分类列名")
+    value_column: str = Field(..., description="数值列名")
+    include_outliers: bool = Field(True, description="是否检测异常值")
+
+
+class CategoryStatistics(BaseModel):
+    """单个分类的统计信息"""
+    category: str = Field(..., description="分类名称")
+    count: int = Field(..., description="数据点数")
+    sum: float = Field(..., description="总和")
+    mean: float = Field(..., description="均值")
+    std: float = Field(..., description="标准差")
+    min: float = Field(..., description="最小值")
+    max: float = Field(..., description="最大值")
+    median: float = Field(..., description="中位数")
+    q1: float = Field(..., description="第一四分位")
+    q3: float = Field(..., description="第三四分位")
+    pct_of_total: float = Field(..., description="占总体百分比")
+
+
+class DistributionInfo(BaseModel):
+    """分布信息"""
+    skewness: float = Field(..., description="偏度（>0右偏，<0左偏）")
+    kurtosis: float = Field(..., description="峰度（>3尖峰，<3平坦）")
+    is_normal: bool = Field(..., description="是否近似正态分布")
+    normality_pvalue: float = Field(..., description="正态性检验p值")
+
+
+class OutlierInfo(BaseModel):
+    """异常值信息"""
+    category: str = Field(..., description="所属分类")
+    value: float = Field(..., description="异常值")
+    z_score: float = Field(..., description="Z分数")
+    deviation_pct: float = Field(..., description="偏离均值百分比")
+
+
+class ComparisonResult(BaseModel):
+    """分类间比较结果"""
+    top_category: str = Field(..., description="最高值分类")
+    bottom_category: str = Field(..., description="最低值分类")
+    range_ratio: float = Field(..., description="极差比（最大/最小）")
+    cv: float = Field(..., description="变异系数（分类间差异）")
+    anova_fvalue: Optional[float] = Field(None, description="ANOVA F值")
+    anova_pvalue: Optional[float] = Field(None, description="ANOVA p值")
+    significant_difference: bool = Field(..., description="分类间是否有显著差异")
+
+
+class CategoricalAnalysisResult(BaseModel):
+    """分类统计分析结果"""
+    # 基本信息
+    total_records: int = Field(..., description="总记录数")
+    category_count: int = Field(..., description="分类数量")
+    total_sum: float = Field(..., description="总和")
+    overall_mean: float = Field(..., description="总体均值")
+    overall_std: float = Field(..., description="总体标准差")
+    
+    # 各分类统计
+    category_stats: List[CategoryStatistics] = Field(..., description="各分类统计")
+    
+    # 分布分析
+    distribution: DistributionInfo = Field(..., description="分布信息")
+    
+    # 分类比较
+    comparison: ComparisonResult = Field(..., description="分类比较")
+    
+    # 异常值
+    outliers: List[OutlierInfo] = Field(default_factory=list, description="异常值列表")
+    
+    # 可视化数据
+    chart_data: Dict[str, Any] = Field(default_factory=dict, description="图表数据")
+    
+    # 分析摘要
+    summary: str = Field(..., description="分析摘要说明")
+    
+    generated_at: datetime = Field(default_factory=datetime.utcnow, description="生成时间")

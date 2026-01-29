@@ -39,7 +39,6 @@ import ThreadHistory from "./history";
 import { toast } from "sonner";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { Label } from "../ui/label";
-import { Switch } from "../ui/switch";
 import { useFileUpload } from "@/hooks/use-file-upload";
 import { ContentBlocksPreview } from "./ContentBlocksPreview";
 import {
@@ -61,10 +60,6 @@ export function Thread() {
   const [threadId, _setThreadId] = useQueryState("threadId");
   const [chatHistoryOpen, setChatHistoryOpen] = useQueryState(
     "chatHistoryOpen",
-    parseAsBoolean.withDefault(false),
-  );
-  const [hideToolCalls, setHideToolCalls] = useQueryState(
-    "hideToolCalls",
     parseAsBoolean.withDefault(false),
   );
   const [input, setInput] = useState("");
@@ -393,7 +388,11 @@ export function Thread() {
               content={
                 <>
                   {messages
-                    .filter((m) => !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX))
+                    .filter(
+                      (m) =>
+                        !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX) &&
+                        m.type !== "tool",
+                    )
                     .map((message, index) =>
                       message.type === "human" ? (
                         <HumanMessage
@@ -481,20 +480,6 @@ export function Thread() {
 
                       <div className="flex items-center justify-between p-2 pt-4">
                         <div className="flex items-center gap-4">
-                          <div className="flex items-center space-x-2">
-                            <Switch
-                              id="render-tool-calls"
-                              checked={hideToolCalls ?? false}
-                              onCheckedChange={setHideToolCalls}
-                            />
-                            <Label
-                              htmlFor="render-tool-calls"
-                              className="text-sm text-gray-600"
-                            >
-                              隐藏工具调用
-                            </Label>
-                          </div>
-
                           <Label
                             htmlFor="file-input"
                             className="flex cursor-pointer items-center gap-2 hover:text-gray-800 transition-colors"

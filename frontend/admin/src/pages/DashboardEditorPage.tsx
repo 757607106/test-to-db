@@ -73,10 +73,13 @@ import { RefreshControlPanel } from '../components/RefreshControlPanel';
 import { InsightLineagePanel } from '../components/InsightLineagePanel';
 import { PredictionConfigPanel } from '../components/PredictionConfigPanel';
 import { PredictionChart } from '../components/PredictionChart';
+import { CategoricalAnalysisDisplay } from '../components/CategoricalAnalysisDisplay';
+import InventoryAnalysisWidget from '../components/InventoryAnalysisWidget';
+import type { InventoryAnalysisConfig } from '../types/inventoryAnalysis';
 import { useAutoRefresh } from '../hooks/useAutoRefresh';
 import { predictionService } from '../services/predictionService';
 import type { RefreshConfig, GlobalRefreshResponse, InsightLineage, EnhancedInsightResponse } from '../types/dashboard';
-import type { PredictionResult, PredictionRequest, PredictionColumnsResponse } from '../types/prediction';
+import type { PredictionResult, PredictionRequest, PredictionColumnsResponse, CategoricalAnalysisRequest, CategoricalAnalysisResult } from '../types/prediction';
 
 const ReactGridLayout = WidthProvider(GridLayout);
 
@@ -229,6 +232,7 @@ const DashboardEditorPage: React.FC = () => {
   const [predictionPanelVisible, setPredictionPanelVisible] = useState<boolean>(false);
   const [predictionWidget, setPredictionWidget] = useState<Widget | null>(null);
   const [predictionResult, setPredictionResult] = useState<PredictionResult | null>(null);
+  const [categoricalResult, setCategoricalResult] = useState<CategoricalAnalysisResult | null>(null);
   const [isPredicting, setIsPredicting] = useState<boolean>(false);
 
   // Widget 引用
@@ -308,12 +312,14 @@ const DashboardEditorPage: React.FC = () => {
   const handleOpenPrediction = (widget: Widget) => {
     setPredictionWidget(widget);
     setPredictionResult(null);
+    setCategoricalResult(null);
     setPredictionPanelVisible(true);
   };
 
   // P2: 执行预测
   const handlePredict = async (config: PredictionRequest) => {
     setIsPredicting(true);
+    setCategoricalResult(null);  // 清除分类分析结果
     try {
       const result = await predictionService.createPrediction(dashboardId, config);
       setPredictionResult(result);
@@ -326,10 +332,26 @@ const DashboardEditorPage: React.FC = () => {
     }
   };
 
+  // P2: 执行分类统计分析
+  const handleCategoricalAnalysis = async (config: CategoricalAnalysisRequest) => {
+    setIsPredicting(true);
+    setPredictionResult(null);  // 清除时序预测结果
+    try {
+      const result = await predictionService.analyzeCategorical(config.widgetId, config);
+      setCategoricalResult(result);
+      message.success('分类统计分析完成');
+    } catch (error) {
+      message.error('分类统计分析失败');
+      console.error(error);
+    } finally {
+      setIsPredicting(false);
+    }
+  };
+
   // P2: 加载预测列
   const handleLoadPredictionColumns = async (): Promise<PredictionColumnsResponse> => {
     if (!predictionWidget) {
-      return { dateColumns: [], valueColumns: [] };
+      return { dateColumns: [], valueColumns: [], categoryColumns: [], suggestedAnalysis: 'none' };
     }
     return await predictionService.getPredictionColumns(predictionWidget.id);
   };
@@ -748,6 +770,30 @@ const DashboardEditorPage: React.FC = () => {
       );
     }
 
+    // 库存分析组件单独渲染
+    if (widget.widget_type === 'inventory_analysis') {
+      const inventoryConfig: InventoryAnalysisConfig = widget.chart_config || {
+        analysis_type: 'abc_xyz',
+        data_source: { widget_id: undefined },
+        column_mapping: {},
+      };
+      return (
+        <InventoryAnalysisWidget
+          config={inventoryConfig}
+          editable={editorMode === 'edit'}
+          onConfigChange={async (newConfig) => {
+            try {
+              await widgetService.updateWidget(widget.id, { chart_config: newConfig as unknown as ChartConfig });
+              message.success('配置已保存');
+              fetchDashboard();
+            } catch (err) {
+              message.error('保存配置失败');
+            }
+          }}
+        />
+      );
+    }
+
     const menuItems = [
       {
         key: 'refresh',
@@ -867,7 +913,10 @@ const DashboardEditorPage: React.FC = () => {
 
   // 分离洞察组件和普通组件
   const insightWidgets = dashboard?.widgets.filter((w) => w.widget_type === 'insight_analysis') || [];
-  const normalWidgets = dashboard?.widgets.filter((w) => w.widget_type !== 'insight_analysis') || [];
+  const inventoryWidgets = dashboard?.widgets.filter((w) => w.widget_type === 'inventory_analysis') || [];
+  const normalWidgets = dashboard?.widgets.filter((w) => 
+    w.widget_type !== 'insight_analysis' && w.widget_type !== 'inventory_analysis'
+  ) || [];
 
   if (loading) {
     return (
@@ -1306,25 +1355,27 @@ const DashboardEditorPage: React.FC = () => {
 
       {/* P2: 数据预测面板 */}
       <Modal
-        title="数据预测分析"
+        title="数据分析"
         open={predictionPanelVisible}
         onCancel={() => {
           setPredictionPanelVisible(false);
           setPredictionWidget(null);
           setPredictionResult(null);
+          setCategoricalResult(null);
         }}
         footer={null}
-        width={predictionResult ? 1000 : 500}
+        width={(predictionResult || categoricalResult) ? 1000 : 500}
         styles={{ body: { maxHeight: '80vh', overflow: 'auto' } }}
       >
         <div style={{ display: 'flex', gap: 20 }}>
           {/* 左侧：配置面板 */}
-          <div style={{ width: predictionResult ? 300 : '100%', flexShrink: 0 }}>
+          <div style={{ width: (predictionResult || categoricalResult) ? 300 : '100%', flexShrink: 0 }}>
             {predictionWidget && (
               <PredictionConfigPanel
                 widgetId={predictionWidget.id}
                 dashboardId={dashboardId}
                 onPredict={handlePredict}
+                onAnalyzeCategorical={handleCategoricalAnalysis}
                 onLoadColumns={handleLoadPredictionColumns}
                 isLoading={isPredicting}
               />
@@ -1341,6 +1392,13 @@ const DashboardEditorPage: React.FC = () => {
                   message.success('导出功能开发中');
                 }}
               />
+            </div>
+          )}
+          
+          {/* 分类分析结果 */}
+          {categoricalResult && (
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <CategoricalAnalysisDisplay result={categoricalResult} />
             </div>
           )}
         </div>

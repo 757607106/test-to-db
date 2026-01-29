@@ -58,6 +58,8 @@ export interface SQLStepEvent {
     // P2: 智能规划节点
     | "intent_analysis"
     | "query_planning"
+    | "query_rewrite"
+    | "skill_routing"
     // P2.1: 多步执行节点
     | "result_aggregator"
     // 新版 Hub-and-Spoke 节点
@@ -224,6 +226,8 @@ export const SQL_STEP_LABELS: Record<string, string> = {
   // P2: 智能规划节点
   intent_analysis: "意图分析",
   query_planning: "查询规划",
+  query_rewrite: "查询改写",
+  skill_routing: "Skill 路由",
   // P2.1: 多步执行节点
   result_aggregator: "结果聚合",
   // 新版 Hub-and-Spoke 节点

@@ -127,3 +127,28 @@ from app.schemas.schema_context import (
     extract_table_names,
 )
 
+# 库存分析
+from app.schemas.inventory_analysis import (
+    ABCClass,
+    XYZClass,
+    ABCXYZRequest,
+    ABCXYZResult,
+    ABCXYZSummary,
+    ABCXYZMatrix,
+    ABCXYZDetail,
+    ParetoData,
+    TurnoverRequest,
+    TurnoverResult,
+    TurnoverDetail,
+    TurnoverSummary,
+    SafetyStockRequest,
+    SafetyStockResult,
+    SafetyStockDetail,
+    SafetyStockSummary,
+    SupplierEvaluationRequest,
+    SupplierResult,
+    SupplierDetail,
+    SupplierSummary,
+    InventoryAnalysisResponse,
+)
+
