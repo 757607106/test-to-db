@@ -19,9 +19,7 @@ import DashboardEditorPage from './pages/DashboardEditorPage';
 import LLMConfigPage from './pages/LLMConfig';
 import AgentProfilePage from './pages/AgentProfile';
 import UsersPage from './pages/UsersPage';
-import MetricsPage from './pages/MetricsPage';
 import SkillsPage from './pages/SkillsPage';
-import SQLEnhancementConfigPage from './pages/SQLEnhancementConfigPage';
 import IntelligentTuningCenter from './pages/IntelligentTuningCenter';
 
 // Layout wrapper that uses IOSLayout with Outlet
@@ -53,11 +51,9 @@ const App: React.FC = () => {
           <Route path="/value-mappings" element={<ValueMappingsPage />} />
           <Route path="/dashboards" element={<DashboardListPage />} />
           <Route path="/dashboards/:id" element={<DashboardEditorPage />} />
-          <Route path="/metrics" element={<MetricsPage />} />
           <Route path="/join-rules" element={<Navigate to="/skills" replace />} />
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/llm-config" element={<LLMConfigPage />} />
-          <Route path="/sql-enhancement" element={<SQLEnhancementConfigPage />} />
           <Route path="/agent-profile" element={<AgentProfilePage />} />
           <Route path="/users" element={<UsersPage />} />
         </Route>

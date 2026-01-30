@@ -1,397 +1,333 @@
 """
-图表生成智能体 (Chart Generator Agent)
-
-职责：
-1. 根据数据特征推荐合适的图表类型
-2. 生成 Recharts 图表配置
-3. 判断数据是否适合可视化
-
-P2.2 升级: 意图驱动可视化
-- 结合 analysis_intent 选择最合适的图表类型
-- trend -> 折线图/面积图
-- structure -> 饼图/堆叠图
-- comparison -> 柱状图/分组柱状图
-- correlation -> 散点图
-
-与 Data Analyst Agent 的边界：
-- Data Analyst: 负责数据解读和洞察生成（文本输出）
-- Chart Generator: 负责图表配置和可视化建议（图表配置输出）
-
-遵循 LangGraph 官方最佳实践:
-- 使用 StreamWriter 进行流式输出
-- 完全异步实现
+图表生成代理
+负责根据SQL查询结果生成合适的数据可视化图表
 """
-import json
-import logging
-import time
-from typing import Dict, Any, List, Optional
-
-from langchain_core.messages import AIMessage, HumanMessage
-from langgraph.types import StreamWriter
+import asyncio
+from typing import Dict, Any, List
+from langchain_core.tools import tool
+from langchain_core.messages import AIMessage
+from langgraph.prebuilt import create_react_agent
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from app.core.state import SQLMessageState
-from app.core.llms import get_default_model
-from app.schemas.stream_events import create_sql_step_event
-
-logger = logging.getLogger(__name__)
+from app.core.agent_config import get_agent_llm, CORE_AGENT_CHART_ANALYST
 
 
-# P2.2: 意图到图表类型的映射
-INTENT_CHART_MAP = {
-    "trend": ["line", "area"],           # 趋势分析 -> 折线图/面积图
-    "structure": ["pie", "bar"],         # 结构分析 -> 饼图/柱状图
-    "comparison": ["bar", "line"],       # 对比分析 -> 柱状图/折线图
-    "correlation": ["scatter", "line"],  # 相关性分析 -> 散点图/折线图
-    "detail": ["bar", "line"],           # 详情查看 -> 柱状图/折线图
-    "summary": ["bar", "pie"],           # 综合汇总 -> 柱状图/饼图
-}
+# 初始化MCP图表服务器客户端
+def _initialize_chart_client():
+    """初始化图表生成客户端"""
+    try:
+        client = MultiServerMCPClient(
+            {
+                "mcp-server-chart": {
+                    "command": "npx",
+                    "args": ["-y", "@antv/mcp-server-chart"],
+                    "transport": "stdio",
+                }
+            }
+        )
+        chart_tools = asyncio.run(client.get_tools())
+        return client, chart_tools
+    except Exception as e:
+        print(f"图表客户端初始化失败: {e}")
+        return None, []
+
+
+# 全局图表客户端和工具
+CHART_CLIENT, CHART_TOOLS = _initialize_chart_client()
+
+
+@tool
+def analyze_data_for_chart(data: Dict[str, Any], query_context: str) -> Dict[str, Any]:
+    """
+    分析数据特征，确定最适合的图表类型
+    
+    Args:
+        data: SQL查询结果数据
+        query_context: 查询上下文信息
+        
+    Returns:
+        图表类型建议和配置信息
+    """
+    try:
+        if not data or not isinstance(data, dict):
+            return {
+                "success": False,
+                "error": "无效的数据格式"
+            }
+        
+        # 分析数据结构
+        columns = data.get("columns", [])
+        rows = data.get("rows", [])
+        
+        if not columns or not rows:
+            return {
+                "success": False,
+                "error": "数据为空或格式不正确"
+            }
+        
+        # 数据特征分析
+        num_columns = len(columns)
+        num_rows = len(rows)
+        
+        # 分析列类型
+        numeric_columns = []
+        text_columns = []
+        date_columns = []
+        
+        if rows:
+            first_row = rows[0]
+            for i, col in enumerate(columns):
+                if i < len(first_row):
+                    value = first_row[i]
+                    if isinstance(value, (int, float)):
+                        numeric_columns.append(col)
+                    elif isinstance(value, str):
+                        if any(keyword in col.lower() for keyword in ['date', 'time', 'year', 'month']):
+                            date_columns.append(col)
+                        else:
+                            text_columns.append(col)
+        
+        # 图表类型推荐逻辑
+        chart_recommendation = _recommend_chart_type(
+            num_columns, num_rows, numeric_columns, text_columns, date_columns, query_context
+        )
+        
+        return {
+            "success": True,
+            "data_analysis": {
+                "total_columns": num_columns,
+                "total_rows": num_rows,
+                "numeric_columns": numeric_columns,
+                "text_columns": text_columns,
+                "date_columns": date_columns
+            },
+            "chart_recommendation": chart_recommendation
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def _recommend_chart_type(num_columns: int, num_rows: int, numeric_cols: List[str], 
+                         text_cols: List[str], date_cols: List[str], context: str) -> Dict[str, Any]:
+    """推荐图表类型的内部逻辑"""
+    
+    context_lower = context.lower()
+    
+    # 趋势分析查询
+    if any(keyword in context_lower for keyword in ['趋势', 'trend', '时间', 'time', '变化', 'change']):
+        if date_cols and numeric_cols:
+            return {
+                "type": "line",
+                "reason": "检测到时间序列数据，适合用折线图显示趋势",
+                "x_axis": date_cols[0],
+                "y_axis": numeric_cols[0] if numeric_cols else None
+            }
+    
+    # 比较分析查询
+    if any(keyword in context_lower for keyword in ['比较', 'compare', '对比', '排名', 'rank', '最高', '最低']):
+        if text_cols and numeric_cols:
+            return {
+                "type": "bar",
+                "reason": "检测到比较分析需求，适合用柱状图显示",
+                "x_axis": text_cols[0],
+                "y_axis": numeric_cols[0] if numeric_cols else None
+            }
+    
+    # 占比分析查询
+    if any(keyword in context_lower for keyword in ['占比', 'percentage', '比例', 'proportion', '分布', 'distribution']):
+        if text_cols and numeric_cols:
+            return {
+                "type": "pie",
+                "reason": "检测到占比分析需求，适合用饼图显示",
+                "category": text_cols[0],
+                "value": numeric_cols[0] if numeric_cols else None
+            }
+    
+    # 默认推荐逻辑
+    if num_columns == 2 and len(numeric_cols) == 1 and len(text_cols) == 1:
+        if num_rows <= 10:
+            return {
+                "type": "pie",
+                "reason": "数据量较小，适合用饼图显示分布",
+                "category": text_cols[0],
+                "value": numeric_cols[0]
+            }
+        else:
+            return {
+                "type": "bar",
+                "reason": "数据量适中，适合用柱状图显示",
+                "x_axis": text_cols[0],
+                "y_axis": numeric_cols[0]
+            }
+    
+    elif len(numeric_cols) >= 2:
+        return {
+            "type": "scatter",
+            "reason": "多个数值列，适合用散点图显示相关性",
+            "x_axis": numeric_cols[0],
+            "y_axis": numeric_cols[1]
+        }
+    
+    else:
+        return {
+            "type": "table",
+            "reason": "数据结构复杂，建议使用表格显示",
+            "columns": text_cols + numeric_cols
+        }
+
+
+@tool
+def should_generate_chart(query: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    判断是否需要生成图表
+    
+    Args:
+        query: 用户查询
+        data: 查询结果数据
+        
+    Returns:
+        是否需要生成图表的判断结果
+    """
+    try:
+        # 检查数据是否适合可视化
+        if not data or not isinstance(data, dict):
+            return {
+                "should_generate": False,
+                "reason": "数据格式不正确或为空"
+            }
+        
+        rows = data.get("rows", [])
+        columns = data.get("columns", [])
+        
+        if not rows or not columns:
+            return {
+                "should_generate": False,
+                "reason": "数据为空"
+            }
+        
+        # 数据量检查
+        if len(rows) < 2:
+            return {
+                "should_generate": False,
+                "reason": "数据量太少，不适合生成图表"
+            }
+        
+        if len(rows) > 1000:
+            return {
+                "should_generate": False,
+                "reason": "数据量过大，建议先进行数据聚合"
+            }
+        
+        # 查询意图分析
+        query_lower = query.lower()
+        visualization_keywords = [
+            '图表', 'chart', '可视化', 'visualization', '图', 'graph',
+            '趋势', 'trend', '分布', 'distribution', '比较', 'compare',
+            '占比', 'percentage', '统计', 'statistics'
+        ]
+        
+        has_viz_intent = any(keyword in query_lower for keyword in visualization_keywords)
+        
+        # 数据类型检查
+        has_numeric_data = False
+        if rows:
+            first_row = rows[0]
+            for value in first_row:
+                if isinstance(value, (int, float)):
+                    has_numeric_data = True
+                    break
+        
+        if has_viz_intent or (has_numeric_data and len(columns) >= 2):
+            return {
+                "should_generate": True,
+                "reason": "数据适合可视化且用户有可视化需求"
+            }
+        else:
+            return {
+                "should_generate": False,
+                "reason": "用户查询主要关注数据内容，不需要图表可视化"
+            }
+        
+    except Exception as e:
+        return {
+            "should_generate": False,
+            "reason": f"判断过程出错: {str(e)}"
+        }
 
 
 class ChartGeneratorAgent:
-    """
-    图表生成智能体
+    """图表生成代理"""
     
-    职责：
-    - 分析数据结构，推荐图表类型
-    - 生成 Recharts 兼容的图表配置
-    - 判断是否需要图表可视化
-    
-    不负责：
-    - 数据分析和洞察生成（由 DataAnalystAgent 处理）
-    - SQL 生成或修正（由其他 Agent 处理）
-    """
-    
-    def __init__(self, custom_prompt: str = None, llm=None):
-        """
-        初始化图表生成智能体
-        
-        Args:
-            custom_prompt: 自定义系统提示词（可选）
-            llm: 自定义 LLM 模型（可选）
-        """
+    def __init__(self):
         self.name = "chart_generator_agent"
-        self.custom_prompt = custom_prompt
-        self.llm = llm or get_default_model()
+        self.llm = get_agent_llm(CORE_AGENT_CHART_ANALYST)
+        
+        # 组合本地工具和MCP图表工具
+        self.tools = []
+        
+        # 如果MCP图表工具可用，添加到工具列表
+        if CHART_TOOLS:
+            self.tools.extend(CHART_TOOLS)
+        
+        # 创建ReAct代理
+        self.agent = create_react_agent(
+            self.llm,
+            self.tools,
+            prompt=self._create_system_prompt(),
+            name=self.name
+        )
     
-    async def process(self, state: SQLMessageState, writer: StreamWriter = None) -> Dict[str, Any]:
-        """
-        处理图表生成任务
-        
-        遵循 LangGraph 官方最佳实践：
-        - 使用 StreamWriter 参数注入
-        - 支持流式输出
-        
-        Args:
-            state: 当前状态
-            writer: LangGraph StreamWriter（可选）
-            
-        Returns:
-            状态更新字典，包含 chart_config
-        """
-        start_time = time.time()
-        
-        # 检查是否跳过图表生成
-        if state.get("skip_chart_generation", False):
-            logger.info("跳过图表生成（快速模式）")
-            return {
-                "current_stage": "completed",
-                "chart_config": None
-            }
-        
-        # 发送图表生成开始事件
-        if writer:
-            writer(create_sql_step_event(
-                step="chart_generation",
-                status="running",
-                result="正在生成图表配置...",
-                time_ms=0
-            ))
-        
+    def _create_system_prompt(self) -> str:
+        """创建系统提示"""
+        return """你是一个专业的数据可视化专家。你的任务是：
+
+1. 分析SQL查询结果数据的特征和结构
+2. 判断是否需要生成图表
+3. 推荐最适合的图表类型
+4. 生成高质量的数据可视化图表
+
+工作流程：
+使用相应工具生成实际图表
+
+请确保：
+- 准确分析数据特征
+- 选择最合适的图表类型
+- 生成清晰美观的可视化效果
+- 如果不适合生成图表，给出合理的解释
+
+你需要根据用户查询意图和数据特点做出最佳的可视化决策。"""
+
+    async def generate_chart(self, state: SQLMessageState) -> Dict[str, Any]:
+        """生成图表"""
         try:
-            # 从状态中获取执行结果
-            execution_result = state.get("execution_result")
-            
-            # 提取数据
-            result_data = self._extract_result_data(execution_result)
-            columns = result_data.get("columns", [])
-            data = result_data.get("data", [])
-            row_count = result_data.get("row_count", 0)
-            
-            # 判断是否适合生成图表
-            if not self._should_generate_chart(columns, data, row_count):
-                logger.info("数据不适合生成图表")
-                return {
-                    "current_stage": "completed",
-                    "chart_config": None
-                }
-            
-            # 生成图表配置
-            chart_config = await self._generate_chart_config(columns, data, state)
-            
-            # 计算耗时
-            elapsed_ms = int((time.time() - start_time) * 1000)
-            
-            # 发送图表生成完成事件
-            if writer:
-                writer(create_sql_step_event(
-                    step="chart_generation",
-                    status="completed",
-                    result=f"图表配置生成完成: {chart_config.get('type', 'unknown')}",
-                    time_ms=elapsed_ms
-                ))
-            
-            logger.info(f"图表配置生成完成，类型: {chart_config.get('type')}, 耗时: {elapsed_ms}ms")
+            # 调用代理处理
+            result = await self.agent.ainvoke(state)
             
             return {
-                "current_stage": "completed",
-                "chart_config": chart_config
+                "messages": result.get("messages", []),
+                "current_stage": "completed"
             }
             
         except Exception as e:
-            elapsed_ms = int((time.time() - start_time) * 1000)
-            logger.error(f"图表生成失败: {e}")
-            
-            # 发送错误事件
-            if writer:
-                writer(create_sql_step_event(
-                    step="chart_generation",
-                    status="error",
-                    result=str(e),
-                    time_ms=elapsed_ms
-                ))
-            
-            # 图表生成失败不影响整体流程
-            return {
-                "current_stage": "completed",
-                "chart_config": None,
-                "error_history": state.get("error_history", []) + [{
-                    "stage": "chart_generation",
-                    "error": str(e),
-                    "retry_count": state.get("retry_count", 0)
-                }]
+            # 记录错误
+            error_info = {
+                "stage": "chart_generation",
+                "error": str(e),
+                "retry_count": state.get("retry_count", 0)
             }
-    
-    def _extract_result_data(self, execution_result) -> Dict[str, Any]:
-        """从执行结果中提取数据"""
-        if not execution_result:
-            return {"columns": [], "data": [], "row_count": 0}
-        
-        if hasattr(execution_result, 'data'):
-            result_data = execution_result.data
-        elif isinstance(execution_result, dict):
-            result_data = execution_result.get("data", {})
-        else:
-            result_data = {}
-        
-        if isinstance(result_data, dict):
+            
+            state["error_history"].append(error_info)
+            state["current_stage"] = "error_recovery"
+            
             return {
-                "columns": result_data.get("columns", []),
-                "data": result_data.get("data", []),
-                "row_count": result_data.get("row_count", 0)
+                "messages": [AIMessage(content=f"图表生成失败: {str(e)}")],
+                "current_stage": "error_recovery"
             }
-        
-        return {"columns": [], "data": [], "row_count": 0}
-    
-    def _should_generate_chart(self, columns: List[str], data: List, row_count: int) -> bool:
-        """
-        判断数据是否适合生成图表
-        
-        条件：
-        - 至少有 2 列数据
-        - 至少有 2 行数据
-        - 数据行数不超过 100 行（过多数据图表不直观）
-        """
-        if len(columns) < 2:
-            return False
-        if row_count < 2:
-            return False
-        if row_count > 100:
-            return False
-        return True
-    
-    async def _generate_chart_config(
-        self, 
-        columns: List[str], 
-        data: List,
-        state: SQLMessageState
-    ) -> Dict[str, Any]:
-        """
-        生成 Recharts 图表配置
-        
-        P2.2 升级: 支持意图驱动的图表选择
-        
-        策略：
-        1. 首先检查 analysis_intent，优先使用意图推荐
-        2. 然后使用规则推断图表类型
-        3. 如果规则无法确定，使用 LLM 推荐
-        """
-        # 分析列类型
-        column_types = self._analyze_column_types(columns, data)
-        
-        # P2.2: 获取分析意图
-        analysis_intent = state.get("analysis_intent")
-        
-        # 规则推断图表类型（结合意图）
-        chart_type = self._infer_chart_type(column_types, columns, data, analysis_intent)
-        
-        # 选择 X 轴和 Y 轴
-        x_axis, y_axes = self._select_axes(column_types, columns)
-        
-        config = {
-            "type": chart_type,
-            "xAxis": x_axis,
-            "yAxis": y_axes[0] if y_axes else x_axis,
-            "dataKey": y_axes[0] if y_axes else columns[1] if len(columns) > 1 else columns[0],
-            "xDataKey": x_axis,
-            "series": [{"dataKey": y, "name": y} for y in y_axes[:3]],  # 最多3个系列
-            "legend": len(y_axes) > 1
-        }
-        
-        # P2.2: 添加意图信息到配置
-        if analysis_intent:
-            config["intent"] = analysis_intent
-            logger.info(f"意图驱动图表选择: intent={analysis_intent} -> type={chart_type}")
-        
-        return config
-    
-    def _analyze_column_types(self, columns: List[str], data: List) -> Dict[str, str]:
-        """
-        分析列的数据类型
-        
-        返回：
-        - numeric: 数值类型
-        - category: 分类类型
-        - date: 日期类型
-        """
-        column_types = {}
-        
-        if not data:
-            return {col: "category" for col in columns}
-        
-        # 获取第一行数据用于类型推断
-        first_row = data[0] if data else {}
-        if isinstance(first_row, list) and len(first_row) == len(columns):
-            first_row = dict(zip(columns, first_row))
-        
-        for col in columns:
-            col_lower = col.lower()
-            
-            # 检测日期列
-            if any(kw in col_lower for kw in ['date', 'time', '日期', '时间', 'day', 'month', 'year', '年', '月', '日']):
-                column_types[col] = "date"
-                continue
-            
-            # 检测分类列
-            if any(kw in col_lower for kw in ['name', 'type', 'category', '名称', '类型', '分类', 'id', 'status', '状态']):
-                column_types[col] = "category"
-                continue
-            
-            # 检查数据值
-            value = first_row.get(col) if isinstance(first_row, dict) else None
-            if isinstance(value, (int, float)):
-                column_types[col] = "numeric"
-            else:
-                column_types[col] = "category"
-        
-        return column_types
-    
-    def _infer_chart_type(
-        self, 
-        column_types: Dict[str, str], 
-        columns: List[str],
-        data: List,
-        analysis_intent: Optional[str] = None
-    ) -> str:
-        """
-        基于规则推断最合适的图表类型
-        
-        P2.2 升级: 支持意图驱动的图表选择
-        
-        优先级：
-        1. 如果有 analysis_intent，优先使用意图推荐
-        2. 然后根据数据特征进行规则推断
-        """
-        date_cols = [c for c, t in column_types.items() if t == "date"]
-        numeric_cols = [c for c, t in column_types.items() if t == "numeric"]
-        category_cols = [c for c, t in column_types.items() if t == "category"]
-        
-        row_count = len(data)
-        
-        # P2.2: 意图驱动的图表选择
-        if analysis_intent and analysis_intent in INTENT_CHART_MAP:
-            preferred_types = INTENT_CHART_MAP[analysis_intent]
-            
-            # 根据数据特征从推荐列表中选择最合适的
-            for chart_type in preferred_types:
-                if chart_type == "line" and (date_cols or row_count > 5):
-                    return "line"
-                if chart_type == "area" and date_cols:
-                    return "area"
-                if chart_type == "bar" and row_count <= 15:
-                    return "bar"
-                if chart_type == "pie" and row_count <= 8 and len(numeric_cols) >= 1:
-                    return "pie"
-                if chart_type == "scatter" and len(numeric_cols) >= 2:
-                    return "scatter"
-            
-            # 如果没有完美匹配，使用推荐列表的第一个
-            logger.info(f"意图 {analysis_intent} 推荐图表: {preferred_types[0]}")
-            return preferred_types[0]
-        
-        # 原有规则推断逻辑
-        # 有日期列 → 折线图
-        if date_cols and numeric_cols:
-            return "line"
-        
-        # 分类少于 8 个 → 柱状图
-        if category_cols and numeric_cols and row_count <= 8:
-            return "bar"
-        
-        # 只有一个数值列且分类少于 6 个 → 饼图
-        if len(numeric_cols) == 1 and category_cols and row_count <= 6:
-            return "pie"
-        
-        # 数据较多 → 折线图
-        if row_count > 15:
-            return "line"
-        
-        # 默认柱状图
-        return "bar"
-    
-    def _select_axes(
-        self, 
-        column_types: Dict[str, str], 
-        columns: List[str]
-    ) -> tuple:
-        """
-        选择 X 轴和 Y 轴
-        
-        返回：(x_axis, [y_axes])
-        """
-        date_cols = [c for c, t in column_types.items() if t == "date"]
-        numeric_cols = [c for c, t in column_types.items() if t == "numeric"]
-        category_cols = [c for c, t in column_types.items() if t == "category"]
-        
-        # X 轴选择优先级：日期 > 分类 > 第一列
-        if date_cols:
-            x_axis = date_cols[0]
-        elif category_cols:
-            x_axis = category_cols[0]
-        else:
-            x_axis = columns[0]
-        
-        # Y 轴选择数值列
-        y_axes = [c for c in numeric_cols if c != x_axis]
-        
-        # 如果没有数值列，选择非 X 轴的列
-        if not y_axes:
-            y_axes = [c for c in columns if c != x_axis]
-        
-        return x_axis, y_axes
-    
-    async def generate_chart(self, state: SQLMessageState) -> Dict[str, Any]:
-        """生成图表（保留原有方法，向后兼容）"""
-        return await self.process(state)
 
 
 # 创建全局实例

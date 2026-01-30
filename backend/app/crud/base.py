@@ -31,12 +31,23 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
     ) -> List[ModelType]:
         return db.query(self.model).offset(skip).limit(limit).all()
 
-    def create(self, db: Session, *, obj_in: CreateSchemaType) -> ModelType:
+    def create(
+        self,
+        db: Session,
+        *,
+        obj_in: CreateSchemaType,
+        commit: bool = True,
+        refresh: bool = True,
+    ) -> ModelType:
         obj_in_data = jsonable_encoder(obj_in)
         db_obj = self.model(**obj_in_data)
         db.add(db_obj)
-        db.commit()
-        db.refresh(db_obj)
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+        if refresh:
+            db.refresh(db_obj)
         return db_obj
 
     def update(
@@ -44,7 +55,9 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
         db: Session,
         *,
         db_obj: ModelType,
-        obj_in: Union[UpdateSchemaType, Dict[str, Any]]
+        obj_in: Union[UpdateSchemaType, Dict[str, Any]],
+        commit: bool = True,
+        refresh: bool = True,
     ) -> ModelType:
         obj_data = jsonable_encoder(db_obj)
         if isinstance(obj_in, dict):
@@ -55,12 +68,19 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
             if field in update_data:
                 setattr(db_obj, field, update_data[field])
         db.add(db_obj)
-        db.commit()
-        db.refresh(db_obj)
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+        if refresh:
+            db.refresh(db_obj)
         return db_obj
 
-    def remove(self, db: Session, *, id: int) -> ModelType:
+    def remove(self, db: Session, *, id: int, commit: bool = True) -> ModelType:
         obj = db.query(self.model).get(id)
         db.delete(obj)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         return obj

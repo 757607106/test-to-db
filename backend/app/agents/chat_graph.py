@@ -1,630 +1,501 @@
 """
-智能 SQL 代理图 - Hub-and-Spoke 架构
+智能SQL代理图 - 高级接口和图构建
 
-遵循 LangGraph 官方 Supervisor 模式:
-- Supervisor 作为中心枢纽，所有 Worker Agent 向 Supervisor 报告
-- Supervisor 统一决策和汇总结果
-- 支持澄清机制 (interrupt) 和三级缓存
-
-P2 新增: 智能规划
-- 查询规划节点：分析意图、分类查询、生成执行计划
-- 智能路由：根据查询类型选择最佳处理路径
-
-P3 新增: 可观测性
-- 请求追踪 (trace_id)
-- LangSmith 集成
-- 性能监控
-
-图结构:
-    START → supervisor → [planning] → [Worker Agents] → supervisor → ... → FINISH
+增强功能：
+- 意图识别与路由
+- Dashboard Insight 支持
+- 澄清机制集成
+- 多轮对话上下文改写
+- QA 样本检索增强（可配置）
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional, Literal, List
 import logging
 
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage, BaseMessage
 
 from app.core.state import SQLMessageState
-from app.core.tracing import (
-    TraceContext,
-    generate_trace_id,
-    get_trace_id,
-    inject_trace_to_state,
-    extract_trace_from_state,
+from app.agents.agents.supervisor_agent import create_intelligent_sql_supervisor
+from app.agents.agents.intent_detection_agent import (
+    detect_intent_fast,
+    detect_intent,
+    IntentResult,
+    QueryType,
 )
-from app.models.agent_profile import AgentProfile
-
-# 导入统一的 Worker 节点
-from app.agents.nodes.worker_nodes import (
-    schema_agent_node,
-    sql_generator_node,
-    sql_executor_node,
-    data_analyst_node,
-    chart_generator_node,
-    error_recovery_node,
-    general_chat_node,
-    clarification_node_wrapper,
+from app.agents.utils.context_rewriter import (
+    process_context_rewrite,
+    is_follow_up_query,
 )
-
-# 导入兜底响应节点
-from app.agents.nodes.fallback_response_node import fallback_response_node
-
-# P2: 导入规划节点
-from app.agents.nodes.query_planning_node import query_planning_node
-# P2.1: 导入结果聚合节点
-from app.agents.nodes.result_aggregator_node import result_aggregator_node
+from app.agents.utils.skill_routing import (
+    SkillRoutingResult,
+    perform_skill_routing,
+    format_skill_context_for_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# Supervisor 节点
-# ============================================================================
-
-async def supervisor_node(state: SQLMessageState) -> Dict[str, Any]:
-    """
-    Supervisor 中心节点
-    
-    职责:
-    - 检测新消息并重置状态
-    - P2.1: 多步执行循环 - 管理子任务的顺序执行
-    - 汇总各 Agent 的执行结果
-    """
-    current_stage = state.get("current_stage", "init")
-    trace_id = extract_trace_from_state(state) or "-"
-    
-    # 检测是否有新的用户消息需要处理
-    if current_stage in ["completed", "recommendation_done"]:
-        messages = state.get("messages", [])
-        if messages:
-            last_msg = messages[-1]
-            is_human_message = _is_human_message(last_msg)
-            
-            if is_human_message:
-                logger.info(f"[{trace_id}] [Supervisor] 检测到新的用户消息，重置状态")
-                return {
-                    "current_stage": "init",
-                    "execution_result": None,
-                    "generated_sql": None,
-                    "analyst_insights": None,
-                    "chart_config": None,
-                    "recommended_questions": [],
-                    "final_response": None,
-                    "cache_hit": False,
-                    "thread_history_hit": False,
-                    "enriched_query": None,
-                    "original_query": None,
-                    "schema_info": None,
-                    # P2.1: 重置多步执行状态
-                    "multi_step_mode": False,
-                    "current_sub_task_index": 0,
-                    "sub_task_results": [],
-                    "multi_step_completed": False,
-                }
-    
-    # P2.1: 多步执行循环处理
-    if state.get("multi_step_mode") and current_stage == "execution_done":
-        return _handle_multi_step_execution(state)
-    
-    # 如果推荐完成或已完成，构造最终响应
-    if current_stage in ["recommendation_done", "completed"]:
-        return _aggregate_results(state)
-    
-    return {}
-
-
-def _is_human_message(msg: Any) -> bool:
-    """判断消息是否为用户消息"""
-    if hasattr(msg, 'type'):
-        return msg.type == "human"
-    if isinstance(msg, dict):
-        return msg.get("type") == "human"
-    if hasattr(msg, '__class__'):
-        return msg.__class__.__name__ == "HumanMessage"
-    return False
-
-
-def _handle_multi_step_execution(state: SQLMessageState) -> Dict[str, Any]:
-    """
-    P2.1: 处理多步执行循环
-    
-    每次子任务执行完成后:
-    1. 保存当前子任务的结果
-    2. 检查是否还有下一个子任务
-    3. 如果有，准备下一个子任务并返回 schema_agent
-    4. 如果没有，标记多步完成并进入聚合
-    """
-    query_plan = state.get("query_plan", {})
-    sub_tasks = query_plan.get("sub_tasks", [])
-    current_index = state.get("current_sub_task_index", 0)
-    sub_task_results = state.get("sub_task_results", []).copy()
-    
-    # 保存当前子任务结果
-    current_result = {
-        "task_index": current_index,
-        "task_id": sub_tasks[current_index]["id"] if current_index < len(sub_tasks) else f"task_{current_index}",
-        "task_query": sub_tasks[current_index]["query"] if current_index < len(sub_tasks) else None,
-        "sql": state.get("generated_sql"),
-        "execution_result": _serialize_execution_result(state.get("execution_result")),
-    }
-    sub_task_results.append(current_result)
-    
-    next_index = current_index + 1
-    
-    # 检查是否有更多子任务（排除聚合任务）
-    executable_tasks = [t for t in sub_tasks if t["id"] != "task_aggregate"]
-    
-    if next_index < len(executable_tasks):
-        # 还有下一个子任务
-        next_task = executable_tasks[next_index]
-        logger.info(f"[Supervisor] 多步执行: 切换到子任务 {next_index + 1}/{len(executable_tasks)}: {next_task['query'][:50]}...")
-        
-        return {
-            "current_sub_task_index": next_index,
-            "sub_task_results": sub_task_results,
-            # 重置单步执行状态
-            "current_stage": "multi_step_next",  # 特殊阶段，路由到 schema_agent
-            "generated_sql": None,
-            "execution_result": None,
-            "schema_info": None,
-            # 替换查询为子任务查询
-            "enriched_query": next_task["query"],
-        }
-    else:
-        # 所有子任务完成
-        logger.info(f"[Supervisor] 多步执行完成: 共 {len(sub_task_results)} 个子任务")
-        
-        return {
-            "current_sub_task_index": next_index,
-            "sub_task_results": sub_task_results,
-            "multi_step_completed": True,
-            "current_stage": "multi_step_done",  # 进入聚合阶段
-        }
-
-
-def _serialize_execution_result(result: Any) -> Optional[Dict[str, Any]]:
-    """序列化执行结果为字典"""
-    if result is None:
-        return None
-    if isinstance(result, dict):
-        return result
-    if hasattr(result, '__dict__'):
-        return {
-            "success": getattr(result, 'success', True),
-            "data": getattr(result, 'data', None),
-            "error": getattr(result, 'error', None),
-        }
-    return {"data": result}
-
-
-def _aggregate_results(state: SQLMessageState) -> Dict[str, Any]:
-    """汇总所有执行结果"""
-    execution_result = state.get("execution_result")
-    data = None
-    if execution_result:
-        if hasattr(execution_result, 'data'):
-            data = execution_result.data
-        elif isinstance(execution_result, dict):
-            data = execution_result.get("data")
-    
-    final_response = {
-        "success": state.get("current_stage") not in ["error_recovery", "error"],
-        "query": state.get("enriched_query") or state.get("original_query"),
-        "sql": state.get("generated_sql"),
-        "data": data,
-        "analysis": state.get("analyst_insights"),
-        "chart": state.get("chart_config"),
-        "recommendations": state.get("recommended_questions", []),
-        "source": _determine_source(state),
-        "metadata": {
-            "connection_id": state.get("connection_id"),
-            "cache_hit_type": state.get("cache_hit_type"),
-            "fast_mode": state.get("fast_mode", False),
-            "retry_count": state.get("retry_count", 0)
-        }
-    }
-    
-    if not final_response["success"]:
-        error_history = state.get("error_history", [])
-        if error_history:
-            final_response["error"] = error_history[-1].get("error", "Unknown error")
-    
-    logger.info("[Supervisor] 结果汇总完成")
-    
-    return {
-        "final_response": final_response,
-        "current_stage": "completed"
-    }
-
-
-def _determine_source(state: SQLMessageState) -> str:
-    """确定结果来源"""
-    if state.get("thread_history_hit"):
-        return "thread_history_cache"
-    if state.get("cache_hit"):
-        return f"{state.get('cache_hit_type', 'exact')}_cache"
-    return "generated"
-
-
-# ============================================================================
-# 路由函数
-# ============================================================================
-
-# 阶段路由映射表
-STAGE_ROUTES = {
-    "init": "query_planning",           # P2: 先进行查询规划
-    "planning_done": "schema_agent",    # 规划完成后进入 schema 分析（简化流程跳过澄清）
-    "schema_done": "clarification",     # Schema 完成后进入澄清（非简化流程）
-    "clarification_done": "sql_generator",
-    "schema_analysis": "sql_generator",
-    "sql_generation": "sql_generator",  # ✅ 修复：错误恢复后重新生成 SQL
-    "sql_generated": "sql_executor",
-    "execution_done": "data_analyst",
-    "chart_done": "recommendation",
-    # P2.1: 多步执行路由
-    "multi_step_next": "schema_agent",  # 下一个子任务
-    "multi_step_done": "result_aggregator",  # 所有子任务完成，进入聚合
+# ===== QA 样本检索配置 =====
+# 默认配置（当数据库配置不可用时使用）
+QA_SAMPLE_CONFIG_DEFAULT = {
+    "enabled": True,  # 全局开关：是否启用 QA 样本检索
+    "top_k": 3,  # 最多检索的样本数量
+    "min_similarity": 0.6,  # 最低相似度阈值
+    "timeout_seconds": 5,  # 检索超时时间
 }
 
 
-def supervisor_route(state: SQLMessageState) -> str:
-    """
-    Supervisor 路由决策
-    
-    基于 current_stage 和状态标志决定下一个节点。
-    P2 新增: 支持智能规划路由
-    P2.1 新增: 支持多步执行路由
-    Phase 4 优化: 简化流程支持
-    """
-    from app.core.config import settings
-    
-    current_stage = state.get("current_stage", "init")
-    route_decision = state.get("route_decision")
-    logger.info(f"[Route] 当前阶段: {current_stage}, 路由决策: {route_decision}")
-    
-    # 完成状态检查
-    if current_stage in ["completed", "recommendation_done"]:
-        logger.info("[Route] 已完成 → FINISH")
-        return "FINISH"
-    
-    # P2: 基于规划的路由决策
-    if route_decision == "general_chat":
-        logger.info("[Route] 规划决策 → general_chat")
-        return "general_chat"
-    
-    # 闲聊检测 (仅在初始阶段，作为 fallback)
-    if current_stage == "init" and not state.get("query_plan"):
-        if _is_general_chat(state):
-            logger.info("[Route] 检测到闲聊 → general_chat")
-            return "general_chat"
-    
-    # 缓存命中检查
-    if state.get("thread_history_hit") or state.get("cache_hit"):
-        logger.info("[Route] 缓存命中 → FINISH")
-        return "FINISH"
-    
-    # 错误恢复检查
-    if current_stage == "error_recovery":
-        retry_count = state.get("retry_count", 0)
-        max_retries = state.get("max_retries", 3)
-        if retry_count >= max_retries:
-            logger.info(f"[Route] 达到重试上限 ({retry_count}/{max_retries}) → FINISH")
-            return "FINISH"
+def get_qa_sample_config() -> Dict[str, Any]:
+    """从数据库获取 QA 样本检索配置，失败时使用默认值"""
+    try:
+        from app.db.session import SessionLocal
+        from app.crud import system_config
         
-        # ✅ 关键修复：检查错误类型，如果是 Schema 相关错误，重新执行 schema_agent
-        error_recovery_context = state.get("error_recovery_context") or {}
-        error_type = error_recovery_context.get("error_type", "")
-        error_msg = (error_recovery_context.get("error_message") or "").lower()
+        db = SessionLocal()
+        try:
+            config = system_config.get_qa_sample_config(db)
+            logger.debug(f"[QA配置] 从数据库获取: {config}")
+            return config
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"[QA配置] 无法从数据库获取配置: {e}, 使用默认值")
+        return QA_SAMPLE_CONFIG_DEFAULT
+
+
+async def retrieve_qa_samples(
+    query: str,
+    connection_id: int,
+    schema_context: Dict[str, Any],
+    config: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    QA 样本检索 - 可配置的轻量级检索
+    
+    Args:
+        query: 用户查询
+        connection_id: 数据库连接 ID（按连接隔离样本）
+        schema_context: 模式上下文
+        config: 可选的配置覆盖
         
-        # 检测是否是列名验证失败（这是最常见的幻觉错误）
-        is_column_validation_error = (
-            error_type == "column_validation_failed" or
-            "列名验证失败" in error_msg or
-            "column_validation" in error_type
+    Returns:
+        样本检索结果，包含 qa_pairs 列表
+    """
+    import asyncio
+    
+    # 从数据库获取配置
+    cfg = config or get_qa_sample_config()
+    
+    # 检查是否启用
+    if not cfg.get("enabled", True):
+        logger.debug("QA 样本检索已禁用")
+        return {"qa_pairs": [], "enabled": False}
+    
+    try:
+        from app.services.hybrid_retrieval.engine.engine_pool import HybridRetrievalEnginePool
+        
+        logger.info(f"[QA样本检索] 开始检索 - connection_id={connection_id}, query='{query[:50]}...'")
+        
+        # 使用超时保护
+        timeout = cfg.get("timeout_seconds", 5)
+        qa_samples = await asyncio.wait_for(
+            HybridRetrievalEnginePool.quick_retrieve(
+                user_query=query,
+                schema_context=schema_context,
+                connection_id=connection_id,
+                top_k=cfg.get("top_k", 3),
+                min_similarity=cfg.get("min_similarity", 0.6)
+            ),
+            timeout=timeout
         )
         
-        # 检测是否是 Schema 相关错误（表名/列名不存在）- 包括 SQL 执行时的错误
-        is_schema_error = (
-            "unknown column" in error_msg or
-            "doesn't exist" in error_msg or
-            "unknown table" in error_msg or
-            "no such table" in error_msg or
-            "no such column" in error_msg or
-            "in 'field list'" in error_msg  # MySQL 特有的列名错误提示
-        )
+        logger.info(f"[QA样本检索] ✓ 完成 - 找到 {len(qa_samples)} 个高质量样本")
         
-        # ✅ 关键修复：列名验证失败或 SQL 执行时的列名错误，直接重试 sql_generator
-        # 因为 schema 是正确的，只是 LLM 生成了错误的列名
-        if is_column_validation_error or (is_schema_error and error_recovery_context.get("available_columns_hint")):
-            logger.info(f"[Route] 列名错误，重试 sql_generator ({retry_count}/{max_retries})")
-            logger.info(f"[Route] 错误上下文中包含正确列名信息: {bool(error_recovery_context.get('available_columns_hint'))}")
-            return "sql_generator"
-        
-        if is_schema_error and retry_count <= 1:
-            # 第一次重试时，重新执行 schema_agent 获取完整表列表
-            logger.info(f"[Route] 检测到 Schema 错误，重新执行 schema_agent ({retry_count}/{max_retries})")
-            return "schema_agent"
-        
-        logger.info(f"[Route] 错误恢复 ({retry_count}/{max_retries}) → sql_generator")
-        return "sql_generator"
-    
-    # ==========================================
-    # Phase 4: 简化流程 - 跳过澄清节点
-    # ==========================================
-    if current_stage == "schema_done":
-        if settings.SIMPLIFIED_FLOW_ENABLED:
-            logger.info("[Route] 简化流程: schema_done → sql_generator")
-            return "sql_generator"
-    
-    # 分析完成后的路由（检查是否跳过图表）
-    if current_stage == "analysis_done":
-        if state.get("skip_chart_generation"):
-            return "recommendation"
-        return "chart_generator"
-    
-    # 基于映射表路由
-    next_agent = STAGE_ROUTES.get(current_stage, "FINISH")
-    logger.info(f"[Route] {current_stage} → {next_agent}")
-    return next_agent
-
-
-def _is_general_chat(state: SQLMessageState) -> bool:
-    """检测是否为闲聊"""
-    messages = state.get("messages", [])
-    if not messages:
-        return False
-    
-    last_msg = messages[-1]
-    if hasattr(last_msg, 'content'):
-        content = last_msg.content
-    elif isinstance(last_msg, dict):
-        content = last_msg.get('content', '')
-    else:
-        content = str(last_msg)
-    
-    if isinstance(content, list):
-        content = ' '.join(str(c) for c in content)
-    content = str(content) if content else ''
-    
-    chat_keywords = ["你好", "谢谢", "帮助", "你是谁", "hello", "hi", "thanks"]
-    return any(kw in content.lower() for kw in chat_keywords)
-
-
-# ============================================================================
-# 图构建
-# ============================================================================
-
-def create_hub_spoke_graph(checkpointer: Any = None) -> CompiledStateGraph:
-    """
-    创建 Hub-and-Spoke 架构的图
-    
-    P2 新增: 查询规划节点 (query_planning)
-    
-    注意: 不传入 checkpointer，由 LangGraph API 框架在运行时自动管理。
-    """
-    from app.agents.nodes.question_recommendation_node import question_recommendation_node
-    
-    logger.info("创建 Hub-and-Spoke 图 (P2: 含智能规划)...")
-    
-    graph = StateGraph(SQLMessageState)
-    
-    # 添加节点
-    graph.add_node("supervisor", supervisor_node)
-    graph.add_node("query_planning", query_planning_node)  # P2: 查询规划节点
-    graph.add_node("schema_agent", schema_agent_node)
-    graph.add_node("sql_generator", sql_generator_node)
-    graph.add_node("sql_executor", sql_executor_node)
-    graph.add_node("data_analyst", data_analyst_node)
-    graph.add_node("chart_generator", chart_generator_node)
-    graph.add_node("error_recovery", error_recovery_node)
-    graph.add_node("general_chat", general_chat_node)
-    graph.add_node("clarification", clarification_node_wrapper)
-    graph.add_node("recommendation", question_recommendation_node)
-    graph.add_node("result_aggregator", result_aggregator_node)  # P2.1: 结果聚合节点
-    graph.add_node("fallback_response", fallback_response_node)  # 兜底响应节点
-    
-    # 入口点
-    graph.set_entry_point("supervisor")
-    
-    # Hub-and-Spoke: 所有 Worker 返回 Supervisor
-    worker_nodes = [
-        "query_planning",  # P2: 规划节点也返回 supervisor
-        "schema_agent", "sql_generator", "sql_executor",
-        "data_analyst", "chart_generator", "error_recovery",
-        "general_chat", "clarification", "recommendation",
-        "result_aggregator",  # P2.1: 结果聚合节点
-        "fallback_response",  # 兜底响应节点
-    ]
-    for node in worker_nodes:
-        graph.add_edge(node, "supervisor")
-    
-    # Supervisor 条件路由
-    graph.add_conditional_edges(
-        "supervisor",
-        supervisor_route,
-        {
-            "query_planning": "query_planning",  # P2: 查询规划
-            "schema_agent": "schema_agent",
-            "sql_generator": "sql_generator",
-            "sql_executor": "sql_executor",
-            "data_analyst": "data_analyst",
-            "chart_generator": "chart_generator",
-            "error_recovery": "error_recovery",
-            "general_chat": "general_chat",
-            "clarification": "clarification",
-            "recommendation": "recommendation",
-            "result_aggregator": "result_aggregator",  # P2.1: 结果聚合
-            "fallback_response": "fallback_response",  # 兜底响应
-            "FINISH": END
+        return {
+            "qa_pairs": qa_samples,
+            "enabled": True,
+            "connection_id": connection_id,
+            "count": len(qa_samples)
         }
-    )
+        
+    except asyncio.TimeoutError:
+        logger.warning(f"[QA样本检索] ⚠ 超时 ({cfg.get('timeout_seconds', 5)}s)")
+        return {"qa_pairs": [], "enabled": True, "timeout": True}
+        
+    except Exception as e:
+        logger.warning(f"[QA样本检索] ⚠ 检索失败: {e}")
+        return {"qa_pairs": [], "enabled": True, "error": str(e)}
+
+
+def extract_connection_id_from_messages(messages) -> int:
+    """从消息中提取连接ID"""
+    connection_id = 15  # 默认值
+
+    # 查找最新的人类消息中的连接ID
+    for message in reversed(messages):
+        if hasattr(message, 'type') and message.type == 'human':
+            if hasattr(message, 'additional_kwargs') and message.additional_kwargs:
+                msg_connection_id = message.additional_kwargs.get('connection_id')
+                if msg_connection_id:
+                    connection_id = msg_connection_id
+                    break
+
+    return connection_id
+
+
+def extract_user_query(state: SQLMessageState) -> str:
+    """从状态中提取用户查询"""
+    # 优先使用 enriched_query（多轮对话改写后的查询）
+    if state.get("enriched_query"):
+        return state["enriched_query"]
     
-    if checkpointer is None:
-        compiled = graph.compile()
-    else:
-        compiled = graph.compile(checkpointer=checkpointer)
-    logger.info("Hub-and-Spoke 图创建完成 (P2: 含智能规划)")
-    return compiled
+    # 从消息中获取
+    messages = state.get("messages", [])
+    for msg in reversed(messages):
+        if hasattr(msg, 'type') and msg.type == 'human':
+            content = msg.content
+            if isinstance(content, list):
+                content = content[0].get("text", "") if content else ""
+            return content
+    
+    return ""
 
-
-# ============================================================================
-# 主图类
-# ============================================================================
 
 class IntelligentSQLGraph:
     """
-    智能 SQL 代理图 - Hub-and-Spoke 架构
+    智能SQL代理图 - 高级接口
     
-    保持与原有架构的 API 兼容。
+    功能：
+    - 意图识别：自动检测查询类型并路由
+    - SQL 处理：使用 supervisor 协调 SQL 生成/验证/执行
+    - Dashboard Insight：支持仪表盘洞察分析
+    - 澄清机制：支持查询澄清和确认
+    - 自定义 Agent：支持用户配置的自定义数据分析 Agent
     """
-    
+
     def __init__(
         self, 
-        active_agent_profiles: List[AgentProfile] = None,
-        custom_analyst=None,
-        use_default_checkpointer: bool = True
+        enable_clarification: bool = True,
+        custom_analyst_id: Optional[int] = None
     ):
-        self.graph = create_hub_spoke_graph()
-        self._initialized = True
-        self._use_default_checkpointer = use_default_checkpointer
-        self._active_agent_profiles = active_agent_profiles
-        self._custom_analyst = custom_analyst
-    
-    async def _ensure_initialized(self):
-        """确保已初始化"""
-        if not self._initialized:
-            self.graph = create_hub_spoke_graph()
-            self._initialized = True
+        """
+        初始化智能SQL图
+        
+        Args:
+            enable_clarification: 是否启用澄清机制
+            custom_analyst_id: 自定义数据分析 Agent ID（可选）
+        """
+        self.enable_clarification = enable_clarification
+        self.custom_analyst_id = custom_analyst_id
+        self.supervisor_agent = create_intelligent_sql_supervisor(
+            enable_clarification, 
+            custom_analyst_id
+        )
+        self.graph = self.supervisor_agent.supervisor
+        self._dashboard_graph = None
 
-    def _create_graph_sync(self, checkpointer: Any = None) -> CompiledStateGraph:
-        self.graph = create_hub_spoke_graph(checkpointer=checkpointer)
-        self._initialized = True
-        return self.graph
+    @property
+    def dashboard_graph(self):
+        """延迟加载 Dashboard Insight 图"""
+        if self._dashboard_graph is None:
+            try:
+                from app.agents.dashboard_insight_graph import create_dashboard_insight_graph
+                self._dashboard_graph = create_dashboard_insight_graph()
+            except ImportError as e:
+                logger.warning(f"Dashboard Insight 图不可用: {e}")
+        return self._dashboard_graph
 
-    def _after_thread_history_check(self, state: SQLMessageState) -> str:
-        if state.get("thread_history_hit"):
-            return "end"
-        return "cache_check"
+    async def detect_intent(self, query: str) -> IntentResult:
+        """
+        检测查询意图
+        
+        Args:
+            query: 用户查询
+            
+        Returns:
+            IntentResult: 意图识别结果
+        """
+        # 先尝试快速检测
+        fast_result = detect_intent_fast(query)
+        if fast_result:
+            logger.info(f"快速意图检测: {fast_result.query_type.value} -> {fast_result.route}")
+            return fast_result
+        
+        # 使用 LLM 深度分析
+        result = await detect_intent(query)
+        logger.info(f"LLM 意图检测: {result.query_type.value} -> {result.route}")
+        return result
 
-    def _after_cache_check(self, state: SQLMessageState) -> str:
-        if state.get("cache_hit") and state.get("cache_hit_type") == "exact":
-            return "end"
-        return "clarification"
-    
     async def process_query(
-        self,
-        query: str,
-        connection_id: Optional[int] = None,
-        thread_id: Optional[str] = None,
-        tenant_id: Optional[int] = None,
-        trace_id: Optional[str] = None
+        self, 
+        query: str, 
+        connection_id: int = 15,
+        messages: Optional[List[BaseMessage]] = None,
+        agent_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        处理 SQL 查询
+        处理SQL查询（带意图路由和多轮对话改写）
         
         Args:
             query: 用户查询
             connection_id: 数据库连接ID
-            thread_id: 会话线程ID
-            tenant_id: 租户ID (多租户隔离)
-            trace_id: 追踪ID (用于日志关联和 LangSmith)
+            messages: 消息历史（用于多轮对话上下文改写）
+            agent_id: 自定义数据分析 Agent ID（可选，覆盖实例配置）
+            
+        Returns:
+            处理结果
         """
-        # 生成或使用传入的 trace_id
-        trace_id = trace_id or generate_trace_id()
+        # 如果传入了 agent_id，且与实例配置不同，需要重新创建 supervisor
+        effective_agent_id = agent_id if agent_id is not None else self.custom_analyst_id
+        if effective_agent_id != self.custom_analyst_id:
+            logger.info(f"使用自定义数据分析 Agent: id={effective_agent_id}")
+            self.custom_analyst_id = effective_agent_id
+            self.supervisor_agent = create_intelligent_sql_supervisor(
+                self.enable_clarification,
+                effective_agent_id
+            )
+            self.graph = self.supervisor_agent.supervisor
         
         try:
-            from uuid import uuid4
+            # 0. 多轮对话上下文改写
+            enriched_query = query
+            query_rewritten = False
             
-            await self._ensure_initialized()
+            if messages and len(messages) > 1:
+                rewrite_result = await process_context_rewrite(
+                    query=query,
+                    messages=messages,
+                    connection_id=connection_id
+                )
+                enriched_query = rewrite_result["enriched_query"]
+                query_rewritten = rewrite_result["query_rewritten"]
+                
+                if query_rewritten:
+                    logger.info(f"多轮对话改写: '{query}' → '{enriched_query}'")
             
-            if thread_id is None:
-                thread_id = str(uuid4())
-                logger.info(f"[{trace_id}] 生成新的 thread_id: {thread_id}")
+            # 1. 意图识别（使用改写后的查询）
+            intent = await self.detect_intent(enriched_query)
+            logger.info(f"意图识别结果: {intent.query_type.value}, 路由: {intent.route}")
             
-            initial_state = {
-                "messages": [HumanMessage(content=query)],
-                "connection_id": connection_id,
-                "thread_id": thread_id,
-                "tenant_id": tenant_id,
-                "current_stage": "init",
-                "retry_count": 0,
-                "max_retries": 3,
-                "error_history": [],
-                "trace_id": trace_id,  # P3: 添加追踪ID
-                "context": {
-                    "connectionId": connection_id,
-                    "tenantId": tenant_id,
-                    "traceId": trace_id
-                }
+            # 2. 根据意图路由
+            if intent.route == "general_chat":
+                return await self._handle_general_chat(enriched_query, intent)
+            
+            elif intent.route == "dashboard_insight":
+                return await self._handle_dashboard_insight(enriched_query, connection_id, intent)
+            
+            else:  # sql_supervisor
+                result = await self._handle_sql_query(enriched_query, connection_id, intent)
+                # 添加改写信息
+                result["original_query"] = query
+                result["enriched_query"] = enriched_query
+                result["query_rewritten"] = query_rewritten
+                return result
+                
+        except Exception as e:
+            logger.error(f"处理查询失败: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "final_stage": "error"
             }
-            
-            # 注入追踪信息
-            initial_state = inject_trace_to_state(initial_state)
-            
-            config = {"configurable": {"thread_id": thread_id}}
-            
-            logger.info(f"[{trace_id}] 开始处理查询: {query[:50]}...")
-            result = await self.graph.ainvoke(initial_state, config=config)
-            logger.info(f"[{trace_id}] 查询处理完成: stage={result.get('current_stage')}")
+
+    async def _handle_general_chat(
+        self, 
+        query: str, 
+        intent: IntentResult
+    ) -> Dict[str, Any]:
+        """处理闲聊类查询"""
+        logger.info("处理闲聊查询")
+        
+        # 简单的闲聊响应
+        chat_responses = {
+            "你好": "你好！我是智能数据查询助手，可以帮你查询数据库中的数据，生成 SQL，或者分析数据趋势。有什么可以帮到你的？",
+            "hello": "Hello! I'm an intelligent data query assistant. How can I help you today?",
+            "hi": "Hi! How can I assist you with your data queries?",
+            "帮助": "我可以帮你：\n1. 用自然语言查询数据库\n2. 生成和执行 SQL\n3. 分析数据趋势和洞察\n4. 生成数据可视化图表\n\n请告诉我你想查询什么数据？",
+            "功能": "我的主要功能包括：\n- 🔍 智能 SQL 生成\n- ✅ SQL 验证和优化\n- 📊 数据可视化\n- 📈 Dashboard 洞察分析\n- 💬 多轮对话支持",
+        }
+        
+        query_lower = query.lower().strip()
+        response = chat_responses.get(query_lower, "请告诉我你想查询什么数据？例如：'查询上月销售额' 或 '显示客户订单趋势'")
+        
+        return {
+            "success": True,
+            "result": {
+                "response": response,
+                "query_type": intent.query_type.value,
+            },
+            "final_stage": "completed",
+            "is_chat": True
+        }
+
+    async def _handle_dashboard_insight(
+        self, 
+        query: str, 
+        connection_id: int,
+        intent: IntentResult
+    ) -> Dict[str, Any]:
+        """处理 Dashboard 洞察分析"""
+        logger.info("处理 Dashboard Insight 查询")
+        
+        if self.dashboard_graph is None:
+            # 如果 Dashboard 图不可用，回退到普通 SQL 查询
+            logger.warning("Dashboard Insight 不可用，回退到 SQL 查询")
+            return await self._handle_sql_query(query, connection_id, intent)
+        
+        try:
+            # 调用 Dashboard Insight 图
+            result = await self.dashboard_graph.process({
+                "user_intent": query,
+                "connection_id": connection_id,
+                "use_graph_relationships": True,
+            })
             
             return {
                 "success": True,
                 "result": result,
-                "thread_id": thread_id,
-                "trace_id": trace_id,
-                "final_stage": result.get("current_stage", "completed")
+                "final_stage": "dashboard_completed",
+                "is_dashboard": True,
+                "query_type": intent.query_type.value,
             }
             
         except Exception as e:
-            logger.error(f"[{trace_id}] 查询处理失败: {e}")
+            logger.error(f"Dashboard Insight 处理失败: {e}")
+            # 回退到普通 SQL 查询
+            return await self._handle_sql_query(query, connection_id, intent)
+
+    async def _handle_sql_query(
+        self, 
+        query: str, 
+        connection_id: int,
+        intent: IntentResult
+    ) -> Dict[str, Any]:
+        """处理 SQL 查询（使用 supervisor）"""
+        logger.info("处理 SQL 查询")
+        
+        # 1. Skill 路由（零配置兼容）
+        skill_result = await perform_skill_routing(query, connection_id)
+        
+        if skill_result.enabled:
+            logger.info(f"Skill 路由: {skill_result.reasoning}")
+        else:
+            logger.info(f"Skill 路由: {skill_result.reasoning}，使用全库模式")
+        
+        # 2. 初始化状态
+        initial_state = SQLMessageState(
+            messages=[{"role": "user", "content": query}],
+            connection_id=connection_id,
+            current_stage="schema_analysis",
+            retry_count=0,
+            max_retries=3,
+            error_history=[]
+        )
+        
+        # 3. 添加意图信息
+        initial_state["query_type"] = intent.query_type.value
+        initial_state["query_complexity"] = intent.complexity
+        initial_state["needs_clarification"] = intent.needs_clarification
+        
+        # 如果有子查询（多步查询），添加到状态
+        if intent.sub_queries:
+            initial_state["sub_queries"] = intent.sub_queries
+        
+        # 4. 添加 Skill 上下文
+        initial_state["skill_context"] = {
+            "enabled": skill_result.enabled,
+            "matched_skills": skill_result.matched_skills,
+            "schema_info": skill_result.schema_info,
+            "business_rules": skill_result.business_rules,
+            "join_rules": skill_result.join_rules,
+            "strategy_used": skill_result.strategy_used,
+            "reasoning": skill_result.reasoning,
+            "prompt_context": format_skill_context_for_prompt(skill_result),
+        }
+        
+        # 5. QA 样本检索（可配置 - 从数据库读取配置）
+        qa_config = get_qa_sample_config()
+        if qa_config.get("enabled", True):
+            # 构建模式上下文（用于样本检索）
+            schema_context = {
+                "tables": skill_result.schema_info.get("tables", []) if skill_result.schema_info else [],
+                "user_query": query
+            }
+            
+            sample_result = await retrieve_qa_samples(
+                query=query,
+                connection_id=connection_id,
+                schema_context=schema_context
+            )
+            
+            # 将样本结果注入状态
+            initial_state["sample_retrieval_result"] = sample_result
+            
+            if sample_result.get("qa_pairs"):
+                logger.info(f"[QA样本] 注入 {len(sample_result['qa_pairs'])} 个样本到 SQL Generator")
+        else:
+            initial_state["sample_retrieval_result"] = {"qa_pairs": [], "enabled": False}
+        
+        # 6. 委托给 supervisor 处理
+        result = await self.supervisor_agent.supervise(initial_state)
+
+        if result.get("success"):
+            return {
+                "success": True,
+                "result": result.get("result"),
+                "final_stage": result.get("result", {}).get("current_stage", "completed"),
+                "query_type": intent.query_type.value,
+                "clarification_used": result.get("clarification_used", False),
+                "skill_used": skill_result.primary_skill_name,
+            }
+        else:
             return {
                 "success": False,
-                "error": str(e),
-                "thread_id": thread_id if 'thread_id' in locals() else None,
-                "trace_id": trace_id,
-                "final_stage": "error"
+                "error": result.get("error"),
+                "final_stage": "error",
+                "query_type": intent.query_type.value
             }
-    
+
     @property
     def worker_agents(self):
-        """获取工作代理列表"""
-        from app.agents.agents.schema_agent import schema_agent
-        from app.agents.agents.sql_generator_agent import sql_generator_agent
-        from app.agents.agents.sql_executor_agent import sql_executor_agent
-        from app.agents.agents.data_analyst_agent import data_analyst_agent
-        from app.agents.agents.chart_generator_agent import chart_generator_agent
-        
-        return [
-            schema_agent,
-            sql_generator_agent,
-            sql_executor_agent,
-            data_analyst_agent,
-            chart_generator_agent
-        ]
+        """获取工作代理列表（为了向后兼容）"""
+        return self.supervisor_agent.worker_agents
 
 
 # ============================================================================
 # 便捷函数
 # ============================================================================
 
-def create_intelligent_sql_graph(active_agent_profiles: List[AgentProfile] = None) -> IntelligentSQLGraph:
-    """创建智能 SQL 图实例"""
-    return IntelligentSQLGraph(active_agent_profiles=active_agent_profiles)
+def create_intelligent_sql_graph(
+    enable_clarification: bool = True,
+    custom_analyst_id: Optional[int] = None
+) -> IntelligentSQLGraph:
+    """创建智能SQL图实例"""
+    return IntelligentSQLGraph(enable_clarification, custom_analyst_id)
 
 
 async def process_sql_query(
-    query: str,
-    connection_id: Optional[int] = None,
-    active_agent_profiles: List[AgentProfile] = None
+    query: str, 
+    connection_id: int = 15,
+    enable_clarification: bool = True,
+    agent_id: Optional[int] = None
 ) -> Dict[str, Any]:
-    """处理 SQL 查询的便捷函数"""
-    graph = create_intelligent_sql_graph()
+    """
+    处理SQL查询的便捷函数
+    
+    Args:
+        query: 用户查询
+        connection_id: 数据库连接ID
+        enable_clarification: 是否启用澄清机制
+        agent_id: 自定义数据分析 Agent ID（可选）
+    """
+    graph = create_intelligent_sql_graph(enable_clarification, agent_id)
     return await graph.process_query(query, connection_id)
 
 
-# 全局实例管理
-_global_graph: Optional[IntelligentSQLGraph] = None
+# 创建全局实例（为了向后兼容）
+_global_graph = None
 
 
 def get_global_graph() -> IntelligentSQLGraph:
@@ -635,51 +506,35 @@ def get_global_graph() -> IntelligentSQLGraph:
     return _global_graph
 
 
-async def get_global_graph_async() -> IntelligentSQLGraph:
-    """异步获取全局图实例"""
-    graph = get_global_graph()
-    await graph._ensure_initialized()
-    return graph
+# 导出 graph 用于 LangGraph 服务
+graph = get_global_graph().graph
 
 
-def graph():
-    """
-    图工厂函数 - 供 LangGraph API 使用
+# ============================================================================
+# 测试入口
+# ============================================================================
+
+if __name__ == "__main__":
+    import asyncio
     
-    返回编译好的图实例
-    """
-    return create_hub_spoke_graph()
-
-
-async def detect_intent_with_llm(query: str) -> Dict[str, Any]:
-    q = (query or "").strip()
-    q_lower = q.lower()
-
-    intent = "data_query"
-    if q_lower.startswith("select") or q_lower.startswith("with"):
-        intent = "data_query"
-    else:
-        chat_keywords = [
-            "你好", "谢谢", "你是谁", "天气", "帮助",
-            "hello", "hi", "thanks", "help", "who are you",
+    async def test():
+        # 创建图实例
+        graph_instance = create_intelligent_sql_graph()
+        print(f"智能SQL图创建成功: {type(graph_instance).__name__}")
+        print(f"Supervisor代理: {type(graph_instance.supervisor_agent).__name__}")
+        print(f"工作代理数量: {len(graph_instance.worker_agents)}")
+        
+        # 测试意图识别
+        test_queries = [
+            "你好",
+            "查询销售额",
+            "显示 dashboard 数据洞察",
+            "对比上月和本月的销售额趋势",
         ]
-        if any(kw in q_lower for kw in chat_keywords) and len(q) < 80:
-            intent = "general_chat"
-        else:
-            data_keywords = [
-                "查询", "统计", "分析", "多少", "总数", "top",
-                "销售", "库存", "订单", "金额", "收入", "增长", "下降",
-                "最近", "过去", "近", "本月", "本周", "今天", "昨天",
-                "sum", "count", "avg", "max", "min",
-            ]
-            if any(kw in q_lower for kw in data_keywords):
-                intent = "data_query"
-
-    rewritten = q
-    if intent == "data_query":
-        if "卖得" in rewritten:
-            rewritten = rewritten.replace("卖得", "销售情况")
-        if "咋样" in rewritten:
-            rewritten = rewritten.replace("咋样", "怎么样")
-
-    return {"intent": intent, "rewritten_query": rewritten}
+        
+        for query in test_queries:
+            intent = await graph_instance.detect_intent(query)
+            print(f"查询: {query}")
+            print(f"  -> 类型: {intent.query_type.value}, 路由: {intent.route}, 复杂度: {intent.complexity}")
+    
+    asyncio.run(test())

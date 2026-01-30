@@ -14,6 +14,7 @@ class Dashboard(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     owner_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, index=True)
+    tenant_id = Column(BigInteger, ForeignKey("tenants.id"), nullable=True, index=True)  # 多租户隔离
     layout_config = Column(JSON, nullable=False, default=list)
     # P1-8修复: 刷新配置独立存储，不再嵌套在layout_config中
     refresh_config = Column(JSON, nullable=True, default=dict, comment="刷新配置")
@@ -25,5 +26,6 @@ class Dashboard(Base):
 
     # 关系
     owner = relationship("User", back_populates="owned_dashboards", foreign_keys=[owner_id])
+    tenant = relationship("Tenant", backref="dashboards")
     widgets = relationship("DashboardWidget", back_populates="dashboard", cascade="all, delete-orphan")
     permissions = relationship("DashboardPermission", back_populates="dashboard", cascade="all, delete-orphan")

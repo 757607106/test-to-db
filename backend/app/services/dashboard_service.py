@@ -21,6 +21,7 @@ class DashboardService:
         db: Session,
         *,
         user_id: int,
+        tenant_id: Optional[int] = None,
         scope: str = "mine",
         page: int = 1,
         page_size: int = 20,
@@ -29,6 +30,7 @@ class DashboardService:
         """获取用户的Dashboard列表
         
         优化：使用批量权限查询，避免 N+1 问题
+        多租户隔离：当提供 tenant_id 时，只返回该租户的 Dashboard
         
         Returns:
             (Dashboard列表, 总数)
@@ -38,6 +40,7 @@ class DashboardService:
         dashboards, total = crud.crud_dashboard.get_by_user(
             db,
             user_id=user_id,
+            tenant_id=tenant_id,
             scope=scope,
             skip=skip,
             limit=page_size,
@@ -175,13 +178,18 @@ class DashboardService:
         db: Session,
         *,
         obj_in: DashboardCreate,
-        owner_id: int
+        owner_id: int,
+        tenant_id: Optional[int] = None
     ) -> Dashboard:
-        """创建Dashboard"""
+        """创建Dashboard
+        
+        多租户支持：自动关联到用户所属租户
+        """
         return crud.crud_dashboard.create_with_permission(
             db,
             obj_in=obj_in,
-            owner_id=owner_id
+            owner_id=owner_id,
+            tenant_id=tenant_id
         )
 
     def update_dashboard(

@@ -1,88 +1,18 @@
 """
-指标库 Schema 定义
+值域 Profile Schema 定义
 
-用于语义层 (Semantic Layer) 的业务指标定义，存储在 Neo4j 图数据库中。
-指标包含业务含义、计算逻辑、关联字段等信息，帮助 LLM 更准确地理解用户查询意图。
+用于字段值域分析，支持：
+- 枚举值检测
+- 数值范围分析
+- 日期范围分析
+- 采样值获取
+
+注意：指标库功能已废弃（2026-01），仅保留 Profile 相关定义
 """
-from typing import Optional, List, Dict, Any, Literal
+from typing import Optional, List, Any
 from datetime import datetime
 from pydantic import BaseModel, Field
 
-
-# 聚合类型
-AggregationType = Literal["SUM", "AVG", "COUNT", "MAX", "MIN", "COUNT_DISTINCT", "NONE"]
-
-
-class MetricBase(BaseModel):
-    """指标基础属性"""
-    name: str = Field(..., description="指标名称，如：销售额、订单数")
-    business_name: Optional[str] = Field(None, description="业务别名，如：GMV、成交额")
-    description: Optional[str] = Field(None, description="指标描述")
-    
-    # 计算逻辑
-    formula: str = Field(..., description="计算公式，如：SUM(amount)")
-    aggregation: AggregationType = Field("SUM", description="聚合方式")
-    
-    # 关联字段
-    source_table: str = Field(..., description="来源表名")
-    source_column: str = Field(..., description="来源字段名")
-    
-    # 维度和过滤
-    dimension_columns: List[str] = Field(default_factory=list, description="可用维度字段")
-    time_column: Optional[str] = Field(None, description="时间字段")
-    default_filters: Optional[Dict[str, Any]] = Field(None, description="默认过滤条件")
-    
-    # 业务分类
-    category: Optional[str] = Field(None, description="指标分类，如：销售、用户、运营")
-    tags: List[str] = Field(default_factory=list, description="标签列表")
-    
-    # 显示配置
-    unit: Optional[str] = Field(None, description="单位，如：元、个、%")
-    decimal_places: int = Field(2, description="小数位数")
-
-
-class MetricCreate(MetricBase):
-    """创建指标请求"""
-    connection_id: int = Field(..., description="数据库连接ID")
-
-
-class MetricUpdate(BaseModel):
-    """更新指标请求"""
-    name: Optional[str] = None
-    business_name: Optional[str] = None
-    description: Optional[str] = None
-    formula: Optional[str] = None
-    aggregation: Optional[AggregationType] = None
-    source_table: Optional[str] = None
-    source_column: Optional[str] = None
-    dimension_columns: Optional[List[str]] = None
-    time_column: Optional[str] = None
-    default_filters: Optional[Dict[str, Any]] = None
-    category: Optional[str] = None
-    tags: Optional[List[str]] = None
-    unit: Optional[str] = None
-    decimal_places: Optional[int] = None
-
-
-class Metric(MetricBase):
-    """指标响应模型"""
-    id: str = Field(..., description="指标ID")
-    connection_id: int = Field(..., description="数据库连接ID")
-    created_at: datetime = Field(..., description="创建时间")
-    updated_at: Optional[datetime] = Field(None, description="更新时间")
-    
-    class Config:
-        from_attributes = True
-
-
-class MetricWithContext(Metric):
-    """带上下文的指标（包含关联表和字段信息）"""
-    table_description: Optional[str] = Field(None, description="来源表描述")
-    column_type: Optional[str] = Field(None, description="来源字段类型")
-    related_metrics: List[str] = Field(default_factory=list, description="相关指标名称")
-
-
-# ===== 值域 Profile 相关 =====
 
 class ColumnProfile(BaseModel):
     """字段值域 Profile"""
@@ -121,80 +51,3 @@ class TableProfile(BaseModel):
     row_count: int = Field(0, description="行数")
     columns: List[ColumnProfile] = Field(default_factory=list, description="字段 Profile 列表")
     profiled_at: Optional[datetime] = Field(None, description="Profile 时间")
-
-
-# ===== 语义层查询相关 =====
-
-class SemanticQuery(BaseModel):
-    """语义层查询请求"""
-    metrics: List[str] = Field(..., description="要查询的指标名称列表")
-    dimensions: List[str] = Field(default_factory=list, description="分组维度")
-    filters: Optional[Dict[str, Any]] = Field(None, description="过滤条件")
-    time_range: Optional[Dict[str, str]] = Field(None, description="时间范围")
-    order_by: Optional[List[str]] = Field(None, description="排序字段")
-    limit: int = Field(100, description="返回行数限制")
-
-
-class SemanticQueryResult(BaseModel):
-    """语义层查询结果"""
-    sql: str = Field(..., description="生成的SQL")
-    metrics_used: List[str] = Field(..., description="使用的指标")
-    dimensions_used: List[str] = Field(..., description="使用的维度")
-    explanation: str = Field("", description="SQL 解释")
-
-
-# ===== 指标告警 Schema =====
-
-AlertType = Literal["threshold", "yoy", "mom"]  # 阈值告警、同比告警、环比告警
-AlertCondition = Literal["gt", "lt", "gte", "lte", "eq"]  # 大于、小于、大于等于、小于等于、等于
-
-
-class MetricAlertBase(BaseModel):
-    """指标告警基础属性"""
-    name: str = Field(..., description="告警名称")
-    alert_type: AlertType = Field(..., description="告警类型: threshold/yoy/mom")
-    condition: AlertCondition = Field(..., description="条件: gt/lt/gte/lte/eq")
-    threshold_value: Optional[float] = Field(None, description="阈值（用于threshold类型）")
-    change_percent: Optional[float] = Field(None, description="变化百分比（用于yoy/mom类型）")
-    enabled: bool = Field(True, description="是否启用")
-    notify_channels: List[str] = Field(default_factory=list, description="通知渠道")
-
-
-class MetricAlertCreate(MetricAlertBase):
-    """创建告警请求"""
-    metric_id: str = Field(..., description="关联的指标ID")
-
-
-class MetricAlertUpdate(BaseModel):
-    """更新告警请求"""
-    name: Optional[str] = None
-    alert_type: Optional[AlertType] = None
-    condition: Optional[AlertCondition] = None
-    threshold_value: Optional[float] = None
-    change_percent: Optional[float] = None
-    enabled: Optional[bool] = None
-    notify_channels: Optional[List[str]] = None
-
-
-class MetricAlert(MetricAlertBase):
-    """告警响应模型"""
-    id: str = Field(..., description="告警ID")
-    metric_id: str = Field(..., description="关联的指标ID")
-    created_at: datetime = Field(..., description="创建时间")
-    last_triggered_at: Optional[datetime] = Field(None, description="上次触发时间")
-    trigger_count: int = Field(0, description="触发次数")
-
-    class Config:
-        from_attributes = True
-
-
-class AlertCheckResult(BaseModel):
-    """告警检查结果"""
-    alert_id: str
-    metric_id: str
-    metric_name: str
-    triggered: bool
-    current_value: float
-    threshold_or_change: float
-    message: str
-    checked_at: datetime

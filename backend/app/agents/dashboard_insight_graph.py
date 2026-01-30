@@ -34,6 +34,7 @@ from app.services.sql_helpers import (
     clean_sql_from_llm_response,
 )
 from app.schemas.schema_context import SchemaContext, TableInfo, ColumnInfo, normalize_schema_info
+from app.agents.nodes.base import ErrorStage
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +185,7 @@ async def schema_enricher_node(state: DashboardInsightState) -> Dict[str, Any]:
         return {
             "current_stage": "schema_done",
             "error_history": state.get("error_history", []) + [{
-                "stage": "schema_enrichment",
+                "stage": ErrorStage.SCHEMA_ENRICHMENT,
                 "error": str(e),
                 "timestamp": time.time()
             }]
@@ -320,7 +321,7 @@ async def sql_generator_node(state: DashboardInsightState) -> Dict[str, Any]:
         return {
             "current_stage": "sql_generated",
             "error_history": state.get("error_history", []) + [{
-                "stage": "sql_generation",
+                "stage": ErrorStage.SQL_GENERATION,
                 "error": str(e),
                 "timestamp": time.time()
             }]
@@ -431,7 +432,7 @@ async def sql_executor_node(state: DashboardInsightState) -> Dict[str, Any]:
             "execution_result": {"success": False, "error": str(e)},
             "current_stage": "execution_done",
             "error_history": state.get("error_history", []) + [{
-                "stage": "sql_execution",
+                "stage": ErrorStage.SQL_EXECUTION,
                 "error": str(e),
                 "sql": state.get("generated_sql", ""),
                 "timestamp": time.time()

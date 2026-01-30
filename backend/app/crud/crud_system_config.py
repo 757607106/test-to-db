@@ -61,5 +61,50 @@ class CRUDSystemConfig(CRUDBase[SystemConfig, SystemConfigCreate, SystemConfigUp
             description="默认Embedding模型的LLM配置ID"
         )
 
+    # ===== QA 样本检索配置 =====
+    
+    def get_qa_sample_config(self, db: Session) -> Dict[str, Any]:
+        """获取 QA 样本检索配置"""
+        import json
+        value = self.get_value(db, config_key="qa_sample_retrieval_config")
+        if value:
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                pass
+        # 返回默认配置
+        return {
+            "enabled": True,
+            "top_k": 3,
+            "min_similarity": 0.6,
+            "timeout_seconds": 5
+        }
+    
+    def set_qa_sample_config(
+        self, 
+        db: Session, 
+        *, 
+        config: Dict[str, Any]
+    ) -> SystemConfig:
+        """设置 QA 样本检索配置"""
+        import json
+        return self.set_value(
+            db,
+            config_key="qa_sample_retrieval_config",
+            config_value=json.dumps(config),
+            description="QA样本检索配置（enabled/top_k/min_similarity/timeout_seconds）"
+        )
+    
+    def is_qa_sample_enabled(self, db: Session) -> bool:
+        """检查 QA 样本检索是否启用"""
+        config = self.get_qa_sample_config(db)
+        return config.get("enabled", True)
+    
+    def set_qa_sample_enabled(self, db: Session, *, enabled: bool) -> SystemConfig:
+        """设置 QA 样本检索启用状态"""
+        config = self.get_qa_sample_config(db)
+        config["enabled"] = enabled
+        return self.set_qa_sample_config(db, config=config)
+
 
 system_config = CRUDSystemConfig(SystemConfig)

@@ -22,6 +22,7 @@ class CRUDDashboard(CRUDBase[Dashboard, DashboardCreate, DashboardUpdate]):
         db: Session,
         *,
         user_id: int,
+        tenant_id: Optional[int] = None,
         scope: str = "mine",
         skip: int = 0,
         limit: int = 20,
@@ -30,10 +31,12 @@ class CRUDDashboard(CRUDBase[Dashboard, DashboardCreate, DashboardUpdate]):
         """获取用户可访问的Dashboard列表
         
         优化：使用 joinedload 预加载关联数据，避免 N+1 查询
+        多租户隔离：当提供 tenant_id 时，只返回该租户的 Dashboard
         
         Args:
             user_id: 用户ID
-            scope: 范围 (mine/shared/public)
+            tenant_id: 租户ID（可选，用于多租户隔离）
+            scope: 范围 (mine/shared/public/tenant)
             skip: 跳过数量
             limit: 限制数量
             search: 搜索关键词
@@ -46,6 +49,10 @@ class CRUDDashboard(CRUDBase[Dashboard, DashboardCreate, DashboardUpdate]):
             joinedload(Dashboard.widgets),
             joinedload(Dashboard.owner)
         ).filter(Dashboard.deleted_at.is_(None))
+        
+        # 多租户隔离：如果提供了 tenant_id，限制在租户范围内
+        if tenant_id:
+            base_query = base_query.filter(Dashboard.tenant_id == tenant_id)
         
         # 根据scope过滤
         if scope == "mine":
@@ -62,6 +69,12 @@ class CRUDDashboard(CRUDBase[Dashboard, DashboardCreate, DashboardUpdate]):
         elif scope == "public":
             # 公开的Dashboard
             query = base_query.filter(Dashboard.is_public == True)
+        elif scope == "tenant":
+            # 租户内所有 Dashboard（需要 tenant_id）
+            if not tenant_id:
+                query = base_query.filter(Dashboard.owner_id == user_id)
+            else:
+                query = base_query  # 已在基础查询中过滤
         else:
             # 全部可访问的
             query = base_query.filter(
@@ -242,15 +255,18 @@ class CRUDDashboard(CRUDBase[Dashboard, DashboardCreate, DashboardUpdate]):
         db: Session,
         *,
         obj_in: DashboardCreate,
-        owner_id: int
+        owner_id: int,
+        tenant_id: Optional[int] = None
     ) -> Dashboard:
         """创建Dashboard并自动添加owner权限
         
         P2-10修复: 添加事务异常处理
+        多租户支持: 自动关联租户
         
         Args:
             obj_in: Dashboard创建数据
             owner_id: 创建者ID
+            tenant_id: 租户ID（可选，用于多租户隔离）
             
         Returns:
             创建的Dashboard对象
@@ -259,6 +275,7 @@ class CRUDDashboard(CRUDBase[Dashboard, DashboardCreate, DashboardUpdate]):
             # 创建Dashboard
             dashboard_data = obj_in.model_dump()
             dashboard_data["owner_id"] = owner_id
+            dashboard_data["tenant_id"] = tenant_id  # 多租户隔离
             dashboard_data["layout_config"] = []  # 初始化为空数组
             
             dashboard = Dashboard(**dashboard_data)

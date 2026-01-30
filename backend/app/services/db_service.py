@@ -78,27 +78,41 @@ def get_db_engine(connection: DBConnection, password: str = None, timeout_second
             return create_engine(conn_str, connect_args=connect_args or {})
 
         elif connection.db_type.lower() == "postgresql":
-            conn_str = (
-                f"postgresql+psycopg://{connection.username}:"
-                f"{encoded_password}@"
-                f"{connection.host}:{connection.port}/{connection.database_name}"
-            )
-            print(f"Connecting to PostgreSQL database: {connection.host}:{connection.port}/{connection.database_name}")
-            if timeout_seconds is not None:
-                connect_args = {"connect_timeout": min(timeout_seconds, 60)}
-            try:
-                return create_engine(conn_str, connect_args=connect_args or {})
-            except (ModuleNotFoundError, ImportError) as e:
-                error_text = str(e).lower()
-                if "psycopg" in error_text or "psycopg2" in error_text:
-                    raise Exception(
-                        "PostgreSQL driver not installed. Install: pip install 'psycopg[binary]'"
+            # Try psycopg2 first (more stable), fallback to psycopg3
+            driver_tried = []
+            last_error = None
+            
+            # Try psycopg2 first
+            for driver in ["psycopg2", "psycopg"]:
+                try:
+                    conn_str = (
+                        f"postgresql+{driver}://{connection.username}:"
+                        f"{encoded_password}@"
+                        f"{connection.host}:{connection.port}/{connection.database_name}"
                     )
-                raise
-            except sqlalchemy.exc.NoSuchModuleError:
-                raise Exception(
-                    "PostgreSQL driver not available. Install: pip install 'psycopg[binary]'"
-                )
+                    print(f"Connecting to PostgreSQL database: {connection.host}:{connection.port}/{connection.database_name} (driver: {driver})")
+                    if timeout_seconds is not None:
+                        connect_args = {"connect_timeout": min(timeout_seconds, 60)}
+                    engine = create_engine(conn_str, connect_args=connect_args or {})
+                    # Test connection
+                    with engine.connect() as conn:
+                        conn.execute(sqlalchemy.text("SELECT 1"))
+                    return engine
+                except (ModuleNotFoundError, ImportError, sqlalchemy.exc.NoSuchModuleError) as e:
+                    driver_tried.append(driver)
+                    last_error = e
+                    continue
+                except Exception as e:
+                    # Connection error, but driver is available
+                    print(f"Warning: Failed to connect with {driver}: {str(e)}")
+                    last_error = e
+                    continue
+            
+            # If both drivers failed
+            raise Exception(
+                f"PostgreSQL driver not available (tried: {', '.join(driver_tried)}). "
+                f"Install: pip install psycopg2-binary or pip install 'psycopg[binary]'"
+            )
 
         elif connection.db_type.lower() == "sqlite":
             # For SQLite, the database_name is treated as the file path

@@ -25,7 +25,7 @@ from langchain_core.messages import AIMessage
 
 from app.core.state import SQLMessageState
 from app.agents.utils.node_wrapper import streaming_node
-from app.agents.nodes.base import get_custom_agent, build_error_record
+from app.agents.nodes.base import get_custom_agent, build_error_record, ErrorStage
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +128,7 @@ async def sql_executor_node(state: SQLMessageState, writer: StreamWriter) -> Dic
                 result["current_stage"] = "error_recovery"
                 result["retry_count"] = retry_count
                 result["error_history"] = state.get("error_history", []) + [
-                    build_error_record("sql_execution", error_msg)
+                    build_error_record(ErrorStage.SQL_EXECUTION, error_msg)
                 ]
                 return result
         
@@ -182,7 +182,7 @@ async def sql_executor_node(state: SQLMessageState, writer: StreamWriter) -> Dic
             "current_stage": "error_recovery",
             "retry_count": state.get("retry_count", 0) + 1,
             "error_history": state.get("error_history", []) + [
-                build_error_record("sql_execution", str(e))
+                build_error_record(ErrorStage.SQL_EXECUTION, str(e))
             ]
         }
 

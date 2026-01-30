@@ -151,6 +151,20 @@ def get_custom_agent(
     return default_agent
 
 
+class ErrorStage:
+    SCHEMA_ANALYSIS = "schema_analysis"
+    SCHEMA_ENRICHMENT = "schema_enrichment"
+    SCHEMA_CLARIFICATION = "schema_clarification"
+    SQL_GENERATION = "sql_generation"
+    SQL_GENERATION_COLUMN_VALIDATION = "sql_generation_column_validation"
+    SQL_PREVALIDATION = "sql_prevalidation"
+    SQL_EXECUTION = "sql_execution"
+    DATA_ANALYSIS = "data_analysis"
+    CHART_GENERATION = "chart_generation"
+    ERROR_RECOVERY = "error_recovery"
+    SUPERVISOR_SUBGRAPH = "supervisor_subgraph"
+
+
 def build_error_record(stage: str, error: str) -> Dict[str, Any]:
     """
     构建标准的错误记录
@@ -175,5 +189,6 @@ __all__ = [
     "extract_last_human_message",
     "get_custom_agent",
     "load_custom_agent_by_id",
+    "ErrorStage",
     "build_error_record",
 ]

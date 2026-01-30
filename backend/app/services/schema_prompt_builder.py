@@ -135,7 +135,14 @@ def validate_sql_columns(
     
     # 提取 SQL 中的列引用 (alias.column 或 table.column)
     # 匹配模式: word.word 或 word.`word`
-    column_refs = re.findall(r'(\w+)\.`?(\w+)`?', sql)
+    column_refs = []
+    for m in re.finditer(r'([A-Za-z_]\w*|`[^`]+`|"[^"]+")\s*\.\s*([A-Za-z_]\w*|`[^`]+`|"[^"]+")', sql):
+        alias_or_table_raw = m.group(1)
+        column_raw = m.group(2)
+        alias_or_table = alias_or_table_raw.strip('`"')
+        column = column_raw.strip('`"')
+        if alias_or_table and column:
+            column_refs.append((alias_or_table, column))
     
     # SQL 函数列表（这些不是表别名）
     sql_functions = {
@@ -190,11 +197,21 @@ def validate_sql_columns(
                 similar = _find_similar_column(column, list(all_columns))
                 if similar:
                     errors.append(
-                        f"列 `{column}` 在任何表中都不存在，您是否想使用 `{similar}`？"
+                        f"列 `{alias_or_table}.{column}` 在任何表中都不存在，您是否想使用 `{similar}`？"
                     )
                 else:
                     warnings.append(f"无法验证列 `{alias_or_table}.{column}`")
     
+    if errors:
+        deduped = []
+        seen = set()
+        for err in errors:
+            if err in seen:
+                continue
+            seen.add(err)
+            deduped.append(err)
+        errors = deduped
+
     return {
         "valid": len(errors) == 0,
         "errors": errors,
@@ -218,17 +235,23 @@ def _extract_table_aliases(sql: str) -> Dict[str, str]:
     aliases = {}
     sql_upper = sql.upper()
     
+    def _normalize_table_name(raw: str) -> str:
+        name = raw.strip('`"')
+        if "." in name:
+            name = name.split(".")[-1]
+        return name
+
     # 匹配 FROM table AS alias 或 FROM table alias
     # 以及 JOIN table AS alias 或 JOIN table alias
     patterns = [
-        r'\bFROM\s+`?(\w+)`?\s+(?:AS\s+)?`?(\w+)`?(?:\s|,|JOIN|WHERE|GROUP|ORDER|LIMIT|$)',
-        r'\bJOIN\s+`?(\w+)`?\s+(?:AS\s+)?`?(\w+)`?\s+ON',
+        r'\bFROM\s+(`?[\w\.]+`?|"?[\w\.]+"?)\s+(?:AS\s+)?(`?\w+`|"\w+"|\w+)(?:\s|,|JOIN|WHERE|GROUP|ORDER|LIMIT|$)',
+        r'\bJOIN\s+(`?[\w\.]+`?|"?[\w\.]+"?)\s+(?:AS\s+)?(`?\w+`|"\w+"|\w+)\s+ON',
     ]
     
     for pattern in patterns:
         for match in re.finditer(pattern, sql, re.IGNORECASE):
-            table_name = match.group(1)
-            alias = match.group(2)
+            table_name = _normalize_table_name(match.group(1))
+            alias = match.group(2).strip('`"')
             # 确保别名不是 SQL 关键字
             if alias.upper() not in ['ON', 'WHERE', 'GROUP', 'ORDER', 'LIMIT', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER']:
                 aliases[alias] = table_name

@@ -21,7 +21,8 @@ import {
   Statistic,
   Progress,
   Tooltip,
-  Divider
+  Divider,
+  Slider
 } from 'antd';
 import {
   PlusOutlined,
@@ -34,10 +35,12 @@ import {
   RobotOutlined,
   DatabaseOutlined,
   BulbOutlined,
-  QuestionCircleOutlined
+  QuestionCircleOutlined,
+  SettingOutlined
 } from '@ant-design/icons';
 import { hybridQAService } from '../../services/hybridQA';
 import { getConnections } from '../../services/api';
+import { getQASampleConfig, updateQASampleConfig, type QASampleConfig } from '../../services/systemConfig';
 import QAFeedbackModal from '../../components/QAFeedbackModal';
 import type { QAPair, SimilarQAPair, QAPairCreate } from '../../types/hybridQA';
 import type { DBConnection } from '../../types/api';
@@ -61,14 +64,27 @@ export const HybridQAContent: React.FC = () => {
   const [connections, setConnections] = useState<DBConnection[]>([]);
   const [selectedConnectionId, setSelectedConnectionId] = useState<number | null>(null);
   const [loadingConnections, setLoadingConnections] = useState(false);
+  
+  // QA 样本检索配置状态
+  const [qaSampleConfig, setQaSampleConfig] = useState<QASampleConfig>({
+    enabled: true,
+    top_k: 3,
+    min_similarity: 0.6,
+    timeout_seconds: 5
+  });
+  const [configLoading, setConfigLoading] = useState(false);
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  
   const [form] = Form.useForm();
   const [editForm] = Form.useForm();
   const [searchForm] = Form.useForm();
+  const [configForm] = Form.useForm();
 
   useEffect(() => {
     loadConnections();
     loadStats();
     loadQAPairs();
+    loadQASampleConfig();
   }, []);
 
   useEffect(() => {
@@ -112,6 +128,38 @@ export const HybridQAContent: React.FC = () => {
     } catch (error) {
       console.error('加载统计信息失败:', error);
     }
+  };
+
+  const loadQASampleConfig = async () => {
+    try {
+      setConfigLoading(true);
+      const response = await getQASampleConfig();
+      setQaSampleConfig(response.data);
+    } catch (error) {
+      console.error('加载QA样本配置失败:', error);
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
+  const handleUpdateConfig = async (values: QASampleConfig) => {
+    try {
+      setConfigLoading(true);
+      await updateQASampleConfig(values);
+      setQaSampleConfig(values);
+      message.success('QA样本检索配置已更新');
+      setShowConfigModal(false);
+    } catch (error) {
+      message.error('更新配置失败');
+      console.error('更新QA样本配置失败:', error);
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
+  const handleToggleEnabled = async (enabled: boolean) => {
+    const newConfig = { ...qaSampleConfig, enabled };
+    await handleUpdateConfig(newConfig);
   };
 
   const handleCreateQAPair = async (values: QAPairCreate) => {
@@ -479,6 +527,52 @@ export const HybridQAContent: React.FC = () => {
             />
           </Col>
         </Row>
+
+        {/* QA 样本检索配置 */}
+        <Card 
+          size="small" 
+          style={{ marginBottom: '16px', background: '#fafafa' }}
+          title={
+            <Space>
+              <SettingOutlined />
+              <span>QA 样本检索配置</span>
+            </Space>
+          }
+          extra={
+            <Button 
+              type="link" 
+              size="small"
+              onClick={() => {
+                configForm.setFieldsValue(qaSampleConfig);
+                setShowConfigModal(true);
+              }}
+            >
+              高级配置
+            </Button>
+          }
+        >
+          <Space size="large">
+            <Space>
+              <span>启用样本检索:</span>
+              <Switch 
+                checked={qaSampleConfig.enabled}
+                onChange={handleToggleEnabled}
+                loading={configLoading}
+                checkedChildren="开"
+                unCheckedChildren="关"
+              />
+            </Space>
+            <Tooltip title="检索数量">
+              <Tag color="blue">Top-K: {qaSampleConfig.top_k}</Tag>
+            </Tooltip>
+            <Tooltip title="最低相似度阈值">
+              <Tag color="green">相似度: {(qaSampleConfig.min_similarity * 100).toFixed(0)}%</Tag>
+            </Tooltip>
+            <Tooltip title="检索超时时间">
+              <Tag color="orange">超时: {qaSampleConfig.timeout_seconds}s</Tag>
+            </Tooltip>
+          </Space>
+        </Card>
 
         <Space style={{ marginBottom: '16px' }}>
           <Button
@@ -907,6 +1001,65 @@ export const HybridQAContent: React.FC = () => {
           loadStats(selectedConnectionId || undefined);
         }}
       />
+
+      {/* QA 样本检索配置弹窗 */}
+      <Modal
+        title="QA 样本检索高级配置"
+        open={showConfigModal}
+        onCancel={() => setShowConfigModal(false)}
+        onOk={() => configForm.submit()}
+        confirmLoading={configLoading}
+        width={500}
+      >
+        <Form
+          form={configForm}
+          layout="vertical"
+          onFinish={handleUpdateConfig}
+          initialValues={qaSampleConfig}
+        >
+          <Form.Item
+            name="enabled"
+            label="启用 QA 样本检索"
+            valuePropName="checked"
+            extra="开启后，系统会在生成 SQL 时检索相似的历史问答对作为参考"
+          >
+            <Switch checkedChildren="开" unCheckedChildren="关" />
+          </Form.Item>
+
+          <Form.Item
+            name="top_k"
+            label="检索数量 (Top-K)"
+            extra="每次检索返回的最相似样本数量"
+            rules={[{ required: true, message: '请输入检索数量' }]}
+          >
+            <Slider min={1} max={10} marks={{ 1: '1', 3: '3', 5: '5', 10: '10' }} />
+          </Form.Item>
+
+          <Form.Item
+            name="min_similarity"
+            label="最低相似度阈值"
+            extra="只返回相似度高于此阈值的样本"
+            rules={[{ required: true, message: '请输入相似度阈值' }]}
+          >
+            <Slider 
+              min={0} 
+              max={1} 
+              step={0.1} 
+              marks={{ 0: '0%', 0.5: '50%', 0.6: '60%', 0.8: '80%', 1: '100%' }}
+              tooltip={{ formatter: (v) => `${((v || 0) * 100).toFixed(0)}%` }}
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="timeout_seconds"
+            label="检索超时时间 (秒)"
+            extra="超过此时间未完成检索将跳过样本增强"
+            rules={[{ required: true, message: '请输入超时时间' }]}
+          >
+            <InputNumber min={1} max={30} style={{ width: '100%' }} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };

@@ -24,15 +24,19 @@ def get_dashboards(
     *,
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
-    scope: str = Query("mine", description="范围: mine/shared/public/all"),
+    scope: str = Query("mine", description="范围: mine/shared/public/tenant/all"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: str = Query(None, description="搜索关键词"),
 ) -> Any:
-    """获取Dashboard列表"""
+    """获取Dashboard列表
+    
+    多租户隔离：自动按用户所属租户过滤
+    """
     items, total = dashboard_service.get_dashboards_by_user(
         db,
         user_id=current_user.id,
+        tenant_id=current_user.tenant_id,  # 多租户隔离
         scope=scope,
         page=page,
         page_size=page_size,
@@ -74,11 +78,15 @@ def create_dashboard(
     current_user: User = Depends(deps.get_current_active_user),
     dashboard_in: DashboardCreate,
 ) -> Any:
-    """创建Dashboard"""
+    """创建Dashboard
+    
+    多租户隔离：自动关联到用户所属租户
+    """
     dashboard = dashboard_service.create_dashboard(
         db,
         obj_in=dashboard_in,
-        owner_id=current_user.id
+        owner_id=current_user.id,
+        tenant_id=current_user.tenant_id  # 多租户隔离
     )
     
     # 返回详情

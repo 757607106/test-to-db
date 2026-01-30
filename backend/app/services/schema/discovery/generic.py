@@ -72,6 +72,8 @@ def discover_generic_schema(inspector) -> List[Dict[str, Any]]:
             try:
                 fks = inspector.get_foreign_keys(table_name)
                 print(f"Foreign keys for {table_name}: {len(fks)}")
+                
+                # Process explicit foreign keys
                 for fk in fks:
                     print(f"  FK: {fk}")
                     # 处理复合外键
@@ -88,6 +90,67 @@ def discover_generic_schema(inspector) -> List[Dict[str, Any]]:
                                     "constraint_name": fk.get("name", ""),  # 保存约束名称
                                     "is_part_of_composite_key": len(fk["constrained_columns"]) > 1  # 标记是否为复合键的一部分
                                 }
+                
+                # If no foreign keys found, try to infer from naming convention
+                if len(fks) == 0:
+                    print(f"No explicit foreign keys found for {table_name}, attempting to infer from naming convention")
+                    for column in table_info["columns"]:
+                        col_name = column["column_name"].lower()
+
+                        # 如果列名以_id结尾且不是主键，可能是外键
+                        if col_name.endswith('_id') and not column["is_primary_key"]:
+                            # 提取可能的表名
+                            potential_table_base = col_name[:-3]  # 移除 '_id' 后缀
+                            
+                            # Try multiple matching strategies
+                            matched_table = None
+                            
+                            # Strategy 1: Exact match (lowercase)
+                            for t in tables:
+                                if t.lower() == potential_table_base:
+                                    matched_table = t
+                                    break
+                            
+                            # Strategy 2: Match with common prefixes (t_, tbl_, etc.)
+                            if not matched_table:
+                                for t in tables:
+                                    t_lower = t.lower()
+                                    # Remove common table prefixes
+                                    for prefix in ['t_', 'tbl_', 'tb_']:
+                                        if t_lower.startswith(prefix):
+                                            t_base = t_lower[len(prefix):]
+                                            if t_base == potential_table_base:
+                                                matched_table = t
+                                                break
+                                    if matched_table:
+                                        break
+                            
+                            # 如果找到匹配的表，标记为外键
+                            if matched_table:
+                                print(f"Identified potential foreign key by naming convention: {column['column_name']} -> {matched_table}")
+                                column["is_foreign_key"] = True
+                                column["references"] = {
+                                    "table": matched_table,
+                                    "column": "id",  # 假设主键是 'id'
+                                    "constraint_name": f"fk_{table_name}_{column['column_name']}_inferred",  # 生成一个约束名
+                                    "is_part_of_composite_key": False,  # 默认不是复合键的一部分
+                                    "is_inferred": True  # 标记为推断的外键
+                                }
+
+                        # 如果列名与其他表名相同，也可能是外键
+                        elif not column["is_primary_key"] and not column["is_foreign_key"]:
+                            for table_name_to_check in tables:
+                                if col_name == table_name_to_check.lower() or col_name == f"{table_name_to_check.lower()}id":
+                                    print(f"Identified potential foreign key by table name match: {column['column_name']} -> {table_name_to_check}")
+                                    column["is_foreign_key"] = True
+                                    column["references"] = {
+                                        "table": table_name_to_check,
+                                        "column": "id",  # 假设主键是 'id'
+                                        "constraint_name": f"fk_{table_name}_{column['column_name']}_inferred",  # 生成一个约束名
+                                        "is_part_of_composite_key": False,  # 默认不是复合键的一部分
+                                        "is_inferred": True  # 标记为推断的外键
+                                    }
+                                    break
             except Exception as fk_error:
                 # Some databases might not support foreign key inspection
                 print(f"Warning: Could not get foreign keys for {table_name}: {str(fk_error)}")

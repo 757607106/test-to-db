@@ -138,6 +138,49 @@ export interface SkillLoadResult {
   enum_columns: any[];
 }
 
+// 优化建议相关类型
+export interface OptimizationSuggestion {
+  id: string;
+  type: 'add_keyword' | 'add_table' | 'create_skill' | 'merge_skills' | 'add_rule' | 'add_join';
+  priority: 'high' | 'medium' | 'low';
+  skill_name?: string;
+  skill_id?: number;
+  title: string;
+  description: string;
+  reasoning: string;
+  action_data: Record<string, any>;
+  query_count: number;
+  failure_count: number;
+  confidence: number;
+  example_queries: string[];
+  status: string;
+  created_at: string;
+}
+
+export interface OptimizationSummary {
+  total_suggestions: number;
+  by_priority: {
+    high: number;
+    medium: number;
+    low: number;
+  };
+  by_type: Record<string, number>;
+  top_suggestions: Array<{
+    id: string;
+    type: string;
+    priority: string;
+    title: string;
+    query_count: number;
+  }>;
+}
+
+export interface DiscoverResult {
+  suggestions: SkillSuggestion[];
+  analyzed_tables: number;
+  grouped_tables: number;
+  ungrouped_tables: string[];
+}
+
 export const skillService = {
   // 获取 Skills 列表
   async listSkills(connectionId: number, includeInactive = false): Promise<SkillListResponse> {
@@ -193,6 +236,65 @@ export const skillService = {
   // 切换 Skill 激活状态
   async toggleSkillActive(id: number, isActive: boolean): Promise<Skill> {
     const response = await api.put(`/skills/${id}`, { is_active: isActive });
+    return response.data;
+  },
+
+  // ===== 智能优化 =====
+
+  // 获取优化摘要
+  async getOptimizationSummary(connectionId: number): Promise<OptimizationSummary> {
+    const response = await api.get(`/skills/optimization/summary?connection_id=${connectionId}`);
+    return response.data;
+  },
+
+  // 获取优化建议列表
+  async getOptimizationSuggestions(
+    connectionId: number, 
+    days = 7, 
+    forceRefresh = false
+  ): Promise<{ suggestions: OptimizationSuggestion[]; total: number }> {
+    const params = new URLSearchParams();
+    params.append('connection_id', String(connectionId));
+    params.append('days', String(days));
+    if (forceRefresh) params.append('force_refresh', 'true');
+    
+    const response = await api.get(`/skills/optimization/suggestions?${params}`);
+    return response.data;
+  },
+
+  // 应用优化建议
+  async applyOptimizationSuggestion(
+    suggestionId: string, 
+    connectionId: number
+  ): Promise<{ success: boolean; message?: string; error?: string; action?: string; prefill_data?: any }> {
+    const response = await api.post(
+      `/skills/optimization/apply/${suggestionId}?connection_id=${connectionId}`
+    );
+    return response.data;
+  },
+
+  // ===== 自动发现 =====
+
+  // 发现 Skill 建议
+  async discoverSkills(connectionId: number, useLlm = false): Promise<DiscoverResult> {
+    const params = new URLSearchParams();
+    params.append('connection_id', String(connectionId));
+    if (useLlm) params.append('use_llm', 'true');
+    
+    const response = await api.get(`/skills/discover?${params}`);
+    return response.data;
+  },
+
+  // 应用发现的 Skill
+  async applyDiscoveredSkills(
+    connectionId: number, 
+    skillNames: string[]
+  ): Promise<{ success: boolean; results: any[]; created_count: number }> {
+    const params = new URLSearchParams();
+    params.append('connection_id', String(connectionId));
+    skillNames.forEach(name => params.append('skill_names', name));
+    
+    const response = await api.post(`/skills/discover/apply?${params}`);
     return response.data;
   },
 };

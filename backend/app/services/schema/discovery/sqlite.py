@@ -64,6 +64,8 @@ def discover_sqlite_schema(inspector) -> List[Dict[str, Any]]:
             try:
                 fks = inspector.get_foreign_keys(table_name)
                 print(f"Foreign keys for {table_name}: {len(fks)}")
+                
+                # Process explicit foreign keys
                 for fk in fks:
                     print(f"  FK: {fk}")
                     for column in table_info["columns"]:
@@ -73,6 +75,46 @@ def discover_sqlite_schema(inspector) -> List[Dict[str, Any]]:
                                 "table": fk["referred_table"],
                                 "column": fk["referred_columns"][0]
                             }
+                
+                # If no foreign keys found, try to infer from naming convention
+                if len(fks) == 0:
+                    print(f"No explicit foreign keys found for {table_name}, attempting to infer from naming convention")
+                    for column in table_info["columns"]:
+                        col_name = column["column_name"].lower()
+                        if col_name.endswith('_id') and not column["is_primary_key"]:
+                            # Extract potential table name from column name
+                            potential_table_base = col_name[:-3]  # Remove '_id' suffix
+                            
+                            # Try multiple matching strategies
+                            matched_table = None
+                            
+                            # Strategy 1: Exact match (lowercase)
+                            for t in tables:
+                                if t.lower() == potential_table_base:
+                                    matched_table = t
+                                    break
+                            
+                            # Strategy 2: Match with common prefixes (t_, tbl_, etc.)
+                            if not matched_table:
+                                for t in tables:
+                                    t_lower = t.lower()
+                                    # Remove common table prefixes
+                                    for prefix in ['t_', 'tbl_', 'tb_']:
+                                        if t_lower.startswith(prefix):
+                                            t_base = t_lower[len(prefix):]
+                                            if t_base == potential_table_base:
+                                                matched_table = t
+                                                break
+                                    if matched_table:
+                                        break
+                            
+                            if matched_table:
+                                print(f"Identified potential foreign key by naming convention: {column['column_name']} -> {matched_table}")
+                                column["is_foreign_key"] = True
+                                column["references"] = {
+                                    "table": matched_table,
+                                    "column": "id"  # Assume the primary key is 'id'
+                                }
             except Exception as fk_error:
                 print(f"Warning: Could not get foreign keys for {table_name}: {str(fk_error)}")
                 # Try to identify foreign keys by naming convention

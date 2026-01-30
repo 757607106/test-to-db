@@ -41,8 +41,13 @@ class GraphRelationshipService:
         if not table_names:
             return {
                 "tables": [],
-                "relationships": [],
-                "relationship_count": 0
+                "source_tables": [],
+                "direct_relationships": [],
+                "indirect_relationships": [],
+                "relationship_count": 0,
+                "relationship_descriptions": [],
+                "relationship_types": {},
+                "has_relationships": False
             }
         
         try:
@@ -72,8 +77,13 @@ class GraphRelationshipService:
             print(f"查询图谱关系失败: {str(e)}")
             return {
                 "tables": table_names,
-                "relationships": [],
+                "source_tables": table_names,
+                "direct_relationships": [],
+                "indirect_relationships": [],
                 "relationship_count": 0,
+                "relationship_descriptions": [],
+                "relationship_types": {},
+                "has_relationships": False,
                 "error": str(e)
             }
     
@@ -85,8 +95,8 @@ class GraphRelationshipService:
     ) -> List[Dict[str, Any]]:
         """查询直接关联关系"""
         query = """
-        MATCH (source:Table {connection_id: $connection_id})-[:HAS_COLUMN]->(sc:Column)-[r:REFERENCES]->(tc:Column)<-[:HAS_COLUMN]-(target:Table)
-        WHERE source.name IN $table_names
+        MATCH (source:Table {connection_id: $connection_id})-[:HAS_COLUMN]->(sc:Column)-[r:REFERENCES]->(tc:Column)<-[:HAS_COLUMN]-(target:Table {connection_id: $connection_id})
+        WHERE source.name IN $table_names OR target.name IN $table_names
         RETURN 
           source.name AS source_table,
           sc.name AS source_column,
@@ -121,9 +131,8 @@ class GraphRelationshipService:
     ) -> List[Dict[str, Any]]:
         """查询二度关联关系（通过中间表连接）"""
         query = """
-        MATCH path = (source:Table)-[:HAS_COLUMN]->(:Column)-[:REFERENCES*1..2]->(:Column)<-[:HAS_COLUMN]-(target:Table)
-        WHERE source.connection_id = $connection_id 
-          AND source.name IN $table_names
+        MATCH path = (source:Table {connection_id: $connection_id})-[:HAS_COLUMN]->(:Column)-[:REFERENCES*1..2]-(:Column)<-[:HAS_COLUMN]-(target:Table {connection_id: $connection_id})
+        WHERE source.name IN $table_names
           AND source <> target
           AND NOT target.name IN $table_names
         RETURN DISTINCT

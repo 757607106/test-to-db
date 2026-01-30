@@ -326,10 +326,10 @@ class SkillDiscoveryService:
     ) -> List[SkillSuggestion]:
         """使用 LLM 增强的 Skill 建议生成"""
         try:
-            from app.core.llm_factory import create_llm
+            from app.core.llms import get_default_model
             
             suggestions = []
-            llm = create_llm(temperature=0.3)
+            llm = get_default_model(caller="skill_discovery")
             
             for group in groups:
                 # 构建表信息

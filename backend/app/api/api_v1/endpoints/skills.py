@@ -133,6 +133,120 @@ async def get_skills_status(
         raise HTTPException(status_code=500, detail=f"Failed to get skills status: {str(e)}")
 
 
+# ===== Skill 自动发现 =====
+# 注意：这些路由必须在 /{skill_id} 之前定义，否则会被参数路由捕获
+
+@router.get("/discover")
+async def discover_skills(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+    connection_id: int = Query(..., description="数据库连接ID"),
+    use_llm: bool = Query(False, description="是否使用 LLM 增强分析"),
+) -> Any:
+    """
+    自动发现 Skill 建议
+    
+    基于数据库表结构分析，生成 Skill 配置建议：
+    - 按表名前缀分组
+    - 基于外键关系优化分组
+    - 可选 LLM 增强生成描述
+    """
+    from app.services.skill_discovery_service import skill_discovery_service
+    
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    
+    # 验证连接权限
+    connection = crud.db_connection.get_by_tenant(
+        db=db, id=connection_id, tenant_id=current_user.tenant_id
+    )
+    if not connection:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    
+    try:
+        result = await skill_discovery_service.discover(
+            connection_id=connection_id,
+            use_llm=use_llm
+        )
+        
+        # 转换为可序列化的格式
+        suggestions = []
+        for s in result.suggestions:
+            suggestions.append({
+                "name": s.name,
+                "display_name": s.display_name,
+                "description": s.description,
+                "keywords": s.keywords,
+                "table_names": s.table_names,
+                "confidence": s.confidence,
+                "reasoning": s.reasoning,
+            })
+        
+        return {
+            "suggestions": suggestions,
+            "analyzed_tables": result.analyzed_tables,
+            "grouped_tables": result.grouped_tables,
+            "ungrouped_tables": result.ungrouped_tables,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to discover skills: {str(e)}")
+
+
+@router.post("/discover/apply")
+async def apply_discovered_skills(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+    connection_id: int = Query(..., description="数据库连接ID"),
+    skill_names: List[str] = Query(..., description="要应用的 Skill 名称列表"),
+) -> Any:
+    """
+    应用发现的 Skill 建议
+    
+    批量创建选中的 Skill
+    """
+    from app.services.skill_discovery_service import skill_discovery_service
+    
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    
+    # 验证连接权限
+    connection = crud.db_connection.get_by_tenant(
+        db=db, id=connection_id, tenant_id=current_user.tenant_id
+    )
+    if not connection:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    
+    try:
+        # 先执行发现
+        discovery_result = await skill_discovery_service.discover(connection_id)
+        
+        # 筛选要应用的建议
+        suggestions_to_apply = [
+            s for s in discovery_result.suggestions 
+            if s.name in skill_names
+        ]
+        
+        if not suggestions_to_apply:
+            return {"success": False, "error": "No matching suggestions found"}
+        
+        # 应用建议
+        results = await skill_discovery_service.apply_suggestions(
+            connection_id=connection_id,
+            suggestions=suggestions_to_apply,
+            tenant_id=current_user.tenant_id
+        )
+        
+        return {
+            "success": True,
+            "results": results,
+            "created_count": len([r for r in results if r.get("success")])
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to apply discovered skills: {str(e)}")
+
+
 @router.get("/{skill_id}", response_model=Skill)
 async def get_skill(
     *,
@@ -323,14 +437,140 @@ async def get_skill_prompt_section(
         raise HTTPException(status_code=500, detail=f"Failed to get skill prompt section: {str(e)}")
 
 
-# ===== 占位：Phase 2 自动发现功能 =====
+# ===== Skill 智能优化 =====
 
-# @router.get("/discover", response_model=SkillDiscoverResponse)
-# async def discover_skills(...):
-#     """自动发现 Skill 建议（Phase 2 实现）"""
-#     pass
+@router.get("/optimization/summary")
+async def get_optimization_summary(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+    connection_id: int = Query(..., description="数据库连接ID"),
+) -> Any:
+    """
+    获取 Skill 优化摘要
+    
+    返回优化建议的概览，包括：
+    - 总建议数
+    - 按优先级分类
+    - 按类型分类
+    - 前5个建议
+    """
+    from app.services.skill_optimization_service import skill_optimization_service
+    
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    
+    # 验证连接权限
+    connection = crud.db_connection.get_by_tenant(
+        db=db, id=connection_id, tenant_id=current_user.tenant_id
+    )
+    if not connection:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    
+    try:
+        summary = await skill_optimization_service.get_optimization_summary(connection_id)
+        return summary
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get optimization summary: {str(e)}")
 
-# @router.post("/apply-suggestions")
-# async def apply_skill_suggestions(...):
-#     """应用 Skill 建议（Phase 2 实现）"""
-#     pass
+
+@router.get("/optimization/suggestions")
+async def get_optimization_suggestions(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+    connection_id: int = Query(..., description="数据库连接ID"),
+    days: int = Query(7, description="分析最近几天的数据"),
+    force_refresh: bool = Query(False, description="是否强制刷新"),
+) -> Any:
+    """
+    获取 Skill 优化建议列表
+    
+    分析用户查询历史，生成配置优化建议：
+    - 添加关键词
+    - 创建新 Skill
+    - 合并 Skills
+    - 添加业务规则
+    """
+    from app.services.skill_optimization_service import skill_optimization_service
+    
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    
+    # 验证连接权限
+    connection = crud.db_connection.get_by_tenant(
+        db=db, id=connection_id, tenant_id=current_user.tenant_id
+    )
+    if not connection:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    
+    try:
+        suggestions = await skill_optimization_service.analyze_and_suggest(
+            connection_id=connection_id,
+            days=days,
+            force_refresh=force_refresh
+        )
+        
+        # 转换为可序列化的格式
+        result = []
+        for s in suggestions:
+            result.append({
+                "id": s.id,
+                "type": s.type.value,
+                "priority": s.priority.value,
+                "skill_name": s.skill_name,
+                "skill_id": s.skill_id,
+                "title": s.title,
+                "description": s.description,
+                "reasoning": s.reasoning,
+                "action_data": s.action_data,
+                "query_count": s.query_count,
+                "failure_count": s.failure_count,
+                "confidence": s.confidence,
+                "example_queries": s.example_queries,
+                "status": s.status,
+                "created_at": s.created_at.isoformat(),
+            })
+        
+        return {"suggestions": result, "total": len(result)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get optimization suggestions: {str(e)}")
+
+
+@router.post("/optimization/apply/{suggestion_id}")
+async def apply_optimization_suggestion(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+    suggestion_id: str,
+    connection_id: int = Query(..., description="数据库连接ID"),
+) -> Any:
+    """
+    应用优化建议
+    
+    管理员审批后应用建议：
+    - ADD_KEYWORD: 直接添加关键词
+    - CREATE_SKILL: 返回预填数据，需要管理员在界面创建
+    - 其他类型: 返回操作指引
+    """
+    from app.services.skill_optimization_service import skill_optimization_service
+    
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="User is not associated with a tenant")
+    
+    # 验证连接权限
+    connection = crud.db_connection.get_by_tenant(
+        db=db, id=connection_id, tenant_id=current_user.tenant_id
+    )
+    if not connection:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    
+    try:
+        result = await skill_optimization_service.apply_suggestion(
+            suggestion_id=suggestion_id,
+            connection_id=connection_id,
+            approved_by=current_user.id
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to apply suggestion: {str(e)}")

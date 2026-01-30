@@ -10,41 +10,6 @@ from app.schemas.system_config import SystemConfig, SystemConfigCreate, SystemCo
 router = APIRouter()
 
 
-# ============================================================================
-# SQL 增强配置相关的数据模型
-# ============================================================================
-
-class SQLEnhancementConfig(BaseModel):
-    """SQL 增强功能配置"""
-    # QA 样本检索配置
-    qa_sample_enabled: bool = False  # 关闭：避免样本干扰 LLM 判断
-    qa_sample_min_similarity: float = 0.85
-    qa_sample_top_k: int = 3
-    qa_sample_verified_only: bool = True
-    
-    # 指标库配置
-    metrics_enabled: bool = False  # 关闭：避免指标定义干扰 LLM 判断
-    metrics_max_count: int = 3
-    
-    # 枚举值提示配置
-    enum_hints_enabled: bool = False  # 关闭：避免枚举值干扰 LLM 判断
-    enum_max_values: int = 20
-    
-    # 简化流程配置
-    simplified_flow_enabled: bool = True
-    skip_clarification_for_clear_queries: bool = True
-    
-    # 缓存配置
-    cache_mode: str = "simple"  # simple | full
-
-
-# SQL 增强配置的 key 前缀
-SQL_ENHANCEMENT_PREFIX = "sql_enhancement_"
-
-# 默认配置
-DEFAULT_SQL_ENHANCEMENT_CONFIG = SQLEnhancementConfig()
-
-
 @router.get("/{config_key}", response_model=SystemConfig)
 def get_system_config(
     *,
@@ -172,112 +137,63 @@ def get_default_embedding_model(
     }
 
 
-# ============================================================================
-# SQL 增强配置 API
-# ============================================================================
+# ===== QA 样本检索配置 =====
 
-@router.get("/sql-enhancement/config", response_model=SQLEnhancementConfig)
-def get_sql_enhancement_config(
+class QASampleConfig(BaseModel):
+    """QA 样本检索配置"""
+    enabled: bool = True
+    top_k: int = 3
+    min_similarity: float = 0.6
+    timeout_seconds: int = 5
+
+
+@router.get("/qa-sample/config", response_model=dict)
+def get_qa_sample_config(
     *,
     db: Session = Depends(deps.get_db),
 ) -> Any:
     """
-    获取 SQL 增强功能配置
-    
-    包括：
-    - QA 样本检索配置
-    - 指标库配置
-    - 枚举值提示配置
-    - 简化流程配置
-    - 缓存配置
+    获取 QA 样本检索配置
     """
-    import json
-    
-    config_key = f"{SQL_ENHANCEMENT_PREFIX}config"
-    config = crud.system_config.get_by_key(db, config_key=config_key)
-    
-    if not config or not config.config_value:
-        return DEFAULT_SQL_ENHANCEMENT_CONFIG
-    
-    try:
-        config_dict = json.loads(config.config_value)
-        return SQLEnhancementConfig(**config_dict)
-    except (json.JSONDecodeError, ValueError):
-        return DEFAULT_SQL_ENHANCEMENT_CONFIG
+    config = crud.system_config.get_qa_sample_config(db)
+    return config
 
 
-@router.put("/sql-enhancement/config", response_model=SQLEnhancementConfig)
-def update_sql_enhancement_config(
+@router.put("/qa-sample/config", response_model=dict)
+def update_qa_sample_config(
     *,
     db: Session = Depends(deps.get_db),
-    config_in: SQLEnhancementConfig,
+    config_in: QASampleConfig,
 ) -> Any:
     """
-    更新 SQL 增强功能配置
+    更新 QA 样本检索配置
     """
-    import json
-    
-    config_key = f"{SQL_ENHANCEMENT_PREFIX}config"
-    config_value = json.dumps(config_in.model_dump())
-    
-    crud.system_config.set_value(
+    config = crud.system_config.set_qa_sample_config(
         db,
-        config_key=config_key,
-        config_value=config_value,
-        description="SQL 增强功能配置（QA样本、指标库、枚举提示等）"
+        config={
+            "enabled": config_in.enabled,
+            "top_k": config_in.top_k,
+            "min_similarity": config_in.min_similarity,
+            "timeout_seconds": config_in.timeout_seconds
+        }
     )
-    
-    return config_in
-
-
-@router.post("/sql-enhancement/reset")
-def reset_sql_enhancement_config(
-    *,
-    db: Session = Depends(deps.get_db),
-) -> Any:
-    """
-    重置 SQL 增强功能配置为默认值
-    """
-    import json
-    
-    config_key = f"{SQL_ENHANCEMENT_PREFIX}config"
-    config_value = json.dumps(DEFAULT_SQL_ENHANCEMENT_CONFIG.model_dump())
-    
-    crud.system_config.set_value(
-        db,
-        config_key=config_key,
-        config_value=config_value,
-        description="SQL 增强功能配置（QA样本、指标库、枚举提示等）"
-    )
-    
     return {
-        "message": "SQL 增强配置已重置为默认值",
-        "config": DEFAULT_SQL_ENHANCEMENT_CONFIG.model_dump()
+        "message": "QA样本检索配置已更新",
+        "config": crud.system_config.get_qa_sample_config(db)
     }
 
 
-# ============================================================================
-# 辅助函数：获取 SQL 增强配置（供其他模块使用）
-# ============================================================================
-
-def get_sql_enhancement_settings() -> SQLEnhancementConfig:
+@router.post("/qa-sample/toggle", response_model=dict)
+def toggle_qa_sample_enabled(
+    *,
+    db: Session = Depends(deps.get_db),
+    enabled: bool,
+) -> Any:
     """
-    获取 SQL 增强配置（供其他模块调用）
-    
-    优先从数据库读取，如果没有则返回默认配置
+    切换 QA 样本检索启用状态
     """
-    import json
-    from app.db.session import get_db_session
-    
-    try:
-        with get_db_session() as db:
-            config_key = f"{SQL_ENHANCEMENT_PREFIX}config"
-            config = crud.system_config.get_by_key(db, config_key=config_key)
-            
-            if config and config.config_value:
-                config_dict = json.loads(config.config_value)
-                return SQLEnhancementConfig(**config_dict)
-    except Exception:
-        pass
-    
-    return DEFAULT_SQL_ENHANCEMENT_CONFIG
+    crud.system_config.set_qa_sample_enabled(db, enabled=enabled)
+    return {
+        "message": f"QA样本检索已{'启用' if enabled else '禁用'}",
+        "enabled": enabled
+    }

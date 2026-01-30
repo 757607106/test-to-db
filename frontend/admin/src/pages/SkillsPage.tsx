@@ -44,9 +44,20 @@ import {
   ThunderboltOutlined,
   LinkOutlined,
   MinusCircleOutlined,
+  BulbOutlined,
+  RocketOutlined,
+  ExperimentOutlined,
 } from '@ant-design/icons';
 import { getConnections } from '../services/api';
-import { skillService, Skill, SkillCreate, SkillUpdate, JoinRuleItem } from '../services/skillService';
+import { 
+  skillService, 
+  Skill, 
+  SkillCreate, 
+  SkillUpdate, 
+  JoinRuleItem,
+  OptimizationSuggestion,
+  SkillSuggestion,
+} from '../services/skillService';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -86,6 +97,21 @@ const SkillsPage: React.FC = () => {
   const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
   const [hasSkillsConfigured, setHasSkillsConfigured] = useState(false);
   const [form] = Form.useForm();
+  
+  // 新增状态：页面 Tab
+  const [activeTab, setActiveTab] = useState<'list' | 'discover' | 'optimize'>('list');
+  
+  // 自动发现状态
+  const [discoverLoading, setDiscoverLoading] = useState(false);
+  const [discoverSuggestions, setDiscoverSuggestions] = useState<SkillSuggestion[]>([]);
+  const [selectedSuggestions, setSelectedSuggestions] = useState<string[]>([]);
+  const [discoverStats, setDiscoverStats] = useState<{ analyzed: number; grouped: number; ungrouped: string[] }>({ 
+    analyzed: 0, grouped: 0, ungrouped: [] 
+  });
+  
+  // 优化建议状态
+  const [optimizeLoading, setOptimizeLoading] = useState(false);
+  const [optimizeSuggestions, setOptimizeSuggestions] = useState<OptimizationSuggestion[]>([]);
 
   // 加载连接列表
   useEffect(() => {
@@ -207,6 +233,300 @@ const SkillsPage: React.FC = () => {
       }
     }
   };
+
+  // 自动发现 Skills
+  const handleDiscover = async (useLlm = false) => {
+    if (!selectedConnection) return;
+    setDiscoverLoading(true);
+    try {
+      const result = await skillService.discoverSkills(selectedConnection, useLlm);
+      setDiscoverSuggestions(result.suggestions);
+      setDiscoverStats({
+        analyzed: result.analyzed_tables,
+        grouped: result.grouped_tables,
+        ungrouped: result.ungrouped_tables,
+      });
+      if (result.suggestions.length === 0) {
+        message.info('未发现可分组的表，请手动创建 Skill');
+      } else {
+        message.success(`发现 ${result.suggestions.length} 个 Skill 建议`);
+      }
+    } catch (error) {
+      message.error('自动发现失败');
+    } finally {
+      setDiscoverLoading(false);
+    }
+  };
+
+  // 应用发现的 Skills
+  const handleApplyDiscovered = async () => {
+    if (!selectedConnection || selectedSuggestions.length === 0) return;
+    setDiscoverLoading(true);
+    try {
+      const result = await skillService.applyDiscoveredSkills(selectedConnection, selectedSuggestions);
+      if (result.success) {
+        message.success(`成功创建 ${result.created_count} 个 Skills`);
+        setSelectedSuggestions([]);
+        setDiscoverSuggestions([]);
+        setActiveTab('list');
+        fetchSkills();
+      } else {
+        message.error('应用失败');
+      }
+    } catch (error) {
+      message.error('应用发现的 Skills 失败');
+    } finally {
+      setDiscoverLoading(false);
+    }
+  };
+
+  // 获取优化建议
+  const handleFetchOptimizations = async (forceRefresh = false) => {
+    if (!selectedConnection) return;
+    setOptimizeLoading(true);
+    try {
+      const result = await skillService.getOptimizationSuggestions(selectedConnection, 7, forceRefresh);
+      setOptimizeSuggestions(result.suggestions);
+      if (result.suggestions.length === 0) {
+        message.info('暂无优化建议');
+      }
+    } catch (error) {
+      message.error('获取优化建议失败');
+    } finally {
+      setOptimizeLoading(false);
+    }
+  };
+
+  // 应用优化建议
+  const handleApplyOptimization = async (suggestionId: string) => {
+    if (!selectedConnection) return;
+    try {
+      const result = await skillService.applyOptimizationSuggestion(suggestionId, selectedConnection);
+      if (result.success) {
+        message.success(result.message || '应用成功');
+        handleFetchOptimizations(true);
+        fetchSkills();
+      } else {
+        message.error(result.error || '应用失败');
+      }
+    } catch (error) {
+      message.error('应用优化建议失败');
+    }
+  };
+
+  // ===== 渲染函数 =====
+
+  // 渲染 Skills 列表
+  const renderSkillsList = () => {
+    const activeSkillsCount = skills.filter(s => s.is_active).length;
+    
+    return (
+    <>
+      <Row justify="space-between" style={{ marginBottom: 16 }}>
+        <Col>
+          {selectedConnection && !hasSkillsConfigured && (
+            <Alert
+              message="零配置模式"
+              description="当前连接未配置 Skills，系统将使用默认的全库检索模式。"
+              type="info"
+              showIcon
+              icon={<ThunderboltOutlined />}
+              style={{ marginBottom: 0 }}
+            />
+          )}
+          {selectedConnection && hasSkillsConfigured && activeSkillsCount > 0 && (
+            <Alert
+              message="Skill 模式已启用"
+              description={`已配置 ${activeSkillsCount} 个活跃的 Skills`}
+              type="success"
+              showIcon
+              icon={<CheckCircleOutlined />}
+              style={{ marginBottom: 0 }}
+            />
+          )}
+          {selectedConnection && hasSkillsConfigured && activeSkillsCount === 0 && (
+            <Alert
+              message="Skill 未激活"
+              description={`已配置 ${skills.length} 个 Skills，但均未启用。请启用至少一个 Skill 以使用 Skill 模式。`}
+              type="warning"
+              showIcon
+              icon={<CloseCircleOutlined />}
+              style={{ marginBottom: 0 }}
+            />
+          )}
+        </Col>
+        <Col>
+          <Space>
+            <Button icon={<ReloadOutlined />} onClick={fetchSkills} loading={loading}>
+              刷新
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate} disabled={!selectedConnection}>
+              创建 Skill
+            </Button>
+          </Space>
+        </Col>
+      </Row>
+      <Table
+        columns={columns}
+        dataSource={skills}
+        rowKey="id"
+        loading={loading}
+        pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `共 ${total} 个 Skills` }}
+        locale={{
+          emptyText: (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={selectedConnection ? '暂无 Skills，点击"创建 Skill"开始配置' : '请先选择数据库连接'}
+            />
+          ),
+        }}
+      />
+    </>
+    );
+  };
+
+  // 渲染自动发现
+  const renderDiscover = () => (
+    <>
+      <Alert
+        message="自动发现 Skills"
+        description="基于数据库表结构分析，按表名前缀和外键关系自动分组，生成 Skill 配置建议。"
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+      />
+      <Row justify="space-between" style={{ marginBottom: 16 }}>
+        <Col>
+          {discoverStats.analyzed > 0 && (
+            <Text type="secondary">
+              已分析 {discoverStats.analyzed} 个表，{discoverStats.grouped} 个已分组，
+              {discoverStats.ungrouped.length} 个未分组
+            </Text>
+          )}
+        </Col>
+        <Col>
+          <Space>
+            <Button icon={<SearchOutlined />} onClick={() => handleDiscover(false)} loading={discoverLoading}>
+              快速发现
+            </Button>
+            <Tooltip title="使用 LLM 增强分析，生成更准确的描述和关键词">
+              <Button icon={<ExperimentOutlined />} onClick={() => handleDiscover(true)} loading={discoverLoading}>
+                LLM 增强发现
+              </Button>
+            </Tooltip>
+            <Button
+              type="primary"
+              onClick={handleApplyDiscovered}
+              disabled={selectedSuggestions.length === 0}
+              loading={discoverLoading}
+            >
+              应用选中 ({selectedSuggestions.length})
+            </Button>
+          </Space>
+        </Col>
+      </Row>
+      <Table
+        dataSource={discoverSuggestions}
+        rowKey="name"
+        loading={discoverLoading}
+        rowSelection={{
+          selectedRowKeys: selectedSuggestions,
+          onChange: (keys) => setSelectedSuggestions(keys as string[]),
+        }}
+        columns={[
+          { title: '名称', dataIndex: 'display_name', key: 'display_name' },
+          { title: '标识', dataIndex: 'name', key: 'name', render: (t: string) => <Text code>{t}</Text> },
+          { title: '描述', dataIndex: 'description', key: 'description', ellipsis: true },
+          {
+            title: '关键词',
+            dataIndex: 'keywords',
+            key: 'keywords',
+            render: (kws: string[]) => (kws || []).slice(0, 3).map((k, i) => <Tag key={i}>{k}</Tag>),
+          },
+          {
+            title: '关联表',
+            dataIndex: 'table_names',
+            key: 'table_names',
+            render: (tables: string[]) => <Text>{tables?.length || 0} 个表</Text>,
+          },
+          {
+            title: '置信度',
+            dataIndex: 'confidence',
+            key: 'confidence',
+            render: (c: number) => <Tag color={c > 0.7 ? 'green' : c > 0.5 ? 'orange' : 'default'}>{(c * 100).toFixed(0)}%</Tag>,
+          },
+        ]}
+        locale={{ emptyText: <Empty description='点击"快速发现"开始分析' /> }}
+      />
+    </>
+  );
+
+  // 渲染优化建议
+  const renderOptimize = () => (
+    <>
+      <Alert
+        message="智能优化建议"
+        description="基于用户查询历史分析，生成 Skill 配置优化建议。建议需管理员确认后应用。"
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+      />
+      <Row justify="end" style={{ marginBottom: 16 }}>
+        <Space>
+          <Button icon={<ReloadOutlined />} onClick={() => handleFetchOptimizations(true)} loading={optimizeLoading}>
+            刷新分析
+          </Button>
+        </Space>
+      </Row>
+      <Table
+        dataSource={optimizeSuggestions}
+        rowKey="id"
+        loading={optimizeLoading}
+        columns={[
+          {
+            title: '优先级',
+            dataIndex: 'priority',
+            key: 'priority',
+            width: 80,
+            render: (p: string) => (
+              <Tag color={p === 'high' ? 'red' : p === 'medium' ? 'orange' : 'default'}>
+                {p === 'high' ? '高' : p === 'medium' ? '中' : '低'}
+              </Tag>
+            ),
+          },
+          { title: '建议', dataIndex: 'title', key: 'title' },
+          { title: '说明', dataIndex: 'description', key: 'description', ellipsis: true },
+          {
+            title: '查询数',
+            dataIndex: 'query_count',
+            key: 'query_count',
+            width: 80,
+          },
+          {
+            title: '示例',
+            dataIndex: 'example_queries',
+            key: 'example_queries',
+            render: (examples: string[]) => (
+              <Tooltip title={examples?.join('\n')}>
+                <Text type="secondary">{examples?.length || 0} 个示例</Text>
+              </Tooltip>
+            ),
+          },
+          {
+            title: '操作',
+            key: 'action',
+            width: 100,
+            render: (_: any, record: OptimizationSuggestion) => (
+              <Button type="link" size="small" onClick={() => handleApplyOptimization(record.id)}>
+                应用
+              </Button>
+            ),
+          },
+        ]}
+        locale={{ emptyText: <Empty description='点击"刷新分析"获取优化建议' /> }}
+      />
+    </>
+  );
 
   const columns = [
     {
@@ -367,70 +687,46 @@ const SkillsPage: React.FC = () => {
                   label: c.name || c.database,
                 }))}
               />
-              <Button
-                icon={<ReloadOutlined />}
-                onClick={fetchSkills}
-                loading={loading}
-              >
-                刷新
-              </Button>
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                onClick={handleCreate}
-                disabled={!selectedConnection}
-              >
-                创建 Skill
-              </Button>
             </Space>
           </Col>
         </Row>
 
-        {/* 状态提示 */}
-        {selectedConnection && !hasSkillsConfigured && (
-          <Alert
-            message="零配置模式"
-            description="当前连接未配置 Skills，系统将使用默认的全库检索模式。配置 Skills 可以显著提升大型数据库的查询效率和准确性。"
-            type="info"
-            showIcon
-            icon={<ThunderboltOutlined />}
-            style={{ marginBottom: 16 }}
-          />
-        )}
-
-        {selectedConnection && hasSkillsConfigured && (
-          <Alert
-            message="Skill 模式已启用"
-            description={`已配置 ${skills.filter(s => s.is_active).length} 个活跃的 Skills，系统将根据用户查询智能路由到对应的业务领域。`}
-            type="success"
-            showIcon
-            icon={<CheckCircleOutlined />}
-            style={{ marginBottom: 16 }}
-          />
-        )}
-
-        <Table
-          columns={columns}
-          dataSource={skills}
-          rowKey="id"
-          loading={loading}
-          pagination={{
-            pageSize: 10,
-            showSizeChanger: true,
-            showTotal: (total) => `共 ${total} 个 Skills`,
-          }}
-          locale={{
-            emptyText: (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={
-                  selectedConnection
-                    ? '暂无 Skills，点击"创建 Skill"开始配置'
-                    : '请先选择数据库连接'
-                }
-              />
-            ),
-          }}
+        {/* 顶级 Tab 切换 */}
+        <Tabs
+          activeKey={activeTab}
+          onChange={(key) => setActiveTab(key as any)}
+          items={[
+            {
+              key: 'list',
+              label: (
+                <Space>
+                  <TableOutlined />
+                  Skills 列表
+                </Space>
+              ),
+              children: renderSkillsList(),
+            },
+            {
+              key: 'discover',
+              label: (
+                <Space>
+                  <RocketOutlined />
+                  自动发现
+                </Space>
+              ),
+              children: renderDiscover(),
+            },
+            {
+              key: 'optimize',
+              label: (
+                <Space>
+                  <BulbOutlined />
+                  优化建议
+                </Space>
+              ),
+              children: renderOptimize(),
+            },
+          ]}
         />
       </Card>
 

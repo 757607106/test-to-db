@@ -14,6 +14,7 @@
 遵循 LangGraph 官方最佳实践:
 - 使用 StreamWriter 进行流式输出
 - 完全异步实现
+- 支持 langgraph_supervisor 集成
 """
 import json
 import logging
@@ -22,13 +23,96 @@ import time
 from typing import Dict, Any, Optional, List
 
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.tools import tool
+from langgraph.prebuilt import create_react_agent
 from langgraph.types import StreamWriter
 
 from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
+from app.core.agent_config import get_agent_llm, CORE_AGENT_CHART_ANALYST
 from app.schemas.stream_events import create_sql_step_event, create_insight_event
+from app.agents.nodes.base import ErrorStage
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Tool 定义（用于 ReAct Agent）
+# ============================================================================
+
+@tool
+def analyze_query_results(
+    user_query: str,
+    sql_query: str,
+    columns: List[str],
+    data: List[Dict[str, Any]],
+    row_count: int
+) -> Dict[str, Any]:
+    """
+    分析 SQL 查询结果，生成数据洞察和业务建议。
+    
+    Args:
+        user_query: 用户原始查询
+        sql_query: 执行的 SQL 语句
+        columns: 结果列名
+        data: 查询结果数据（字典列表）
+        row_count: 总行数
+    
+    Returns:
+        分析结果，包含摘要、洞察和建议
+    """
+    if not data:
+        return {
+            "summary": "查询结果为空",
+            "insights": [],
+            "recommendations": ["请检查查询条件是否过于严格", "确认数据是否已录入"]
+        }
+    
+    # 预计算统计信息
+    stats = _compute_statistics(columns, data)
+    
+    return {
+        "summary": f"查询返回 {row_count} 条记录",
+        "statistics": stats,
+        "insights": [],
+        "recommendations": [],
+        "status": "需要 LLM 进一步分析"
+    }
+
+
+def _compute_statistics(columns: List[str], data: List[Dict]) -> Dict[str, Any]:
+    """计算基础统计信息"""
+    stats = {}
+    for col in columns:
+        values = [row.get(col) for row in data if row.get(col) is not None]
+        if not values:
+            continue
+        
+        # 尝试数值统计
+        numeric_values = []
+        for v in values:
+            try:
+                if isinstance(v, (int, float)):
+                    numeric_values.append(float(v))
+            except (ValueError, TypeError):
+                pass
+        
+        if len(numeric_values) > len(values) * 0.5:
+            stats[col] = {
+                "type": "numeric",
+                "min": min(numeric_values),
+                "max": max(numeric_values),
+                "avg": sum(numeric_values) / len(numeric_values)
+            }
+        else:
+            # 分类统计
+            unique_count = len(set(str(v) for v in values))
+            stats[col] = {
+                "type": "categorical",
+                "unique_count": unique_count
+            }
+    
+    return stats
 
 
 class DataAnalystAgent:
@@ -55,7 +139,25 @@ class DataAnalystAgent:
         """
         self.name = "data_analyst_agent"
         self.custom_prompt = custom_prompt
-        self.llm = llm or get_default_model()
+        self.llm = llm or get_agent_llm(CORE_AGENT_CHART_ANALYST)
+        self.tools = [analyze_query_results]
+        
+        # 创建 LangGraph ReAct Agent（用于 supervisor 集成）
+        self.agent = create_react_agent(
+            model=self.llm,
+            tools=self.tools,
+            prompt=self._get_agent_prompt(),
+            name="data_analyst_agent"
+        )
+
+    def _get_agent_prompt(self) -> str:
+        """获取 Agent 系统提示（用于 ReAct Agent）"""
+        base_prompt = self._create_system_prompt()
+        return f"""{base_prompt}
+
+你是数据分析专家，负责分析 SQL 查询结果并生成洞察。
+当收到查询结果时，使用 analyze_query_results 工具进行分析，然后基于分析结果生成详细的数据解读。
+"""
     
     def _create_system_prompt(self) -> str:
         """
@@ -220,7 +322,7 @@ class DataAnalystAgent:
                 "messages": [AIMessage(content=f"数据分析遇到问题，但查询已成功执行。")],
                 "current_stage": "chart_generation",
                 "error_history": state.get("error_history", []) + [{
-                    "stage": "data_analysis",
+                    "stage": ErrorStage.DATA_ANALYSIS,
                     "error": str(e),
                     "retry_count": state.get("retry_count", 0)
                 }]

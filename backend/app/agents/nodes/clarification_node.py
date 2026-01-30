@@ -115,6 +115,61 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
         logger.info(f"使用改写后的查询进行澄清检测: {user_query[:100]}...")
     else:
         logger.info(f"用户查询: {user_query[:100]}...")
+
+    if state.get("force_clarification") and state.get("clarification_questions"):
+        formatted_questions = format_clarification_questions(state.get("clarification_questions", []))
+        interrupt_data = {
+            "type": "clarification_request",
+            "questions": formatted_questions,
+            "reason": "多次自动修复仍无法匹配正确字段，需要确认查询口径",
+            "original_query": user_query,
+            "forced": True
+        }
+        user_response = interrupt(interrupt_data)
+        logger.info(f"收到用户澄清回复: {user_response}")
+
+        is_skipped = False
+        if isinstance(user_response, dict) and user_response.get("skipped"):
+            is_skipped = True
+            logger.info("用户跳过了澄清，使用原始查询继续")
+        elif isinstance(user_response, list) and len(user_response) == 0:
+            is_skipped = True
+            logger.info("用户跳过了澄清（空数组），使用原始查询继续")
+
+        parsed_answers = []
+        if not is_skipped:
+            parsed_answers = parse_user_clarification_response(
+                user_response,
+                formatted_questions
+            )
+
+        if parsed_answers:
+            try:
+                enrich_result = enrich_query_with_clarification(
+                    original_query=user_query,
+                    clarification_responses=parsed_answers
+                )
+                enriched_query = enrich_result.get("enriched_query", user_query)
+            except Exception as e:
+                logger.error(f"查询增强失败: {e}")
+                enriched_query = user_query
+        else:
+            enriched_query = user_query
+
+        result = {
+            "clarification_responses": parsed_answers,
+            "enriched_query": enriched_query,
+            "original_query": user_query,
+            "current_stage": "schema_analysis",
+            "clarification_confirmed": True,
+            "clarification_skipped": is_skipped,
+            "force_clarification": False,
+            "clarification_questions": []
+        }
+        if cache_hit_type == "semantic" and cached_sql_template:
+            result["cached_sql_template"] = cached_sql_template
+            logger.info("保留缓存SQL模板供后续SQL生成参考")
+        return result
     
     # 3. 快速预检查 (性能优化)
     if should_skip_clarification(user_query):
@@ -199,7 +254,7 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
     user_response = interrupt(interrupt_data)
     
     # 执行到这里说明用户已经回复了
-    logger.info(f"收到用户澄清回复: {user_response}")
+    logger.info("收到用户澄清回复")
     
     # 7. 检查是否用户跳过了澄清
     # 修复 (2026-01-23): 处理用户点击"跳过"的情况
@@ -234,7 +289,7 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
     else:
         enriched_query = user_query
     
-    logger.info(f"增强后查询: {enriched_query[:100]}...")
+    logger.info(f"查询增强完成: out_len={len(enriched_query)}")
     
     # ✅ 10. 返回状态更新 (LangGraph标准 - 只返回需要更新的字段)
     result = {

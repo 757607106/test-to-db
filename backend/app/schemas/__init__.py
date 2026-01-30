@@ -89,22 +89,10 @@ from app.schemas.prediction import (
     PredictionColumnsResponse,
 )
 
-# 指标库
+# 值域 Profile（指标库功能已废弃，仅保留 Profile）
 from app.schemas.metric import (
-    MetricBase,
-    MetricCreate,
-    MetricUpdate,
-    Metric,
-    MetricWithContext,
     ColumnProfile,
     TableProfile,
-    SemanticQuery,
-    SemanticQueryResult,
-    MetricAlertBase,
-    MetricAlertCreate,
-    MetricAlertUpdate,
-    MetricAlert,
-    AlertCheckResult,
 )
 
 # JOIN 规则 (已废弃 - 迁移到 Skill.join_rules)
