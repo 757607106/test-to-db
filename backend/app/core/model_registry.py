@@ -315,6 +315,19 @@ def _import_class(module_path: str, class_name: str) -> Type:
     return getattr(module, class_name)
 
 
+def _normalize_openai_compatible_base_url(base_url: str) -> str:
+    s = (base_url or "").strip()
+    if not s:
+        return s
+    s = s.rstrip("/")
+    lowered = s.lower()
+    if lowered.endswith("/chat/completions"):
+        s = s[: -len("/chat/completions")].rstrip("/")
+    elif lowered.endswith("/embeddings"):
+        s = s[: -len("/embeddings")].rstrip("/")
+    return s
+
+
 def create_chat_model(
     provider: str,
     model_name: str,
@@ -383,7 +396,7 @@ def create_chat_model(
         if config.supports_base_url:
             effective_base_url = base_url or config.default_base_url
             if effective_base_url:
-                params["base_url"] = effective_base_url
+                params["base_url"] = _normalize_openai_compatible_base_url(effective_base_url)
         
         # 处理额外配置（如百度的 ak/sk）
         if extra_config and config.extra_config_keys:
@@ -454,7 +467,7 @@ def create_embedding_model(
         if config.supports_base_url:
             effective_base_url = base_url or config.default_base_url
             if effective_base_url:
-                params["base_url"] = effective_base_url
+                params["base_url"] = _normalize_openai_compatible_base_url(effective_base_url)
         
         # Ollama Embedding 特殊处理
         if provider_lower == "ollama" and config.embedding_class == "OllamaEmbeddings":

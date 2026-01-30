@@ -634,6 +634,41 @@ SQL 语法注意事项（{db_type}）：
                 insights = None
                 while retry_count <= max_retries:
                     try:
+                        analysis_method_parts = [
+                            "service_rule_based",
+                            "widget_grouped",
+                            "adaptive_time_filter",
+                            "time_sorted_trend",
+                            "iqr_anomaly",
+                            "coerced_dimension_filters",
+                        ]
+                        if request.use_graph_relationships:
+                            analysis_method_parts.append("graph_relationships")
+                        analysis_method = "+".join(analysis_method_parts)
+
+                        widget_groups = aggregated_data.get("by_widget") or []
+                        has_time_series = any(
+                            (g.get("date_columns") and g.get("numeric_columns") and (g.get("row_count") or 0) >= 2)
+                            for g in widget_groups
+                        )
+                        confidence = 0.8
+                        total_rows = int(aggregated_data.get("total_rows") or 0)
+                        if total_rows < 10:
+                            confidence = 0.5
+                        elif total_rows < 50:
+                            confidence = 0.65
+                        elif total_rows < 200:
+                            confidence = 0.75
+                        else:
+                            confidence = 0.82
+                        if widget_groups and len(widget_groups) > 1:
+                            confidence -= 0.02
+                        if not has_time_series:
+                            confidence -= 0.08
+                        if relationship_count > 0:
+                            confidence += 0.05
+                        confidence = max(0.3, min(0.95, round(confidence, 2)))
+
                         insights = schemas.InsightResult(
                             summary=schemas.InsightSummary(
                                 total_rows=aggregated_data["total_rows"],
@@ -648,9 +683,47 @@ SQL 语法注意事项（{db_type}）：
                                     type="info",
                                     content=f"已分析 {len(data_widgets)} 个数据组件，共 {aggregated_data['total_rows']} 条数据",
                                     priority="medium"
-                                )
+                                ),
+                                schemas.InsightRecommendation(
+                                    type="info",
+                                    content="趋势：按组件分别识别时间列并按时间排序，对数值列计算变化幅度后选最显著项",
+                                    priority="low"
+                                ),
+                                schemas.InsightRecommendation(
+                                    type="info",
+                                    content="异常：使用 IQR 方法检测离群值（下界=Q1-1.5×IQR，上界=Q3+1.5×IQR）",
+                                    priority="low"
+                                ),
                             ]
                         )
+
+                        trend_meta = aggregated_data.get("_trend_metadata") or {}
+                        if isinstance(trend_meta.get("values"), list) and len(trend_meta["values"]) >= 5:
+                            try:
+                                from app.services.prediction_service import prediction_service
+
+                                accuracy = prediction_service._calculate_accuracy_enhanced(
+                                    trend_meta["values"],
+                                    "linear",
+                                    {}
+                                )
+                                trend_meta["accuracy_mape"] = accuracy.mape
+                                trend_meta["accuracy_rmse"] = accuracy.rmse
+                                trend_meta["accuracy_mae"] = accuracy.mae
+                                trend_meta["accuracy_r_squared"] = accuracy.r_squared
+
+                                quality_conf = 1 - min(100.0, max(0.0, float(accuracy.mape))) / 100.0
+                                confidence = 0.6 * confidence + 0.4 * quality_conf
+                                confidence = max(0.3, min(0.95, round(confidence, 2)))
+
+                                if trend_meta.get("r_squared") is not None:
+                                    analysis_method = (
+                                        f"{analysis_method}"
+                                        f"+trend_r2={float(trend_meta['r_squared']):.2f}"
+                                        f"+mape={float(accuracy.mape):.1f}%"
+                                    )
+                            except Exception:
+                                pass
                         break
                     except Exception as e:
                         retry_count += 1
@@ -666,7 +739,12 @@ SQL 语法注意事项（{db_type}）：
                     widget_id, 
                     insights, 
                     len(data_widgets),
-                    status="completed"
+                    status="completed",
+                    analysis_method=analysis_method,
+                    confidence_score=confidence,
+                    relationship_count=relationship_count,
+                    source_tables=aggregated_data.get("table_names"),
+                    extra_metrics=aggregated_data.get("_trend_metadata")
                 )
                 
                 logger.info(f"✅ 后台洞察分析完成 (Widget: {widget_id})")
@@ -683,61 +761,247 @@ SQL 语法注意事项（{db_type}）：
     def _extract_key_metrics(self, aggregated_data: dict) -> dict:
         """从聚合数据中提取关键指标"""
         key_metrics = {}
+
+        def _as_float(value: Any):
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            s = str(value).strip()
+            if not s:
+                return None
+            try:
+                return float(s.replace(",", ""))
+            except Exception:
+                return None
+
+        widget_groups = aggregated_data.get("by_widget")
+        if widget_groups:
+            total_added = 0
+            for g in widget_groups:
+                data = g.get("data") or []
+                numeric_columns = g.get("numeric_columns") or []
+                if not data or not numeric_columns:
+                    continue
+                prefix = g.get("table_name") or (g.get("title") or f"widget_{g.get('widget_id')}")
+                for col in numeric_columns[:5]:
+                    values = [_as_float(row.get(col)) for row in data]
+                    numeric_values = [v for v in values if v is not None]
+                    if not numeric_values:
+                        continue
+                    key = f"{prefix}.{col}"
+                    key_metrics[key] = {
+                        "sum": round(sum(numeric_values), 2),
+                        "avg": round(sum(numeric_values) / len(numeric_values), 2),
+                        "max": round(max(numeric_values), 2),
+                        "min": round(min(numeric_values), 2),
+                        "count": len(numeric_values)
+                    }
+                    total_added += 1
+                    if total_added >= 12:
+                        return key_metrics
+            return key_metrics
+
         data = aggregated_data.get("data", [])
         numeric_columns = aggregated_data.get("numeric_columns", [])
-        
+
         if not data or not numeric_columns:
             return key_metrics
-        
-        for col in numeric_columns[:5]:  # 最多5个指标
-            values = [row.get(col) for row in data if row.get(col) is not None]
-            if values:
-                try:
-                    numeric_values = [float(v) for v in values if v is not None]
-                    if numeric_values:
-                        key_metrics[col] = {
-                            "sum": round(sum(numeric_values), 2),
-                            "avg": round(sum(numeric_values) / len(numeric_values), 2),
-                            "max": round(max(numeric_values), 2),
-                            "min": round(min(numeric_values), 2),
-                            "count": len(numeric_values)
-                        }
-                except (ValueError, TypeError):
-                    pass
+
+        for col in numeric_columns[:5]:
+            numeric_values = [_as_float(row.get(col)) for row in data]
+            numeric_values = [v for v in numeric_values if v is not None]
+            if numeric_values:
+                key_metrics[col] = {
+                    "sum": round(sum(numeric_values), 2),
+                    "avg": round(sum(numeric_values) / len(numeric_values), 2),
+                    "max": round(max(numeric_values), 2),
+                    "min": round(min(numeric_values), 2),
+                    "count": len(numeric_values)
+                }
         
         return key_metrics
     
     def _analyze_trends(self, aggregated_data: dict) -> Optional[schemas.InsightTrend]:
         """分析数据趋势"""
-        date_columns = aggregated_data.get("date_columns", [])
-        numeric_columns = aggregated_data.get("numeric_columns", [])
-        data = aggregated_data.get("data", [])
-        
-        if not date_columns or not numeric_columns or len(data) < 2:
-            return None
-        
-        # 简单趋势分析：比较首尾数据
         try:
-            first_row = data[0]
-            last_row = data[-1]
-            
-            for num_col in numeric_columns[:1]:  # 取第一个数值列
-                first_val = first_row.get(num_col)
-                last_val = last_row.get(num_col)
-                
-                if first_val is not None and last_val is not None:
-                    first_val = float(first_val)
-                    last_val = float(last_val)
-                    
+            from datetime import datetime, date
+
+            def _try_parse_datetime(value: Any):
+                if value is None:
+                    return None
+                if isinstance(value, datetime):
+                    return value
+                if isinstance(value, date):
+                    return datetime.combine(value, datetime.min.time())
+                s = str(value).strip()
+                if not s:
+                    return None
+                try:
+                    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+                except Exception:
+                    return None
+
+            def _as_float(value: Any):
+                if value is None:
+                    return None
+                if isinstance(value, (int, float)):
+                    return float(value)
+                s = str(value).strip()
+                if not s:
+                    return None
+                try:
+                    return float(s.replace(",", ""))
+                except Exception:
+                    return None
+
+            def _pick_date_column(cols: List[str]) -> str:
+                if not cols:
+                    return ""
+                for c in cols:
+                    if any(kw in c.lower() for kw in ("created", "updated", "date", "time", "at", "日期", "时间")):
+                        return c
+                return cols[0]
+
+            def _r_squared(values: List[float]) -> float:
+                n = len(values)
+                if n < 3:
+                    return 0.0
+                y_mean = sum(values) / n
+                ss_tot = sum((y - y_mean) ** 2 for y in values)
+                if ss_tot == 0:
+                    return 1.0
+                x_mean = (n - 1) / 2
+                ss_xx = sum((i - x_mean) ** 2 for i in range(n))
+                if ss_xx == 0:
+                    return 0.0
+                ss_xy = sum((i - x_mean) * (values[i] - y_mean) for i in range(n))
+                slope = ss_xy / ss_xx
+                intercept = y_mean - slope * x_mean
+                predicted = [intercept + slope * i for i in range(n)]
+                ss_res = sum((values[i] - predicted[i]) ** 2 for i in range(n))
+                r2 = 1 - (ss_res / ss_tot)
+                return max(0.0, min(1.0, float(r2)))
+
+            widget_groups = aggregated_data.get("by_widget")
+            best = None
+            if widget_groups:
+                for g in widget_groups:
+                    data = g.get("data") or []
+                    date_columns = g.get("date_columns") or []
+                    numeric_columns = g.get("numeric_columns") or []
+                    if not date_columns or not numeric_columns or len(data) < 2:
+                        continue
+                    date_col = _pick_date_column(date_columns)
+                    prefix = g.get("table_name") or (g.get("title") or f"widget_{g.get('widget_id')}")
+
+                    for num_col in numeric_columns:
+                        points = []
+                        for row in data:
+                            dt = _try_parse_datetime(row.get(date_col))
+                            val = _as_float(row.get(num_col))
+                            if dt is not None and val is not None:
+                                points.append((dt, val))
+                        if len(points) < 2:
+                            continue
+                        points.sort(key=lambda x: x[0])
+                        first_dt, first_val = points[0]
+                        last_dt, last_val = points[-1]
+                        values = [p[1] for p in points]
+                        delta = last_val - first_val
+                        if first_val != 0:
+                            rate = (delta / first_val) * 100
+                            score = abs(rate)
+                        else:
+                            rate = None
+                            score = abs(delta)
+                        metric_name = f"{prefix}.{num_col}"
+                        r2 = _r_squared(values)
+                        candidate = {
+                            "score": score,
+                            "metric_name": metric_name,
+                            "first_val": first_val,
+                            "last_val": last_val,
+                            "rate": rate,
+                            "first_dt": first_dt,
+                            "last_dt": last_dt,
+                            "values": values,
+                            "r_squared": r2,
+                        }
+                        if best is None or candidate["score"] > best["score"]:
+                            best = candidate
+
+            if best is None:
+                date_columns = aggregated_data.get("date_columns", [])
+                numeric_columns = aggregated_data.get("numeric_columns", [])
+                data = aggregated_data.get("data", [])
+                if not date_columns or not numeric_columns or len(data) < 2:
+                    return None
+                date_col = _pick_date_column(date_columns)
+                for num_col in numeric_columns:
+                    points = []
+                    for row in data:
+                        dt = _try_parse_datetime(row.get(date_col))
+                        val = _as_float(row.get(num_col))
+                        if dt is not None and val is not None:
+                            points.append((dt, val))
+                    if len(points) < 2:
+                        continue
+                    points.sort(key=lambda x: x[0])
+                    first_dt, first_val = points[0]
+                    last_dt, last_val = points[-1]
+                    values = [p[1] for p in points]
+                    delta = last_val - first_val
                     if first_val != 0:
-                        change_rate = ((last_val - first_val) / first_val) * 100
-                        direction = "up" if change_rate > 0 else ("down" if change_rate < 0 else "stable")
-                        
-                        return schemas.InsightTrend(
-                            trend_direction=direction,
-                            total_growth_rate=round(change_rate, 2),
-                            description=f"{num_col} 从 {first_val} 变化到 {last_val}，变化率 {round(change_rate, 2)}%"
-                        )
+                        rate = (delta / first_val) * 100
+                        score = abs(rate)
+                    else:
+                        rate = None
+                        score = abs(delta)
+                    r2 = _r_squared(values)
+                    candidate = {
+                        "score": score,
+                        "metric_name": num_col,
+                        "first_val": first_val,
+                        "last_val": last_val,
+                        "rate": rate,
+                        "first_dt": first_dt,
+                        "last_dt": last_dt,
+                        "values": values,
+                        "r_squared": r2,
+                    }
+                    if best is None or candidate["score"] > best["score"]:
+                        best = candidate
+
+            if best is None:
+                return None
+
+            metric_name = best["metric_name"]
+            first_val = best["first_val"]
+            last_val = best["last_val"]
+            rate = best["rate"]
+            first_dt = best["first_dt"]
+            last_dt = best["last_dt"]
+            r2 = best["r_squared"]
+            direction = "up" if last_val > first_val else ("down" if last_val < first_val else "stable")
+            if rate is not None:
+                rate = round(rate, 2)
+                desc = f"{metric_name} 从 {first_val} 变化到 {last_val}（{first_dt.date()}→{last_dt.date()}），变化率 {rate}%（R²={r2:.2f}）"
+            else:
+                desc = f"{metric_name} 从 {first_val} 变化到 {last_val}（{first_dt.date()}→{last_dt.date()}），变化量 {round(last_val - first_val, 2)}（R²={r2:.2f}）"
+
+            aggregated_data["_trend_metadata"] = {
+                "metric": metric_name,
+                "r_squared": round(r2, 4),
+                "values": best.get("values") or [],
+                "point_count": len(best.get("values") or []),
+            }
+
+            return schemas.InsightTrend(
+                trend_direction=direction,
+                total_growth_rate=rate,
+                description=desc
+            )
         except Exception:
             pass
         
@@ -746,42 +1010,99 @@ SQL 语法注意事项（{db_type}）：
     def _detect_anomalies(self, aggregated_data: dict) -> List[schemas.InsightAnomaly]:
         """检测数据异常"""
         anomalies = []
-        data = aggregated_data.get("data", [])
-        numeric_columns = aggregated_data.get("numeric_columns", [])
-        
-        if not data or not numeric_columns:
-            return anomalies
-        
-        for col in numeric_columns[:3]:  # 最多检查3列
+
+        def _severity_score(s: Optional[str]) -> int:
+            if s == "high":
+                return 3
+            if s == "medium":
+                return 2
+            return 1
+
+        def _detect_for_series(metric_name: str, values: List[float]) -> List[schemas.InsightAnomaly]:
+            if len(values) < 8:
+                return []
+            values_sorted = sorted(values)
+
+            def _quantile(sorted_vals: List[float], q: float) -> float:
+                n = len(sorted_vals)
+                if n == 1:
+                    return sorted_vals[0]
+                pos = (n - 1) * q
+                lo = int(pos)
+                hi = min(lo + 1, n - 1)
+                w = pos - lo
+                return sorted_vals[lo] * (1 - w) + sorted_vals[hi] * w
+
+            q1 = _quantile(values_sorted, 0.25)
+            q3 = _quantile(values_sorted, 0.75)
+            iqr = q3 - q1
+            if iqr <= 0:
+                return []
+
+            lower = q1 - 1.5 * iqr
+            upper = q3 + 1.5 * iqr
+
+            max_val = values_sorted[-1]
+            min_val = values_sorted[0]
+
+            found = []
+            if max_val > upper:
+                exceed = (max_val - upper) / iqr
+                severity = "high" if exceed >= 3 else ("medium" if exceed >= 1.5 else "low")
+                found.append(schemas.InsightAnomaly(
+                    type="outlier",
+                    metric=metric_name,
+                    description=f"{metric_name} 存在异常高值 {max_val}（上界 {round(upper, 2)}）",
+                    severity=severity
+                ))
+            if min_val < lower:
+                exceed = (lower - min_val) / iqr
+                severity = "high" if exceed >= 3 else ("medium" if exceed >= 1.5 else "low")
+                found.append(schemas.InsightAnomaly(
+                    type="outlier",
+                    metric=metric_name,
+                    description=f"{metric_name} 存在异常低值 {min_val}（下界 {round(lower, 2)}）",
+                    severity=severity
+                ))
+            return found
+
+        def _as_float(value: Any):
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            s = str(value).strip()
+            if not s:
+                return None
             try:
-                values = [float(row.get(col)) for row in data if row.get(col) is not None]
-                if len(values) < 3:
-                    continue
-                
-                avg_val = sum(values) / len(values)
-                max_val = max(values)
-                min_val = min(values)
-                
-                # 简单异常检测：极值超过平均值的3倍
-                if avg_val > 0 and max_val > avg_val * 3:
-                    anomalies.append(schemas.InsightAnomaly(
-                        type="outlier",
-                        metric=col,
-                        description=f"{col} 存在极大值 {max_val}，远超平均值 {round(avg_val, 2)}",
-                        severity="medium"
-                    ))
-                
-                if avg_val > 0 and min_val < avg_val * 0.1:
-                    anomalies.append(schemas.InsightAnomaly(
-                        type="outlier",
-                        metric=col,
-                        description=f"{col} 存在极小值 {min_val}，远低于平均值 {round(avg_val, 2)}",
-                        severity="low"
-                    ))
+                return float(s.replace(",", ""))
             except Exception:
-                pass
-        
-        return anomalies[:5]  # 最多返回5个异常
+                return None
+
+        widget_groups = aggregated_data.get("by_widget")
+        if widget_groups:
+            for g in widget_groups:
+                data = g.get("data") or []
+                numeric_columns = g.get("numeric_columns") or []
+                if not data or not numeric_columns:
+                    continue
+                prefix = g.get("table_name") or (g.get("title") or f"widget_{g.get('widget_id')}")
+                for col in numeric_columns[:3]:
+                    vals = [_as_float(row.get(col)) for row in data]
+                    vals = [v for v in vals if v is not None]
+                    anomalies.extend(_detect_for_series(f"{prefix}.{col}", vals))
+        else:
+            data = aggregated_data.get("data", [])
+            numeric_columns = aggregated_data.get("numeric_columns", [])
+            if not data or not numeric_columns:
+                return anomalies
+            for col in numeric_columns[:3]:
+                vals = [_as_float(row.get(col)) for row in data]
+                vals = [v for v in vals if v is not None]
+                anomalies.extend(_detect_for_series(col, vals))
+
+        anomalies.sort(key=lambda a: _severity_score(a.severity), reverse=True)
+        return anomalies[:5]
     
     def _find_correlations(self, aggregated_data: dict, relationship_context: Optional[dict]) -> List[schemas.InsightCorrelation]:
         """发现数据关联"""
@@ -816,11 +1137,74 @@ SQL 语法注意事项（{db_type}）：
         conditions: Optional[schemas.InsightConditions]
     ) -> Dict[str, Any]:
         """聚合Widget数据"""
+        from datetime import datetime, date
+
+        def _as_float(value: Any):
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            s = str(value).strip()
+            if not s:
+                return None
+            try:
+                return float(s.replace(",", ""))
+            except Exception:
+                return None
+
+        def _try_parse_datetime(value: Any):
+            if value is None:
+                return None
+            if isinstance(value, datetime):
+                return value
+            if isinstance(value, date):
+                return datetime.combine(value, datetime.min.time())
+            s = str(value).strip()
+            if not s:
+                return None
+            try:
+                return datetime.fromisoformat(s.replace("Z", "+00:00"))
+            except Exception:
+                return None
+
+        def _infer_columns(rows: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+            numeric = set()
+            dates = set()
+            if not rows:
+                return {"numeric": [], "dates": []}
+
+            sample = rows[: min(20, len(rows))]
+            keys = set()
+            for r in sample:
+                if isinstance(r, dict):
+                    keys.update(r.keys())
+
+            for k in keys:
+                k_lower = str(k).lower()
+                if any(keyword in k_lower for keyword in ("date", "time", "created", "updated", "at", "日期", "时间")):
+                    for r in sample:
+                        dt = _try_parse_datetime(r.get(k)) if isinstance(r, dict) else None
+                        if dt is not None:
+                            dates.add(k)
+                            break
+
+                for r in sample:
+                    if not isinstance(r, dict):
+                        continue
+                    v = r.get(k)
+                    fv = _as_float(v)
+                    if fv is not None:
+                        numeric.add(k)
+                        break
+
+            return {"numeric": list(numeric), "dates": list(dates)}
+
         aggregated_rows = []
         table_names = set()
         numeric_columns = set()
         date_columns = set()
         widget_summaries = []
+        by_widget = []
         
         for widget in widgets:
             # 提取widget数据
@@ -833,23 +1217,37 @@ SQL 语法注意事项（{db_type}）：
             
             # 应用条件过滤
             filtered_data = self._apply_conditions(data, conditions)
+
+            table_name = None
+            if widget.query_config and isinstance(widget.query_config, dict):
+                table_name = widget.query_config.get("table_name")
+
+            inferred = _infer_columns(filtered_data)
+            widget_numeric_columns = inferred["numeric"]
+            widget_date_columns = inferred["dates"]
+
+            by_widget.append({
+                "widget_id": widget.id,
+                "title": getattr(widget, "title", None),
+                "widget_type": getattr(widget, "widget_type", None),
+                "table_name": table_name,
+                "row_count": len(filtered_data),
+                "numeric_columns": widget_numeric_columns,
+                "date_columns": widget_date_columns,
+                "data": filtered_data,
+            })
             
             aggregated_rows.extend(filtered_data)
             
             # 提取表名
-            if widget.query_config:
-                if "table_name" in widget.query_config:
-                    table_names.add(widget.query_config["table_name"])
+            if table_name:
+                table_names.add(table_name)
             
             # 提取列信息
-            if filtered_data:
-                first_row = filtered_data[0]
-                for key, value in first_row.items():
-                    if isinstance(value, (int, float)):
-                        numeric_columns.add(key)
-                    elif isinstance(value, str):
-                        if any(keyword in key.lower() for keyword in ["date", "time", "created", "updated"]):
-                            date_columns.add(key)
+            for c in widget_numeric_columns:
+                numeric_columns.add(c)
+            for c in widget_date_columns:
+                date_columns.add(c)
             
             widget_summaries.append({
                 "id": widget.id,
@@ -864,6 +1262,7 @@ SQL 语法注意事项（{db_type}）：
             "table_names": list(table_names),
             "numeric_columns": list(numeric_columns),
             "date_columns": list(date_columns),
+            "by_widget": by_widget,
             "widget_summaries": widget_summaries
         }
 
@@ -915,24 +1314,93 @@ SQL 语法注意事项（{db_type}）：
                 except Exception:
                     continue
             return None
+
+        def _calc_relative_range(relative_range: str):
+            from datetime import datetime, timedelta
+            now = datetime.utcnow()
+            key = (relative_range or "").strip().lower()
+            if not key:
+                return None, None
+            if key in {"last_7_days", "7d", "last7days"}:
+                return now - timedelta(days=7), now
+            if key in {"last_30_days", "30d", "last30days"}:
+                return now - timedelta(days=30), now
+            if key in {"last_90_days", "90d", "last90days"}:
+                return now - timedelta(days=90), now
+            if key in {"this_month", "month_to_date", "mtd"}:
+                start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                return start, now
+            if key in {"this_year", "year_to_date", "ytd"}:
+                start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+                return start, now
+            return None, None
+
+        def _select_date_column(rows: List[Dict[str, Any]]) -> Optional[str]:
+            if not rows:
+                return None
+            sample = rows[:50]
+            keys = list(sample[0].keys())
+            keyword_keys = [
+                k for k in keys
+                if any(kw in k.lower() for kw in ("date", "time", "created", "updated", "at", "日期", "时间"))
+            ]
+            candidates = keyword_keys + [k for k in keys if k not in keyword_keys]
+            best_key = None
+            best_ratio = 0.0
+            for k in candidates:
+                parsed = 0
+                seen = 0
+                for r in sample:
+                    if k not in r:
+                        continue
+                    seen += 1
+                    if _try_parse_datetime(r.get(k)) is not None:
+                        parsed += 1
+                if seen == 0:
+                    continue
+                ratio = parsed / seen
+                if ratio > best_ratio:
+                    best_ratio = ratio
+                    best_key = k
+            if best_ratio >= 0.6:
+                return best_key
+            return None
+
+        def _coerce_number(value: Any):
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            s = str(value).strip()
+            if not s:
+                return None
+            try:
+                return float(s.replace(",", ""))
+            except Exception:
+                return None
+
+        def _values_match(row_val: Any, expected: Any) -> bool:
+            if row_val is None and expected is None:
+                return True
+            if row_val is None or expected is None:
+                return False
+            if isinstance(expected, str) or isinstance(row_val, str):
+                row_num = _coerce_number(row_val)
+                exp_num = _coerce_number(expected)
+                if row_num is not None and exp_num is not None:
+                    return row_num == exp_num
+                return str(row_val).strip() == str(expected).strip()
+            return row_val == expected
         
         # 时间范围过滤
         if conditions.time_range:
-            date_column = None
-            if filtered_data:
-                first_row = filtered_data[0]
-                for key in first_row.keys():
-                    value = first_row.get(key)
-                    if _try_parse_datetime(value) is not None:
-                        date_column = key
-                        break
-                    if any(keyword in key.lower() for keyword in ["date", "time", "created"]):
-                        date_column = key
-                        break
+            date_column = _select_date_column(filtered_data)
             
             if date_column:
                 start_dt = _try_parse_datetime(conditions.time_range.start) if conditions.time_range.start else None
                 end_dt = _try_parse_datetime(conditions.time_range.end) if conditions.time_range.end else None
+                if (start_dt is None and end_dt is None) and getattr(conditions.time_range, "relative_range", None):
+                    start_dt, end_dt = _calc_relative_range(conditions.time_range.relative_range)
                 
                 if start_dt or end_dt:
                     def _in_range(row: Dict[str, Any]) -> bool:
@@ -951,10 +1419,13 @@ SQL 语法注意事项（{db_type}）：
         if conditions.dimension_filters:
             for column, value in conditions.dimension_filters.items():
                 if isinstance(value, (list, tuple, set)):
-                    allowed = set(value)
-                    filtered_data = [row for row in filtered_data if row.get(column) in allowed]
+                    allowed = list(value)
+                    filtered_data = [
+                        row for row in filtered_data
+                        if any(_values_match(row.get(column), v) for v in allowed)
+                    ]
                 else:
-                    filtered_data = [row for row in filtered_data if row.get(column) == value]
+                    filtered_data = [row for row in filtered_data if _values_match(row.get(column), value)]
         
         return filtered_data
     
@@ -1059,7 +1530,19 @@ SQL 语法注意事项（{db_type}）：
             db.refresh(new_widget)
             return new_widget.id
 
-    def _update_insight_widget_result(self, db: Session, widget_id: int, insights: schemas.InsightResult, count: int, status: str):
+    def _update_insight_widget_result(
+        self,
+        db: Session,
+        widget_id: int,
+        insights: schemas.InsightResult,
+        count: int,
+        status: str,
+        analysis_method: Optional[str] = None,
+        confidence_score: Optional[float] = None,
+        relationship_count: Optional[int] = None,
+        source_tables: Optional[List[str]] = None,
+        extra_metrics: Optional[Dict[str, Any]] = None,
+    ):
         """更新洞察 Widget 的分析结果"""
         try:
             widget = crud.crud_dashboard_widget.get(db, id=widget_id)
@@ -1068,6 +1551,16 @@ SQL 语法注意事项（{db_type}）：
                 query_config["status"] = status
                 query_config["analyzed_widget_count"] = count
                 query_config["last_analysis_at"] = datetime.utcnow().isoformat()
+                if analysis_method is not None:
+                    query_config["analysis_method"] = analysis_method
+                if confidence_score is not None:
+                    query_config["confidence_score"] = confidence_score
+                if relationship_count is not None:
+                    query_config["relationship_count"] = relationship_count
+                if source_tables is not None:
+                    query_config["source_tables"] = source_tables
+                if extra_metrics is not None:
+                    query_config["trend_metrics"] = extra_metrics
                 
                 widget.query_config = query_config
                 widget.data_cache = insights.dict(exclude_none=True)

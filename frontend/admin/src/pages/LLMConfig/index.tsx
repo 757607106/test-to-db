@@ -54,6 +54,46 @@ const LLMConfigPage: React.FC = () => {
   const [testingConnection, setTestingConnection] = useState(false);
   const [form] = Form.useForm();
 
+  const extractApiErrorMessage = (error: any): string | undefined => {
+    const responseData = error?.response?.data;
+    const detail = responseData?.detail ?? responseData?.message;
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail) && detail.length > 0) {
+      const first = detail[0];
+      if (typeof first?.msg === 'string') return first.msg;
+      if (typeof first === 'string') return first;
+    }
+    if (typeof error?.message === 'string') return error.message;
+    return undefined;
+  };
+
+  const normalizeProvider = (provider: unknown): string | undefined => {
+    const raw = Array.isArray(provider) ? provider[0] : provider;
+    const s = typeof raw === 'string' ? raw.trim() : '';
+    return s ? s.toLowerCase() : undefined;
+  };
+
+  const normalizeOptionalString = (value: unknown): string | undefined => {
+    const s = typeof value === 'string' ? value.trim() : '';
+    return s ? s : undefined;
+  };
+
+  const normalizeFormValues = (values: any, isEditing: boolean) => {
+    const normalized: any = {
+      ...values,
+      provider: normalizeProvider(values?.provider),
+      model_name: normalizeOptionalString(values?.model_name),
+      base_url: normalizeOptionalString(values?.base_url),
+      api_key: normalizeOptionalString(values?.api_key),
+    };
+
+    if (isEditing && !normalized.api_key) {
+      delete normalized.api_key;
+    }
+
+    return normalized;
+  };
+
   // 加载配置列表
   const fetchConfigs = async () => {
     setLoading(true);
@@ -63,7 +103,7 @@ const LLMConfigPage: React.FC = () => {
       setConfigs(Array.isArray(response.data) ? response.data : []);
     } catch (error) {
       console.error('Failed to load configs:', error);
-      message.error('加载配置失败');
+      message.error(extractApiErrorMessage(error) || '加载配置失败');
     } finally {
       setLoading(false);
     }
@@ -151,12 +191,13 @@ const LLMConfigPage: React.FC = () => {
     try {
       const values = await form.validateFields();
       setLoading(true);
+      const payload = normalizeFormValues(values, Boolean(editingId));
       
       if (editingId) {
-        await updateLLMConfig(editingId, values);
+        await updateLLMConfig(editingId, payload);
         message.success('配置更新成功');
       } else {
-        await createLLMConfig(values);
+        await createLLMConfig(payload);
         message.success('配置创建成功');
       }
       
@@ -164,9 +205,13 @@ const LLMConfigPage: React.FC = () => {
       form.resetFields();
       setEditingId(null);
       fetchConfigs();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Operation failed:', error);
-      message.error('操作失败，请检查输入');
+      if (Array.isArray(error?.errorFields) && error.errorFields.length > 0) {
+        message.error('请检查表单填写项');
+        return;
+      }
+      message.error(extractApiErrorMessage(error) || '操作失败，请稍后重试');
     } finally {
       setLoading(false);
     }
@@ -232,20 +277,25 @@ const LLMConfigPage: React.FC = () => {
   const handleTestConnection = async () => {
     try {
       const values = await form.getFieldsValue();
-      if (!values.provider || !values.model_name) {
+      const payload = normalizeFormValues(values, Boolean(editingId));
+      if (!payload.provider || !payload.model_name) {
         message.warning('请先填写提供商和模型名称');
+        return;
+      }
+      if (!payload.api_key) {
+        message.warning('请先填写 API Key');
         return;
       }
       
       setTestingConnection(true);
-      const res = await testLLMConfig(values);
+      const res = await testLLMConfig(payload);
       if (res.data && res.data.success) {
         message.success(`连接成功: ${res.data.message}`);
       } else {
         message.error(`连接失败: ${res.data?.message || '未知错误'}`);
       }
     } catch (error: any) {
-      message.error(`连接测试出错: ${error.message || '网络错误'}`);
+      message.error(extractApiErrorMessage(error) || `连接测试出错: ${error.message || '网络错误'}`);
     } finally {
       setTestingConnection(false);
     }

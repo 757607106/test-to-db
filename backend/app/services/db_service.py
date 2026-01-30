@@ -79,14 +79,26 @@ def get_db_engine(connection: DBConnection, password: str = None, timeout_second
 
         elif connection.db_type.lower() == "postgresql":
             conn_str = (
-                f"postgresql://{connection.username}:"
+                f"postgresql+psycopg://{connection.username}:"
                 f"{encoded_password}@"
                 f"{connection.host}:{connection.port}/{connection.database_name}"
             )
             print(f"Connecting to PostgreSQL database: {connection.host}:{connection.port}/{connection.database_name}")
             if timeout_seconds is not None:
                 connect_args = {"connect_timeout": min(timeout_seconds, 60)}
-            return create_engine(conn_str, connect_args=connect_args or {})
+            try:
+                return create_engine(conn_str, connect_args=connect_args or {})
+            except (ModuleNotFoundError, ImportError) as e:
+                error_text = str(e).lower()
+                if "psycopg" in error_text or "psycopg2" in error_text:
+                    raise Exception(
+                        "PostgreSQL driver not installed. Install: pip install 'psycopg[binary]'"
+                    )
+                raise
+            except sqlalchemy.exc.NoSuchModuleError:
+                raise Exception(
+                    "PostgreSQL driver not available. Install: pip install 'psycopg[binary]'"
+                )
 
         elif connection.db_type.lower() == "sqlite":
             # For SQLite, the database_name is treated as the file path
@@ -127,6 +139,8 @@ def execute_query(connection: DBConnection, query: str, timeout_seconds: Optiona
         
         engine = get_db_engine(connection, timeout_seconds=timeout_seconds)
         with engine.connect() as conn:
+            if connection.db_type.lower() == "postgresql":
+                conn = conn.execution_options(isolation_level="AUTOCOMMIT")
             if timeout_seconds is not None:
                 try:
                     timeout_seconds_int = int(timeout_seconds)
@@ -150,7 +164,18 @@ def execute_query(connection: DBConnection, query: str, timeout_seconds: Optiona
                         q_strip = (query or "").lstrip()
                         if q_strip[:6].lower() == "select" and "max_execution_time" not in q_strip.lower():
                             query = q_strip[:6] + f" /*+ MAX_EXECUTION_TIME({timeout_ms}) */" + q_strip[6:]
-            result = conn.execute(sqlalchemy.text(query))
+            try:
+                result = conn.execute(sqlalchemy.text(query))
+            except Exception as e:
+                error_text = str(e).lower()
+                if "current transaction is aborted" in error_text or "infailedsqltransaction" in error_text:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    result = conn.execute(sqlalchemy.text(query))
+                else:
+                    raise
             columns = result.keys()
             return [dict(zip(columns, row)) for row in result.fetchall()]
     except Exception as e:

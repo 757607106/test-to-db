@@ -2,7 +2,7 @@
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AliasChoices
 
 
 # ===== 数据溯源Schema (P0) =====
@@ -62,8 +62,21 @@ class EnhancedInsightResponse(BaseModel):
 # 查询条件Schema
 class TimeRangeCondition(BaseModel):
     """时间范围条件"""
-    start: Optional[str] = Field(None, description="开始时间")
-    end: Optional[str] = Field(None, description="结束时间")
+    start: Optional[str] = Field(
+        None,
+        description="开始时间",
+        validation_alias=AliasChoices("start", "start_date")
+    )
+    end: Optional[str] = Field(
+        None,
+        description="结束时间",
+        validation_alias=AliasChoices("end", "end_date")
+    )
+    relative_range: Optional[str] = Field(
+        None,
+        description="相对时间范围: last_7_days/last_30_days/this_month/this_year 等",
+        validation_alias=AliasChoices("relative_range", "preset", "range")
+    )
 
 
 class InsightConditions(BaseModel):
