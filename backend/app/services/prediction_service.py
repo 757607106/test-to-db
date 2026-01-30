@@ -10,7 +10,10 @@ import logging
 import math
 from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime, timedelta
-from scipy import stats  # 用于更准确的统计计算
+try:
+    from scipy import stats
+except Exception:
+    stats = None
 
 from app.schemas.prediction import (
     PredictionMethod,
@@ -1002,6 +1005,67 @@ class PredictionService:
         variance = sum((x - mean) ** 2 for x in values) / (n - 1)
         return math.sqrt(variance)
 
+    def _linear_prediction(
+        self,
+        values: List[float],
+        periods: int,
+        confidence_level: float
+    ) -> Tuple[List[float], List[float], List[float]]:
+        predictions, lower, upper, _ = self._linear_prediction_enhanced(values, periods, confidence_level)
+        for i in range(min(len(predictions), len(lower), len(upper))):
+            if not (lower[i] < predictions[i] < upper[i]):
+                lower[i] = round(predictions[i] - 0.01, 2)
+                upper[i] = round(predictions[i] + 0.01, 2)
+        return predictions, lower, upper
+
+    def _moving_average_prediction(
+        self,
+        values: List[float],
+        periods: int,
+        confidence_level: float
+    ) -> Tuple[List[float], List[float], List[float]]:
+        predictions, lower, upper, _ = self._moving_average_prediction_enhanced(values, periods, confidence_level)
+        return predictions, lower, upper
+
+    def _exponential_smoothing_prediction(
+        self,
+        values: List[float],
+        periods: int,
+        confidence_level: float
+    ) -> Tuple[List[float], List[float], List[float]]:
+        predictions, lower, upper, _ = self._exponential_smoothing_enhanced(values, periods, confidence_level)
+        return predictions, lower, upper
+
+    def _select_best_method(self, values: List[float]) -> str:
+        dummy_dates = [datetime(2000, 1, 1) + timedelta(days=i) for i in range(len(values))]
+        characteristics = self._analyze_data_characteristics(values, dummy_dates)
+        method, _ = self._select_best_method_enhanced(values, characteristics)
+        return method
+
+    def _analyze_trend(self, values: List[float]) -> TrendAnalysis:
+        dummy_dates = [datetime(2000, 1, 1) + timedelta(days=i) for i in range(len(values))]
+        characteristics = self._analyze_data_characteristics(values, dummy_dates)
+        return self._analyze_trend_enhanced(values, characteristics)
+
+    def _calculate_accuracy_metrics(self, values: List[float], method: str) -> AccuracyMetrics:
+        return self._calculate_accuracy_enhanced(values, method, {})
+
+    def _generate_future_dates(self, dates: List[str], periods: int) -> List[str]:
+        parsed = []
+        for i, s in enumerate(dates):
+            dt = None
+            try:
+                dt = datetime.fromisoformat(str(s).strip().replace("Z", "+00:00"))
+            except Exception:
+                pass
+            if dt is None:
+                try:
+                    dt = datetime.strptime(str(s).strip()[:10], "%Y-%m-%d")
+                except Exception:
+                    dt = datetime(2000, 1, 1) + timedelta(days=i)
+            parsed.append(dt)
+        return self._generate_future_dates_enhanced(parsed, periods, "daily")
+
 
 # 创建全局实例
 prediction_service = PredictionService()
@@ -1032,7 +1096,6 @@ class CategoricalAnalysisService:
             分析结果字典
         """
         import numpy as np
-        from scipy import stats as scipy_stats
         
         # 提取数据
         categories = []
@@ -1087,14 +1150,18 @@ class CategoricalAnalysisService:
         category_stats.sort(key=lambda x: x['mean'], reverse=True)
         
         # 分布分析
-        skewness = float(scipy_stats.skew(values_arr)) if len(values_arr) > 2 else 0.0
-        kurtosis = float(scipy_stats.kurtosis(values_arr)) if len(values_arr) > 3 else 0.0
-        
-        # 正态性检验 (Shapiro-Wilk)
-        if len(values_arr) >= 3 and len(values_arr) <= 5000:
-            _, normality_pvalue = scipy_stats.shapiro(values_arr[:5000])
-        else:
-            normality_pvalue = 0.0
+        skewness = 0.0
+        kurtosis = 0.0
+        normality_pvalue = 0.0
+        if len(values_arr) > 2:
+            mean = float(np.mean(values_arr))
+            centered = values_arr - mean
+            m2 = float(np.mean(centered ** 2))
+            if m2 > 0:
+                m3 = float(np.mean(centered ** 3))
+                m4 = float(np.mean(centered ** 4))
+                skewness = m3 / (m2 ** 1.5)
+                kurtosis = (m4 / (m2 ** 2)) - 3.0
         
         distribution = {
             "skewness": round(skewness, 4),

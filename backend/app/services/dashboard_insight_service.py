@@ -602,6 +602,15 @@ SQL 语法注意事项（{db_type}）：
                     self._update_widget_status(db, widget_id, "completed", "无数据组件可分析")
                     return
 
+                if getattr(request, "force_requery", False):
+                    self._refresh_data_widgets(db, data_widgets, user_id)
+                    refreshed_widgets = []
+                    for w in data_widgets:
+                        w2 = crud.crud_dashboard_widget.get(db, id=w.id)
+                        if w2 and w2.widget_type != "insight_analysis":
+                            refreshed_widgets.append(w2)
+                    data_widgets = refreshed_widgets
+
                 # 2. 聚合数据
                 aggregated_data = self._aggregate_widget_data(data_widgets, request.conditions)
                 logger.info(f"📊 聚合数据完成: {aggregated_data['total_rows']} 行, {len(aggregated_data['table_names'])} 个表")
@@ -857,6 +866,15 @@ SQL 语法注意事项（{db_type}）：
             "date_columns": list(date_columns),
             "widget_summaries": widget_summaries
         }
+
+    def _refresh_data_widgets(self, db: Session, widgets: List[DashboardWidget], user_id: int) -> None:
+        from app.services.dashboard_widget_service import dashboard_widget_service
+
+        for w in widgets:
+            try:
+                dashboard_widget_service.refresh_widget(db, widget_id=w.id, user_id=user_id)
+            except Exception:
+                logger.exception("刷新数据组件失败: widget_id=%s", w.id)
     
     def _apply_conditions(
         self,
@@ -869,29 +887,74 @@ SQL 语法注意事项（{db_type}）：
         
         filtered_data = data.copy()
         
+        def _try_parse_datetime(value: Any):
+            if value is None:
+                return None
+            from datetime import datetime, date
+            if isinstance(value, datetime):
+                return value
+            if isinstance(value, date):
+                return datetime.combine(value, datetime.min.time())
+            s = str(value).strip()
+            if not s:
+                return None
+            try:
+                return datetime.fromisoformat(s.replace("Z", "+00:00"))
+            except Exception:
+                pass
+            for fmt in (
+                "%Y-%m-%d",
+                "%Y/%m/%d",
+                "%Y-%m-%d %H:%M:%S",
+                "%Y/%m/%d %H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y/%m/%dT%H:%M:%S",
+            ):
+                try:
+                    return datetime.strptime(s, fmt)
+                except Exception:
+                    continue
+            return None
+        
         # 时间范围过滤
         if conditions.time_range:
             date_column = None
             if filtered_data:
                 first_row = filtered_data[0]
                 for key in first_row.keys():
+                    value = first_row.get(key)
+                    if _try_parse_datetime(value) is not None:
+                        date_column = key
+                        break
                     if any(keyword in key.lower() for keyword in ["date", "time", "created"]):
                         date_column = key
                         break
             
-            if date_column and conditions.time_range.start and conditions.time_range.end:
-                filtered_data = [
-                    row for row in filtered_data
-                    if conditions.time_range.start <= str(row.get(date_column, "")) <= conditions.time_range.end
-                ]
+            if date_column:
+                start_dt = _try_parse_datetime(conditions.time_range.start) if conditions.time_range.start else None
+                end_dt = _try_parse_datetime(conditions.time_range.end) if conditions.time_range.end else None
+                
+                if start_dt or end_dt:
+                    def _in_range(row: Dict[str, Any]) -> bool:
+                        row_dt = _try_parse_datetime(row.get(date_column))
+                        if row_dt is None:
+                            return False
+                        if start_dt and row_dt < start_dt:
+                            return False
+                        if end_dt and row_dt > end_dt:
+                            return False
+                        return True
+                    
+                    filtered_data = [row for row in filtered_data if _in_range(row)]
         
         # 维度筛选
         if conditions.dimension_filters:
             for column, value in conditions.dimension_filters.items():
-                filtered_data = [
-                    row for row in filtered_data
-                    if row.get(column) == value
-                ]
+                if isinstance(value, (list, tuple, set)):
+                    allowed = set(value)
+                    filtered_data = [row for row in filtered_data if row.get(column) in allowed]
+                else:
+                    filtered_data = [row for row in filtered_data if row.get(column) == value]
         
         return filtered_data
     

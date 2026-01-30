@@ -79,10 +79,9 @@ def get_insight_detail(
         
     except HTTPException:
         raise
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"获取洞察详情失败: {str(e)}")
+    except Exception:
+        logger.exception("获取洞察详情失败")
+        raise HTTPException(status_code=500, detail="获取洞察详情失败")
 
 
 @router.post("/dashboards/{dashboard_id}/insights", response_model=schemas.DashboardInsightResponse)
@@ -118,9 +117,9 @@ def generate_dashboard_insights(
         raise HTTPException(status_code=400, detail=str(e))
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
-    except Exception as e:
-        logger.exception(f"生成洞察失败: dashboard_id={dashboard_id}")
-        raise HTTPException(status_code=500, detail=f"生成洞察失败: {str(e)}")
+    except Exception:
+        logger.exception("生成洞察失败: dashboard_id=%s", dashboard_id)
+        raise HTTPException(status_code=500, detail="生成洞察失败")
 
 
 @router.get("/dashboards/{dashboard_id}/insights")
@@ -165,8 +164,9 @@ def get_dashboard_insights(
         }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取洞察失败: {str(e)}")
+    except Exception:
+        logger.exception("获取洞察失败: dashboard_id=%s", dashboard_id)
+        raise HTTPException(status_code=500, detail="获取洞察失败")
 
 
 @router.put("/widgets/{widget_id}/refresh-insights")
@@ -203,7 +203,8 @@ def refresh_insight_widget(
         # 构建新的洞察请求
         insight_request = schemas.DashboardInsightRequest(
             conditions=request.updated_conditions,
-            force_refresh=True
+            force_refresh=True,
+            force_requery=request.force_requery
         )
         
         # 重新触发生成
@@ -227,9 +228,9 @@ def refresh_insight_widget(
         
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"刷新洞察失败: widget_id={widget_id}")
-        raise HTTPException(status_code=500, detail=f"刷新洞察失败: {str(e)}")
+    except Exception:
+        logger.exception("刷新洞察失败: widget_id=%s", widget_id)
+        raise HTTPException(status_code=500, detail="刷新洞察失败")
 
 
 @router.post("/dashboards/{dashboard_id}/mining/suggestions", response_model=schemas.MiningResponse)
@@ -298,6 +299,6 @@ def apply_mining_suggestions(
             created_widgets.append(new_widget.id)
             
         return {"success": True, "count": len(created_widgets), "widget_ids": created_widgets}
-    except Exception as e:
-        logger.exception(f"应用挖掘建议失败: dashboard_id={dashboard_id}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("应用推荐失败: dashboard_id=%s", dashboard_id)
+        raise HTTPException(status_code=500, detail="应用推荐失败")

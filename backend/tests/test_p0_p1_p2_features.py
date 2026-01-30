@@ -6,6 +6,7 @@ P0/P1/P2 功能单元测试
 """
 import pytest
 from datetime import datetime
+from unittest.mock import MagicMock, patch
 
 
 class TestP2PredictionService:
@@ -150,6 +151,28 @@ class TestP1RefreshService:
         
         assert response.success_count == 1
         assert response.failed_count == 0
+
+    def test_insight_request_force_requery_schema(self):
+        from app.schemas.dashboard_insight import DashboardInsightRequest
+
+        req = DashboardInsightRequest()
+        assert req.force_requery == False
+
+
+class TestInsightForceRequery:
+    def test_refresh_data_widgets_calls_refresh_widget(self):
+        from app.services.dashboard_insight_service import DashboardInsightService
+
+        svc = DashboardInsightService()
+        db = MagicMock()
+        widgets = [MagicMock(id=1), MagicMock(id=2)]
+
+        with patch("app.services.dashboard_widget_service.dashboard_widget_service.refresh_widget") as refresh_widget:
+            svc._refresh_data_widgets(db, widgets, user_id=123)
+
+        assert refresh_widget.call_count == 2
+        refresh_widget.assert_any_call(db, widget_id=1, user_id=123)
+        refresh_widget.assert_any_call(db, widget_id=2, user_id=123)
 
 
 class TestP0LineageSchema:

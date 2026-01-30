@@ -117,14 +117,14 @@ async def question_recommendation_node(
         
         return {
             "recommended_questions": all_questions,
-            "current_stage": "recommendation_done"
+            "current_stage": "completed"
         }
         
     except Exception as e:
         elapsed_ms = int((time.time() - start_time) * 1000)
         logger.error(f"问题推荐失败: {e}, 耗时: {elapsed_ms}ms")
         # 问题推荐失败不影响整体流程
-        return {"current_stage": "recommendation_done"}
+        return {"current_stage": "completed"}
 
 
 def _extract_user_query(state: SQLMessageState) -> Optional[str]:

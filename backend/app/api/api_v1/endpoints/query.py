@@ -13,6 +13,7 @@ from app import crud, schemas
 from app.api import deps
 from app.agents.chat_graph import IntelligentSQLGraph
 from app.core.state import SQLMessageState
+from app.models.user import User
 
 router = APIRouter()
 
@@ -20,6 +21,7 @@ router = APIRouter()
 async def execute_query(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     query_request: schemas.QueryRequest,
 ) -> Any:
     """
@@ -29,16 +31,15 @@ async def execute_query(
     
     此接口保留用于向后兼容，内部已重定向到新的 LangGraph 架构。
     """
-    connection = crud.db_connection.get(db=db, id=query_request.connection_id)
-    if not connection:
-        raise HTTPException(status_code=404, detail="Connection not found")
+    deps.get_verified_connection(db, query_request.connection_id, current_user)
     
     try:
         # ✅ 使用新的 LangGraph 架构替代旧的 text2sql_service
         graph = IntelligentSQLGraph()
         result = await graph.process_query(
             query=query_request.natural_language_query,
-            connection_id=query_request.connection_id
+            connection_id=query_request.connection_id,
+            tenant_id=current_user.tenant_id,
         )
         
         # 转换为旧格式响应
@@ -81,6 +82,7 @@ def _extract_results(execution_result) -> Optional[Any]:
 async def chat_query(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     chat_request: schemas.ChatQueryRequest,
 ) -> Any:
     """
@@ -92,9 +94,7 @@ async def chat_query(
     import logging
     logger = logging.getLogger(__name__)
     
-    connection = crud.db_connection.get(db=db, id=chat_request.connection_id)
-    if not connection:
-        raise HTTPException(status_code=404, detail="Connection not found")
+    deps.get_verified_connection(db, chat_request.connection_id, current_user)
     
     try:
         # ✅ 使用conversation_id作为thread_id
@@ -140,7 +140,8 @@ async def chat_query(
         result = await graph.process_query(
             query=query_text,
             connection_id=chat_request.connection_id,
-            thread_id=thread_id  # ✅ 传递thread_id
+            thread_id=thread_id,  # ✅ 传递thread_id
+            tenant_id=current_user.tenant_id,
         )
         
         # 构建响应
@@ -208,12 +209,11 @@ async def chat_query(
         
         return response
         
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
+    except Exception:
+        logger.exception("处理查询时出错")
         return schemas.ChatQueryResponse(
             conversation_id=thread_id if 'thread_id' in locals() else str(uuid4()),
-            error=f"处理查询时出错: {str(e)}",
+            error="处理查询时出错",
             stage="error"
         )
 
@@ -222,6 +222,7 @@ async def chat_query(
 async def resume_chat_query(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     resume_request: schemas.ResumeQueryRequest,
 ) -> Any:
     """
@@ -247,9 +248,7 @@ async def resume_chat_query(
     
     logger = logging.getLogger(__name__)
     
-    connection = crud.db_connection.get(db=db, id=resume_request.connection_id)
-    if not connection:
-        raise HTTPException(status_code=404, detail="Connection not found")
+    deps.get_verified_connection(db, resume_request.connection_id, current_user)
     
     try:
         logger.info(f"恢复查询执行: thread_id={resume_request.thread_id}")
@@ -295,14 +294,12 @@ async def resume_chat_query(
         
         return response
         
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        logger.error(f"恢复查询执行失败: {str(e)}")
+    except Exception:
+        logger.exception("恢复查询执行失败")
         return schemas.ResumeQueryResponse(
             success=False,
             thread_id=resume_request.thread_id,
-            error=f"恢复执行失败: {str(e)}",
+            error="恢复执行失败",
             stage="error"
         )
 
@@ -311,6 +308,7 @@ async def resume_chat_query(
 async def chat_query_stream(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     chat_request: schemas.ChatQueryRequest,
 ) -> StreamingResponse:
     """
@@ -341,9 +339,7 @@ async def chat_query_stream(
     import logging
     logger = logging.getLogger(__name__)
     
-    connection = crud.db_connection.get(db=db, id=chat_request.connection_id)
-    if not connection:
-        raise HTTPException(status_code=404, detail="Connection not found")
+    deps.get_verified_connection(db, chat_request.connection_id, current_user)
     
     async def event_generator():
         """SSE事件生成器"""
@@ -358,7 +354,8 @@ async def chat_query_stream(
             initial_state = SQLMessageState(
                 messages=[HumanMessage(content=chat_request.natural_language_query)],
                 connection_id=chat_request.connection_id,
-                thread_id=thread_id
+                thread_id=thread_id,
+                tenant_id=current_user.tenant_id,
             )
             
             config = {"configurable": {"thread_id": thread_id}}
@@ -416,11 +413,11 @@ async def chat_query_stream(
             logger.info(f"流式执行完成: thread_id={thread_id}")
         
         except Exception as e:
-            logger.error(f"流式执行异常: {str(e)}")
+            logger.exception("流式执行异常")
             # 发送错误事件
             error_event = {
                 "type": "error",
-                "error": str(e),
+                "error": "流式执行异常",
                 "timestamp": time.time()
             }
             yield f"event: error\n"
@@ -441,6 +438,7 @@ async def chat_query_stream(
 async def list_conversations(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     limit: int = 20,
     offset: int = 0
 ) -> Any:
@@ -489,6 +487,7 @@ async def list_conversations(
 async def get_conversation(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     thread_id: str
 ) -> Any:
     """
@@ -534,6 +533,7 @@ async def get_conversation(
 async def delete_conversation(
     *,
     db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
     thread_id: str
 ) -> Any:
     """

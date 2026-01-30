@@ -29,6 +29,12 @@ from app.services.neo4j_service import neo4j_service
 
 logger = logging.getLogger(__name__)
 
+try:
+    from neo4j import GraphDatabase, Driver
+except Exception:
+    GraphDatabase = None
+    Driver = None
+
 
 class SkillService:
     """
@@ -42,7 +48,8 @@ class SkillService:
     """
     
     def __init__(self):
-        pass  # 使用公共 Neo4j 服务，无需本地驱动管理
+        self._neo4j_driver = None
+        self._neo4j_initialized = False
     
     # ==================== CRUD ====================
     
@@ -480,8 +487,25 @@ class SkillService:
     # ==================== Neo4j 同步 ====================
     
     def _get_neo4j_driver(self):
-        """获取 Neo4j 驱动（使用公共服务）"""
-        return neo4j_service.get_driver()
+        if self._neo4j_initialized:
+            return self._neo4j_driver
+        
+        self._neo4j_initialized = True
+        
+        if not GraphDatabase or not getattr(settings, "NEO4J_URI", None):
+            self._neo4j_driver = None
+            return None
+        
+        try:
+            self._neo4j_driver = GraphDatabase.driver(
+                settings.NEO4J_URI,
+                auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),
+            )
+            return self._neo4j_driver
+        except Exception as e:
+            logger.warning(f"Failed to connect to Neo4j: {e}")
+            self._neo4j_driver = None
+            return None
     
     async def _sync_to_neo4j(self, skill: SkillModel):
         """同步 Skill 到 Neo4j"""
@@ -562,7 +586,13 @@ class SkillService:
     
     def close(self):
         """关闭资源（使用公共 Neo4j 服务，此方法保留以保持兼容）"""
-        pass  # Neo4j 连接由 neo4j_service 统一管理
+        if self._neo4j_driver:
+            try:
+                self._neo4j_driver.close()
+            except Exception:
+                pass
+        self._neo4j_driver = None
+        self._neo4j_initialized = False
 
 
 # 全局实例

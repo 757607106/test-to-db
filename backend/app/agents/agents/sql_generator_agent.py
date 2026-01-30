@@ -576,6 +576,23 @@ def generate_sql_query(
 【常用查询模式参考】
 {patterns_str}
 """
+            
+            join_rules = loaded_content.get("join_rules", []) if loaded_content else []
+            if join_rules:
+                join_lines = []
+                for jr in join_rules[:8]:
+                    join_clause = jr.get("join_clause") or jr.get("join_sql") or ""
+                    description = jr.get("description") or ""
+                    if join_clause and description:
+                        join_lines.append(f"- {join_clause} ({description})")
+                    elif join_clause:
+                        join_lines.append(f"- {join_clause}")
+                join_rules_str = "\n".join(join_lines)
+                if join_rules_str:
+                    skill_rules_prompt += f"""
+【JOIN 规则 - 必须优先使用，禁止自行猜测关联字段】
+{join_rules_str}
+"""
         
         # 获取数据库特定语法规则
         db_rules_prompt = format_database_rules_prompt(db_type)

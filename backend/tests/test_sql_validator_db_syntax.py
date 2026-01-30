@@ -235,6 +235,48 @@ class TestDatabaseSpecificSyntax:
         assert str(self.validator.MAX_LIMIT) in result.fixed_sql
 
 
+class TestJoinRelationshipConsistency:
+    def setup_method(self):
+        self.validator = SQLValidator()
+        self.schema_context = {
+            "tables": [
+                {"table_name": "products"},
+                {"table_name": "categories"},
+            ],
+            "columns": [
+                {"table_name": "products", "column_name": "id"},
+                {"table_name": "products", "column_name": "category_id"},
+                {"table_name": "categories", "column_name": "id"},
+            ],
+            "relationships": [
+                {
+                    "source_table": "products",
+                    "source_column": "category_id",
+                    "target_table": "categories",
+                    "target_column": "id",
+                    "relationship_type": "references",
+                }
+            ],
+        }
+
+    def test_valid_join_passes_with_relationships(self):
+        sql = "SELECT p.id FROM products p JOIN categories c ON p.category_id = c.id"
+        result = self.validator.validate(sql, schema_context=self.schema_context, db_type="mysql")
+        assert result.is_valid
+
+    def test_invalid_join_fails_with_relationships(self):
+        sql = "SELECT p.id FROM products p JOIN categories c ON p.id = c.id"
+        result = self.validator.validate(sql, schema_context=self.schema_context, db_type="mysql")
+        assert result.is_valid == False
+        assert any("JOIN 关系不一致" in e for e in result.errors)
+
+    def test_join_check_skips_when_no_relationships(self):
+        schema_context = {**self.schema_context, "relationships": []}
+        sql = "SELECT p.id FROM products p JOIN categories c ON p.id = c.id"
+        result = self.validator.validate(sql, schema_context=schema_context, db_type="mysql")
+        assert result.is_valid
+
+
 class TestSupportedDatabaseTypes:
     """测试支持的数据库类型列表 - Requirements 8.1"""
     

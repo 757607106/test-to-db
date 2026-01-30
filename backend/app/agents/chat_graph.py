@@ -309,9 +309,8 @@ def supervisor_route(state: SQLMessageState) -> str:
         retry_count = state.get("retry_count", 0)
         max_retries = state.get("max_retries", 3)
         if retry_count >= max_retries:
-            # ✅ 关键修复：达到重试上限时，进入兜底响应节点而不是直接结束
-            logger.info(f"[Route] 达到重试上限 ({retry_count}/{max_retries}) → fallback_response")
-            return "fallback_response"
+            logger.info(f"[Route] 达到重试上限 ({retry_count}/{max_retries}) → FINISH")
+            return "FINISH"
         
         # ✅ 关键修复：检查错误类型，如果是 Schema 相关错误，重新执行 schema_agent
         error_recovery_context = state.get("error_recovery_context") or {}
@@ -354,18 +353,9 @@ def supervisor_route(state: SQLMessageState) -> str:
     # Phase 4: 简化流程 - 跳过澄清节点
     # ==========================================
     if current_stage == "schema_done":
-        # 检查是否启用简化流程
-        if settings.SIMPLIFIED_FLOW_ENABLED and settings.SKIP_CLARIFICATION_FOR_CLEAR_QUERIES:
-            # 检查查询是否明确（已改写或已确认）
-            query_rewritten = state.get("query_rewritten", False)
-            clarification_confirmed = state.get("clarification_confirmed", False)
-            
-            if query_rewritten or clarification_confirmed:
-                logger.info("[Route] 简化流程: 查询已明确，跳过澄清 → sql_generator")
-                return "sql_generator"
-            
-            # 不再使用关键词匹配判断，统一进入澄清节点由 LLM 判断
-            # 澄清节点内部会调用 LLM 判断是否真正需要澄清
+        if settings.SIMPLIFIED_FLOW_ENABLED:
+            logger.info("[Route] 简化流程: schema_done → sql_generator")
+            return "sql_generator"
     
     # 分析完成后的路由（检查是否跳过图表）
     if current_stage == "analysis_done":
@@ -405,7 +395,7 @@ def _is_general_chat(state: SQLMessageState) -> bool:
 # 图构建
 # ============================================================================
 
-def create_hub_spoke_graph() -> CompiledStateGraph:
+def create_hub_spoke_graph(checkpointer: Any = None) -> CompiledStateGraph:
     """
     创建 Hub-and-Spoke 架构的图
     
@@ -470,7 +460,10 @@ def create_hub_spoke_graph() -> CompiledStateGraph:
         }
     )
     
-    compiled = graph.compile()
+    if checkpointer is None:
+        compiled = graph.compile()
+    else:
+        compiled = graph.compile(checkpointer=checkpointer)
     logger.info("Hub-and-Spoke 图创建完成 (P2: 含智能规划)")
     return compiled
 
@@ -488,17 +481,36 @@ class IntelligentSQLGraph:
     
     def __init__(
         self, 
-        active_agent_profiles: List[AgentProfile] = None, 
-        custom_analyst=None
+        active_agent_profiles: List[AgentProfile] = None,
+        custom_analyst=None,
+        use_default_checkpointer: bool = True
     ):
         self.graph = create_hub_spoke_graph()
         self._initialized = True
+        self._use_default_checkpointer = use_default_checkpointer
+        self._active_agent_profiles = active_agent_profiles
+        self._custom_analyst = custom_analyst
     
     async def _ensure_initialized(self):
         """确保已初始化"""
         if not self._initialized:
             self.graph = create_hub_spoke_graph()
             self._initialized = True
+
+    def _create_graph_sync(self, checkpointer: Any = None) -> CompiledStateGraph:
+        self.graph = create_hub_spoke_graph(checkpointer=checkpointer)
+        self._initialized = True
+        return self.graph
+
+    def _after_thread_history_check(self, state: SQLMessageState) -> str:
+        if state.get("thread_history_hit"):
+            return "end"
+        return "cache_check"
+
+    def _after_cache_check(self, state: SQLMessageState) -> str:
+        if state.get("cache_hit") and state.get("cache_hit_type") == "exact":
+            return "end"
+        return "clarification"
     
     async def process_query(
         self,
@@ -598,7 +610,7 @@ class IntelligentSQLGraph:
 
 def create_intelligent_sql_graph(active_agent_profiles: List[AgentProfile] = None) -> IntelligentSQLGraph:
     """创建智能 SQL 图实例"""
-    return IntelligentSQLGraph()
+    return IntelligentSQLGraph(active_agent_profiles=active_agent_profiles)
 
 
 async def process_sql_query(
@@ -637,3 +649,37 @@ def graph():
     返回编译好的图实例
     """
     return create_hub_spoke_graph()
+
+
+async def detect_intent_with_llm(query: str) -> Dict[str, Any]:
+    q = (query or "").strip()
+    q_lower = q.lower()
+
+    intent = "data_query"
+    if q_lower.startswith("select") or q_lower.startswith("with"):
+        intent = "data_query"
+    else:
+        chat_keywords = [
+            "你好", "谢谢", "你是谁", "天气", "帮助",
+            "hello", "hi", "thanks", "help", "who are you",
+        ]
+        if any(kw in q_lower for kw in chat_keywords) and len(q) < 80:
+            intent = "general_chat"
+        else:
+            data_keywords = [
+                "查询", "统计", "分析", "多少", "总数", "top",
+                "销售", "库存", "订单", "金额", "收入", "增长", "下降",
+                "最近", "过去", "近", "本月", "本周", "今天", "昨天",
+                "sum", "count", "avg", "max", "min",
+            ]
+            if any(kw in q_lower for kw in data_keywords):
+                intent = "data_query"
+
+    rewritten = q
+    if intent == "data_query":
+        if "卖得" in rewritten:
+            rewritten = rewritten.replace("卖得", "销售情况")
+        if "咋样" in rewritten:
+            rewritten = rewritten.replace("咋样", "怎么样")
+
+    return {"intent": intent, "rewritten_query": rewritten}

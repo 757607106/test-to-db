@@ -5,12 +5,16 @@
 """
 import logging
 import time
+from statistics import NormalDist
 from typing import List, Dict, Any, Optional, Tuple
 import pandas as pd
 import numpy as np
-from scipy import stats
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
+try:
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import StandardScaler
+except Exception:
+    KMeans = None
+    StandardScaler = None
 
 from app.schemas.inventory_analysis import (
     ABCXYZRequest, ABCXYZResult, ABCXYZSummary, ABCXYZMatrix, ABCXYZDetail,
@@ -355,7 +359,8 @@ class InventoryAnalysisService:
         product_agg['demand_std'] = product_agg['demand_std'].fillna(0)
         
         # 计算 Z 值
-        z_score = stats.norm.ppf(service_level)
+        safe_service_level = min(max(service_level, 1e-10), 1 - 1e-10)
+        z_score = NormalDist().inv_cdf(safe_service_level)
         
         # 计算安全库存和再订货点
         sqrt_lt = np.sqrt(lead_time)
@@ -460,7 +465,7 @@ class InventoryAnalysisService:
         
         # K-means 聚类
         cluster_labels = None
-        if len(supplier_agg) >= n_clusters:
+        if KMeans is not None and StandardScaler is not None and len(supplier_agg) >= n_clusters:
             features = normalized[[f'{col}_norm' for col in metrics_columns]].values
             scaler = StandardScaler()
             features_scaled = scaler.fit_transform(features)

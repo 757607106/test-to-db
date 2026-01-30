@@ -12,25 +12,20 @@ from app.core.config import settings
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
+from passlib.context import CryptContext
+
+_pwd_context = CryptContext(schemes=["pbkdf2_sha256", "bcrypt"], deprecated="auto")
+
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify password using bcrypt directly."""
     try:
-        import bcrypt  # 延迟导入，仅在需要时加载
-        password_bytes = plain_password.encode('utf-8')
-        hashed_bytes = hashed_password.encode('utf-8')
-        return bcrypt.checkpw(password_bytes, hashed_bytes)
+        return _pwd_context.verify(plain_password, hashed_password)
     except Exception:
         return False
 
 
 def get_password_hash(password: str) -> str:
-    """Hash password using bcrypt directly."""
-    import bcrypt  # 延迟导入，仅在需要时加载
-    password_bytes = password.encode('utf-8')
-    salt = bcrypt.gensalt()
-    hashed = bcrypt.hashpw(password_bytes, salt)
-    return hashed.decode('utf-8')
+    return _pwd_context.hash(password)
 
 
 def create_access_token(

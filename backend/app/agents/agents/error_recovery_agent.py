@@ -571,8 +571,7 @@ class ErrorRecoveryAgent:
         """
         try:
             error_history = state.get("error_history", [])
-            # ✅ 关键修复：使用 state 中已有的 retry_count，不再重复递增
-            # retry_count 已经在 sql_generator_agent 中递增过了
+            current_stage = state.get("current_stage", "init")
             retry_count = state.get("retry_count", 0)
             max_retries = state.get("max_retries", 3)
             failed_sql = state.get("generated_sql", "")  # 获取失败的 SQL
@@ -617,17 +616,18 @@ class ErrorRecoveryAgent:
                     latest_error = error_history[-1] if error_history else {}
                     
                     # ✅ 关键修复：构建增强的错误上下文，包含列名白名单信息
+                    next_retry_count = retry_count + 1 if current_stage != "error_recovery" else retry_count
                     error_context = self._build_enhanced_error_context(
                         error_analysis_data=error_analysis_data,
                         latest_error=latest_error,
                         failed_sql=failed_sql or existing_error_context.get("failed_sql", ""),
                         primary_action=primary_action,
                         recovery_steps=strategy_info.get("steps", []),
-                        retry_count=retry_count,
+                        retry_count=next_retry_count,
                         existing_context=existing_error_context
                     )
                     
-                    logger.info(f"错误恢复: {primary_action} -> {next_stage} (重试 {retry_count}/{max_retries})")
+                    logger.info(f"错误恢复: {primary_action} -> {next_stage} (重试 {next_retry_count}/{max_retries})")
                     logger.info(f"错误类型: {error_context['error_type']}, 失败SQL长度: {len(error_context.get('failed_sql', ''))}")
                     logger.info(f"是否包含列名提示: {bool(error_context.get('available_columns_hint'))}")
                     
@@ -644,7 +644,7 @@ class ErrorRecoveryAgent:
                                 status="retrying",
                                 message=user_message,
                                 metadata={
-                                    "retry_count": retry_count,
+                                    "retry_count": next_retry_count,
                                     "max_retries": max_retries,
                                     "error_type": error_context["error_type"],
                                     "next_stage": next_stage
@@ -653,17 +653,15 @@ class ErrorRecoveryAgent:
                     except Exception as e:
                         logger.debug(f"发送流式事件失败（非关键）: {e}")
                     
-                    # ✅ 关键修复：不再递增 retry_count，因为已经在 sql_generator_agent 中递增过了
                     return {
                         "messages": [AIMessage(content=user_message)],
                         "current_stage": next_stage,
-                        "retry_count": retry_count,  # 保持不变，不再递增
+                        "retry_count": next_retry_count,
                         "error_recovery_context": error_context,  # 传递增强的错误上下文给下一阶段
                         "generated_sql": None  # 清除失败的 SQL，强制重新生成
                     }
                 else:
                     # 无法自动修复或已达到重试限制
-                    # ✅ 关键修复：设置 current_stage 为 error_recovery，让路由器决定是否进入兜底节点
                     user_message = self._get_user_friendly_message(primary_action, is_retrying=False)
                     
                     # 如果达到重试限制，添加额外说明
@@ -674,7 +672,7 @@ class ErrorRecoveryAgent:
                     
                     return {
                         "messages": [AIMessage(content=user_message)],
-                        "current_stage": "error_recovery",  # ✅ 保持 error_recovery 状态，让路由器决定下一步
+                        "current_stage": "completed" if retry_count >= max_retries else "error_recovery",
                         "retry_count": retry_count,  # 保持当前重试次数
                         "error_history": error_history + [{
                             "stage": "error_recovery",

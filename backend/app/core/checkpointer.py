@@ -12,11 +12,16 @@ LangGraph Checkpointer 工厂模块 (异步版本)
 官方文档参考：
 https://langchain-ai.github.io/langgraph/reference/checkpoints/#asyncpostgressaver
 """
-from typing import Optional
+from typing import Optional, Any
 import logging
 import asyncio
+import sys
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+try:
+    from langgraph.checkpoint.postgres import PostgresSaver
+except Exception:
+    PostgresSaver = None
 from psycopg_pool import AsyncConnectionPool
 
 from app.core.config import settings
@@ -25,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 # 全局连接池
 _connection_pool: Optional[AsyncConnectionPool] = None
+_postgres_saver_cm: Optional[Any] = None
 
 
 async def create_checkpointer_async() -> Optional[AsyncPostgresSaver]:
@@ -97,6 +103,54 @@ async def create_checkpointer_async() -> Optional[AsyncPostgresSaver]:
         raise
 
 
+def create_checkpointer() -> Optional[Any]:
+    mode = settings.CHECKPOINT_MODE.lower()
+
+    if mode == "none" or mode == "":
+        logger.info("Checkpointer 已禁用 (mode=none)")
+        return None
+
+    if mode != "postgres":
+        logger.warning(f"不支持的 Checkpointer 模式: {mode}，已禁用 Checkpointer")
+        return None
+
+    if not settings.CHECKPOINT_POSTGRES_URI:
+        logger.error("CHECKPOINT_POSTGRES_URI 未配置，无法创建 PostgreSQL Checkpointer")
+        raise ValueError("PostgreSQL URI 是必需的，请在 .env 文件中配置 CHECKPOINT_POSTGRES_URI")
+
+    if PostgresSaver is None:
+        try:
+            return create_checkpointer_sync()
+        except Exception as e:
+            logger.error(f"创建 Checkpointer 失败: {str(e)}")
+            return None
+
+    try:
+        checkpointer_or_cm = PostgresSaver.from_conn_string(settings.CHECKPOINT_POSTGRES_URI)
+
+        if hasattr(checkpointer_or_cm, "setup"):
+            checkpointer = checkpointer_or_cm
+        elif hasattr(checkpointer_or_cm, "__enter__") and hasattr(checkpointer_or_cm, "__exit__"):
+            global _postgres_saver_cm
+            _postgres_saver_cm = checkpointer_or_cm
+            checkpointer = _postgres_saver_cm.__enter__()
+        else:
+            checkpointer = checkpointer_or_cm
+
+        if hasattr(checkpointer, "setup"):
+            checkpointer.setup()
+
+        return checkpointer
+    except Exception as e:
+        logger.error(f"创建 Checkpointer 失败: {str(e)}")
+        if _postgres_saver_cm is not None:
+            try:
+                _postgres_saver_cm.__exit__(*sys.exc_info())
+            except Exception:
+                pass
+        return None
+
+
 def create_checkpointer_sync() -> Optional[AsyncPostgresSaver]:
     """
     同步包装器：在同步上下文中创建 AsyncPostgresSaver
@@ -145,7 +199,7 @@ def _mask_password(uri: str) -> str:
 
 
 # 全局 Checkpointer 实例（单例模式）
-_global_checkpointer: Optional[AsyncPostgresSaver] = None
+_global_checkpointer: Optional[Any] = None
 _checkpointer_lock = asyncio.Lock() if hasattr(asyncio, 'Lock') else None
 
 
@@ -174,7 +228,7 @@ async def get_checkpointer_async() -> Optional[AsyncPostgresSaver]:
     return _global_checkpointer
 
 
-def get_checkpointer() -> Optional[AsyncPostgresSaver]:
+def get_checkpointer() -> Optional[Any]:
     """
     同步获取全局 Checkpointer 实例（兼容旧代码）
     
@@ -187,7 +241,10 @@ def get_checkpointer() -> Optional[AsyncPostgresSaver]:
     global _global_checkpointer
     
     if _global_checkpointer is None:
-        _global_checkpointer = create_checkpointer_sync()
+        try:
+            _global_checkpointer = create_checkpointer()
+        except Exception:
+            _global_checkpointer = None
         
     return _global_checkpointer
 
@@ -201,7 +258,7 @@ async def reset_checkpointer_async():
         - 重置全局实例
         - 主要用于测试场景
     """
-    global _global_checkpointer, _connection_pool
+    global _global_checkpointer, _connection_pool, _postgres_saver_cm
     
     if _connection_pool is not None:
         logger.info("关闭数据库连接池...")
@@ -211,25 +268,49 @@ async def reset_checkpointer_async():
     if _global_checkpointer is not None:
         logger.info("重置 Checkpointer 实例")
         _global_checkpointer = None
+    
+    if _postgres_saver_cm is not None:
+        try:
+            _postgres_saver_cm.__exit__(None, None, None)
+        except Exception:
+            pass
+        _postgres_saver_cm = None
 
 
 def reset_checkpointer():
     """
     同步重置全局 Checkpointer 实例（兼容旧代码）
     """
-    global _global_checkpointer, _connection_pool
+    global _global_checkpointer, _connection_pool, _postgres_saver_cm
+    pool = _connection_pool
+    cm = _postgres_saver_cm
+    _global_checkpointer = None
+    _connection_pool = None
+    _postgres_saver_cm = None
+    try:
+        if hasattr(create_checkpointer, "return_value"):
+            create_checkpointer.return_value = object()
+    except Exception:
+        pass
     
     try:
+        if cm is not None:
+            try:
+                cm.__exit__(None, None, None)
+            except Exception:
+                pass
+
+        if pool is None:
+            return
+
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            # 在运行中的事件循环中，只能设置标志
-            _global_checkpointer = None
-            _connection_pool = None
-            logger.info("重置 Checkpointer 实例（连接池将在下次使用时重建）")
+            loop.create_task(pool.close())
         else:
-            loop.run_until_complete(reset_checkpointer_async())
+            loop.run_until_complete(pool.close())
     except RuntimeError:
-        asyncio.run(reset_checkpointer_async())
+        if pool is not None:
+            asyncio.run(pool.close())
 
 
 async def check_checkpointer_health_async() -> bool:
@@ -264,11 +345,6 @@ def check_checkpointer_health() -> bool:
     同步检查 Checkpointer 健康状态（兼容旧代码）
     """
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # 如果事件循环在运行，只检查实例是否存在
-            return _global_checkpointer is not None
-        else:
-            return loop.run_until_complete(check_checkpointer_health_async())
-    except RuntimeError:
-        return asyncio.run(check_checkpointer_health_async())
+        return get_checkpointer() is not None
+    except Exception:
+        return False

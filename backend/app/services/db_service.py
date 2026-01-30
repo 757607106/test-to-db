@@ -1,7 +1,7 @@
 import pymysql
 import sqlalchemy
 from sqlalchemy import create_engine, inspect
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import urllib.parse
 import re
 
@@ -30,7 +30,7 @@ def fix_mysql_full_outer_join(sql: str) -> str:
     
     return fixed_sql
 
-def get_db_engine(connection: DBConnection, password: str = None):
+def get_db_engine(connection: DBConnection, password: str = None, timeout_seconds: Optional[int] = None):
     """
     Create a SQLAlchemy engine for the given database connection.
     """
@@ -53,6 +53,15 @@ def get_db_engine(connection: DBConnection, password: str = None):
         # Encode password for URL safety
         encoded_password = urllib.parse.quote_plus(actual_password)
 
+        connect_args = None
+        if timeout_seconds is not None:
+            try:
+                timeout_seconds = int(timeout_seconds)
+            except Exception:
+                timeout_seconds = None
+            if timeout_seconds is not None:
+                timeout_seconds = max(1, min(timeout_seconds, 300))
+
         if connection.db_type.lower() == "mysql":
             conn_str = (
                 f"mysql+pymysql://{connection.username}:"
@@ -60,7 +69,13 @@ def get_db_engine(connection: DBConnection, password: str = None):
                 f"{connection.host}:{connection.port}/{connection.database_name}"
             )
             print(f"Connecting to MySQL database: {connection.host}:{connection.port}/{connection.database_name}")
-            return create_engine(conn_str)
+            if timeout_seconds is not None:
+                connect_args = {
+                    "connect_timeout": min(timeout_seconds, 60),
+                    "read_timeout": timeout_seconds,
+                    "write_timeout": timeout_seconds,
+                }
+            return create_engine(conn_str, connect_args=connect_args or {})
 
         elif connection.db_type.lower() == "postgresql":
             conn_str = (
@@ -69,7 +84,9 @@ def get_db_engine(connection: DBConnection, password: str = None):
                 f"{connection.host}:{connection.port}/{connection.database_name}"
             )
             print(f"Connecting to PostgreSQL database: {connection.host}:{connection.port}/{connection.database_name}")
-            return create_engine(conn_str)
+            if timeout_seconds is not None:
+                connect_args = {"connect_timeout": min(timeout_seconds, 60)}
+            return create_engine(conn_str, connect_args=connect_args or {})
 
         elif connection.db_type.lower() == "sqlite":
             # For SQLite, the database_name is treated as the file path
@@ -99,7 +116,7 @@ def test_db_connection(connection: DBConnection) -> bool:
         print(error_msg)
         raise Exception(error_msg)
 
-def execute_query(connection: DBConnection, query: str) -> List[Dict[str, Any]]:
+def execute_query(connection: DBConnection, query: str, timeout_seconds: Optional[int] = None) -> List[Dict[str, Any]]:
     """
     Execute a SQL query on the target database and return the results.
     """
@@ -108,8 +125,31 @@ def execute_query(connection: DBConnection, query: str) -> List[Dict[str, Any]]:
         if connection.db_type.lower() == "mysql":
             query = fix_mysql_full_outer_join(query)
         
-        engine = get_db_engine(connection)
+        engine = get_db_engine(connection, timeout_seconds=timeout_seconds)
         with engine.connect() as conn:
+            if timeout_seconds is not None:
+                try:
+                    timeout_seconds_int = int(timeout_seconds)
+                except Exception:
+                    timeout_seconds_int = None
+
+                if timeout_seconds_int is not None:
+                    timeout_seconds_int = max(1, min(timeout_seconds_int, 300))
+                    timeout_ms = timeout_seconds_int * 1000
+                    db_type = connection.db_type.lower()
+                    if db_type == "postgresql":
+                        try:
+                            conn.execute(sqlalchemy.text("SET statement_timeout = :ms"), {"ms": timeout_ms})
+                        except Exception:
+                            pass
+                    elif db_type == "mysql":
+                        try:
+                            conn.execute(sqlalchemy.text("SET SESSION MAX_EXECUTION_TIME = :ms"), {"ms": timeout_ms})
+                        except Exception:
+                            pass
+                        q_strip = (query or "").lstrip()
+                        if q_strip[:6].lower() == "select" and "max_execution_time" not in q_strip.lower():
+                            query = q_strip[:6] + f" /*+ MAX_EXECUTION_TIME({timeout_ms}) */" + q_strip[6:]
             result = conn.execute(sqlalchemy.text(query))
             columns = result.keys()
             return [dict(zip(columns, row)) for row in result.fetchall()]
@@ -129,8 +169,8 @@ def get_db_connection_by_id(connection_id: int) -> DBConnection:
     finally:
         db.close()
 
-def execute_query_with_connection(connection: DBConnection, query: str) -> List[Dict[str, Any]]:
+def execute_query_with_connection(connection: DBConnection, query: str, timeout_seconds: Optional[int] = None) -> List[Dict[str, Any]]:
     """
     使用指定的数据库连接执行查询
     """
-    return execute_query(connection, query)
+    return execute_query(connection, query, timeout_seconds=timeout_seconds)

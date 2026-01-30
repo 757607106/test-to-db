@@ -320,6 +320,7 @@ class SQLValidator:
         验证：
         1. 表名是否存在
         2. 列名是否存在
+        3. JOIN 关系是否与已知关系一致（如果提供了 relationships / join_rules）
         """
         # 提取 schema 中的表名和列名
         valid_tables = set()
@@ -329,6 +330,8 @@ class SQLValidator:
         # 从 schema_context 提取表和列信息
         tables = schema_context.get('tables', [])
         columns = schema_context.get('columns', [])
+        relationships = schema_context.get('relationships', []) or []
+        join_rules = schema_context.get('join_rules', []) or []
         
         for table in tables:
             table_name = table.get('table_name', '') if isinstance(table, dict) else getattr(table, 'table_name', '')
@@ -380,6 +383,16 @@ class SQLValidator:
                     # 可能是别名或函数，只记录警告
                     if not self._is_sql_function_or_keyword(col_name):
                         result.add_warning(f"列 '{col_name}' 可能不存在，请检查")
+
+        if relationships or join_rules:
+            self._check_join_relationship_consistency(
+                sql=sql,
+                relationships=relationships,
+                join_rules=join_rules,
+                valid_tables=valid_tables,
+                valid_columns=valid_columns,
+                result=result,
+            )
     
     def _extract_table_names(self, sql: str) -> List[str]:
         """从 SQL 中提取表名"""
@@ -396,6 +409,154 @@ class SQLValidator:
             tables.extend(matches)
         
         return list(set(tables))
+
+    def _check_join_relationship_consistency(
+        self,
+        sql: str,
+        relationships: List[Any],
+        join_rules: List[Any],
+        valid_tables: set,
+        valid_columns: Dict[str, set],
+        result: SQLValidationResult,
+    ) -> None:
+        sql_no_strings = re.sub(r"'[^']*'", '', sql)
+        alias_map = self._extract_table_aliases(sql_no_strings)
+
+        allowed_relationships = set()
+        relationship_candidates_by_pair = {}
+
+        for rel in relationships:
+            if isinstance(rel, dict):
+                st = rel.get("source_table", "")
+                sc = rel.get("source_column", "")
+                tt = rel.get("target_table", "")
+                tc = rel.get("target_column", "")
+            else:
+                st = getattr(rel, "source_table", "")
+                sc = getattr(rel, "source_column", "")
+                tt = getattr(rel, "target_table", "")
+                tc = getattr(rel, "target_column", "")
+
+            st_n = self._normalize_table_name(st)
+            tt_n = self._normalize_table_name(tt)
+            sc_n = (sc or "").strip().lower()
+            tc_n = (tc or "").strip().lower()
+            if not st_n or not tt_n or not sc_n or not tc_n:
+                continue
+
+            allowed_relationships.add((st_n, sc_n, tt_n, tc_n))
+            allowed_relationships.add((tt_n, tc_n, st_n, sc_n))
+            pair_key = tuple(sorted([st_n, tt_n]))
+            relationship_candidates_by_pair.setdefault(pair_key, set()).add((st_n, sc_n, tt_n, tc_n))
+            relationship_candidates_by_pair.setdefault(pair_key, set()).add((tt_n, tc_n, st_n, sc_n))
+
+        for rule in join_rules:
+            join_clause = None
+            if isinstance(rule, dict):
+                join_clause = rule.get("join_clause")
+            elif isinstance(rule, str):
+                join_clause = rule
+
+            if not join_clause:
+                continue
+
+            for t1, c1, t2, c2 in self._extract_join_equalities(join_clause):
+                allowed_relationships.add((t1, c1, t2, c2))
+                allowed_relationships.add((t2, c2, t1, c1))
+                pair_key = tuple(sorted([t1, t2]))
+                relationship_candidates_by_pair.setdefault(pair_key, set()).add((t1, c1, t2, c2))
+                relationship_candidates_by_pair.setdefault(pair_key, set()).add((t2, c2, t1, c1))
+
+        if not allowed_relationships:
+            return
+
+        on_clauses = self._extract_on_clauses(sql_no_strings)
+        for on_clause in on_clauses:
+            equalities = self._extract_join_equalities(on_clause)
+            if not equalities:
+                result.add_warning("JOIN ON 子句未识别到列等值条件，无法校验关联关系")
+                continue
+
+            checked_pairs = set()
+            hit_pairs = set()
+            for t1, c1, t2, c2 in equalities:
+                t1_actual = self._resolve_table_ref(t1, alias_map)
+                t2_actual = self._resolve_table_ref(t2, alias_map)
+
+                if not t1_actual or not t2_actual:
+                    continue
+
+                if t1_actual == t2_actual:
+                    continue
+
+                if valid_tables and (t1_actual not in valid_tables or t2_actual not in valid_tables):
+                    continue
+
+                pair_key = tuple(sorted([t1_actual, t2_actual]))
+                checked_pairs.add(pair_key)
+                if (t1_actual, c1, t2_actual, c2) in allowed_relationships:
+                    hit_pairs.add(pair_key)
+                    continue
+
+            for pair_key in checked_pairs:
+                if pair_key in hit_pairs:
+                    continue
+                candidates = relationship_candidates_by_pair.get(pair_key, set())
+                if candidates:
+                    candidate_str = "; ".join(
+                        sorted([f"{a}.{b} = {c}.{d}" for a, b, c, d in candidates])[:8]
+                    )
+                    result.add_error(f"JOIN 关系不一致：{pair_key[0]} 与 {pair_key[1]} 的关联必须匹配: {candidate_str}")
+                else:
+                    result.add_error(f"JOIN 关系不一致：{pair_key[0]} 与 {pair_key[1]} 的关联不在允许范围内")
+
+    def _normalize_table_name(self, table_name: str) -> str:
+        if not table_name:
+            return ""
+        name = table_name.strip().strip("`").strip('"').strip()
+        if "." in name:
+            name = name.split(".")[-1]
+        return name.lower()
+
+    def _extract_table_aliases(self, sql: str) -> Dict[str, str]:
+        alias_map: Dict[str, str] = {}
+
+        from_pattern = r'\bFROM\s+`?([\w\.]+)`?(?:\s+(?:AS\s+)?`?(\w+)`?)?'
+        join_pattern = r'\b(?:LEFT|RIGHT|FULL|INNER|OUTER|CROSS)?\s*JOIN\s+`?([\w\.]+)`?(?:\s+(?:AS\s+)?`?(\w+)`?)?'
+
+        for pattern in (from_pattern, join_pattern):
+            for m in re.finditer(pattern, sql, flags=re.IGNORECASE):
+                table_raw, alias = m.groups()
+                table = self._normalize_table_name(table_raw)
+                if not table:
+                    continue
+                alias_map[table] = table
+                if alias:
+                    alias_map[alias.strip().lower()] = table
+
+        return alias_map
+
+    def _resolve_table_ref(self, table_ref: str, alias_map: Dict[str, str]) -> str:
+        if not table_ref:
+            return ""
+        key = table_ref.strip().strip("`").strip('"').strip().lower()
+        return alias_map.get(key, self._normalize_table_name(key))
+
+    def _extract_on_clauses(self, sql: str) -> List[str]:
+        pattern = (
+            r'\bON\b\s+(.+?)'
+            r'(?=\b(?:LEFT|RIGHT|FULL|INNER|OUTER|CROSS)?\s*JOIN\b|\bWHERE\b|\bGROUP\s+BY\b|\bORDER\s+BY\b|\bHAVING\b|\bLIMIT\b|\bFETCH\b|\bUNION\b|$)'
+        )
+        return [m.strip() for m in re.findall(pattern, sql, flags=re.IGNORECASE | re.DOTALL)]
+
+    def _extract_join_equalities(self, sql_fragment: str) -> List[tuple]:
+        sql_no_strings = re.sub(r"'[^']*'", '', sql_fragment)
+        pattern = r'`?(\w+)`?\.`?(\w+)`?\s*=\s*`?(\w+)`?\.`?(\w+)`?'
+        matches = []
+        for m in re.finditer(pattern, sql_no_strings, flags=re.IGNORECASE):
+            t1, c1, t2, c2 = m.groups()
+            matches.append((t1.strip().lower(), c1.strip().lower(), t2.strip().lower(), c2.strip().lower()))
+        return matches
     
     def _extract_column_references(self, sql: str) -> List[tuple]:
         """

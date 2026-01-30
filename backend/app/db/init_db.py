@@ -5,7 +5,8 @@ from app import crud, schemas
 from app.db.base import Base
 from app.db.session import engine
 from app.models.user import User
-from app.core.security import get_password_hash
+from app.core.config import settings
+from app.core.security import get_password_hash, verify_password
 from app.core.agent_config import CORE_AGENT_SQL_GENERATOR, CORE_AGENT_CHART_ANALYST, CORE_AGENT_ROUTER
 from app.models.agent_profile import AgentProfile
 
@@ -77,6 +78,16 @@ def init_core_agents(db: Session) -> None:
 
 
 def create_initial_data(db: Session) -> None:
+    tenant = crud.tenant.get_by_name(db, name="default")
+    if not tenant:
+        tenant = crud.tenant.create(
+            db,
+            obj_in=schemas.TenantCreate(name="default", display_name="Default Tenant"),
+        )
+
+    default_password = "admin123"
+    dev_mode = settings.SECRET_KEY == "development_secret_key"
+
     # 创建默认用户
     user = db.query(User).filter(User.username == "admin").first()
     if not user:
@@ -85,13 +96,28 @@ def create_initial_data(db: Session) -> None:
             email="admin@example.com",
             password_hash=get_password_hash("admin123"),
             display_name="Administrator",
-            role="admin",
+            tenant_id=tenant.id,
+            role="tenant_admin",
             is_active=True
         )
         db.add(user)
         db.commit()
         db.refresh(user)
         logger.info(f"Created default user: {user.username} (id: {user.id})")
+    else:
+        should_update = False
+        if not user.tenant_id:
+            user.tenant_id = tenant.id
+            if user.role not in ["tenant_admin", "super_admin"]:
+                user.role = "tenant_admin"
+            should_update = True
+        if dev_mode and not verify_password(default_password, user.password_hash):
+            user.password_hash = get_password_hash(default_password)
+            should_update = True
+
+        if should_update:
+            db.add(user)
+            db.commit()
     
     # 注释掉硬编码的示例数据库连接
     # 用户应该在 Admin 后台手动添加数据库连接

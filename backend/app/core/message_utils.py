@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional, Type
 from langchain_core.messages import BaseMessage, AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from app.schemas.agent_message import ToolResponse
 
@@ -163,12 +163,12 @@ class MCPToolWrapper(BaseTool):
     Validates: Requirements 3.2, 3.3
     """
     
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
+    
     name: str = Field(description="工具名称")
     description: str = Field(default="", description="工具描述")
+    args_schema: Any = Field(default=None, description="工具参数Schema")
     mcp_tool: Any = Field(description="原始MCP工具对象")
-    
-    class Config:
-        arbitrary_types_allowed = True
     
     def __init__(self, mcp_tool: Any, tool_name: str, **kwargs):
         """
@@ -179,9 +179,20 @@ class MCPToolWrapper(BaseTool):
             tool_name: 工具名称
         """
         description = getattr(mcp_tool, "description", "")
+        if not isinstance(description, str):
+            description = ""
+        
+        raw_args_schema = getattr(mcp_tool, "args_schema", None)
+        if isinstance(raw_args_schema, dict):
+            args_schema = raw_args_schema
+        elif isinstance(raw_args_schema, type) and issubclass(raw_args_schema, BaseModel):
+            args_schema = raw_args_schema
+        else:
+            args_schema = None
         super().__init__(
             name=tool_name,
             description=description,
+            args_schema=args_schema,
             mcp_tool=mcp_tool,
             **kwargs
         )
@@ -204,29 +215,14 @@ class MCPToolWrapper(BaseTool):
         Validates: Requirements 3.2, 3.3
         """
         try:
-            # 执行MCP工具
             result = await self.mcp_tool.ainvoke(kwargs if kwargs else {})
-            
-            # 包装为 ToolResponse 以确保格式统一
-            if isinstance(result, ToolResponse):
-                # 已经是 ToolResponse，直接序列化
-                return result.model_dump_json()
-            elif isinstance(result, str):
-                # 字符串结果，包装为 ToolResponse
-                response = ToolResponse(status="success", data={"result": result})
-                return response.model_dump_json()
-            else:
-                # 其他类型（Dict等），包装为 ToolResponse
-                response = ToolResponse(status="success", data=result)
-                return response.model_dump_json()
+            return self._format_tool_content(result)
         except Exception as e:
-            # 错误也要返回 ToolResponse 格式
-            error_response = ToolResponse(
-                status="error",
-                error=str(e),
-                metadata={"tool_name": self.name}
+            return json.dumps(
+                {"status": "error", "error": str(e), "tool_name": self.name},
+                ensure_ascii=False,
+                default=str,
             )
-            return error_response.model_dump_json()
     
     def invoke(self, input: Dict[str, Any], config: Optional[RunnableConfig] = None) -> ToolMessage:
         """
@@ -271,33 +267,34 @@ class MCPToolWrapper(BaseTool):
         tool_call_id = config.get("configurable", {}).get("tool_call_id", "unknown")
         
         try:
-            # 执行MCP工具
             result = await self.mcp_tool.ainvoke(input, config)
-            
-            # 包装为 ToolResponse 确保格式统一
-            if isinstance(result, ToolResponse):
-                response = result
-            elif isinstance(result, str):
-                response = ToolResponse(status="success", data={"result": result})
-            else:
-                response = ToolResponse(status="success", data=result)
-            
-            return ToolMessage(
-                content=response.model_dump_json(),  # ✅ 使用 Pydantic 标准序列化
-                tool_call_id=tool_call_id,
-                name=self.name
-            )
+            content = self._format_tool_content(result)
         except Exception as e:
-            # 错误也要返回 ToolResponse 格式的 ToolMessage
-            error_response = ToolResponse(
-                status="error",
-                error=str(e),
-                metadata={"tool_name": self.name}
+            content = json.dumps(
+                {"status": "error", "error": str(e), "tool_name": self.name},
+                ensure_ascii=False,
+                default=str,
             )
-            
-            return ToolMessage(
-                content=error_response.model_dump_json(),  # ✅ 使用 Pydantic 标准序列化
-                tool_call_id=tool_call_id,
-                name=self.name
-            )
+        
+        return ToolMessage(content=content, tool_call_id=tool_call_id, name=self.name)
 
+    @staticmethod
+    def _format_tool_content(result: Any) -> str:
+        if isinstance(result, ToolResponse):
+            if result.status == "success":
+                data = result.data
+                if isinstance(data, str):
+                    return data
+                if isinstance(data, dict):
+                    return json.dumps(data, ensure_ascii=False, default=str)
+                return json.dumps({"result": data}, ensure_ascii=False, default=str)
+            return json.dumps(
+                {"status": "error", "error": result.error or "", "tool_name": (result.metadata or {}).get("tool_name")},
+                ensure_ascii=False,
+                default=str,
+            )
+        if isinstance(result, str):
+            return result
+        if isinstance(result, dict):
+            return json.dumps(result, ensure_ascii=False, default=str)
+        return json.dumps({"result": result}, ensure_ascii=False, default=str)

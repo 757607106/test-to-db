@@ -481,7 +481,6 @@ async def _perform_skill_routing(
     Returns:
         Dict 包含 Skill 路由结果，可直接合并到 state
     """
-    from app.core.config import settings
     from app.services.skill_router import (
         skill_router, 
         RoutingStrategy,
@@ -497,16 +496,8 @@ async def _perform_skill_routing(
         "loaded_skill_content": None,
         "skill_business_rules": None,
         "skill_routing_strategy": None,
-        "skill_routing_reasoning": "Skill 功能已禁用",
+        "skill_routing_reasoning": "未配置 Skills",
     }
-    
-    # ==========================================
-    # Phase 3: 全局开关检查
-    # 如果 SKILL_MODE_ENABLED=false，直接跳过 Skill 路由
-    # ==========================================
-    if not settings.SKILL_MODE_ENABLED:
-        logger.debug("Skill 功能已通过 SKILL_MODE_ENABLED=false 禁用，跳过路由")
-        return result
     
     if not connection_id:
         result["skill_routing_reasoning"] = "未指定数据库连接"
@@ -547,12 +538,18 @@ async def _perform_skill_routing(
             # 加载 Skill 内容
             try:
                 skill_content = await skill_service.load_skill(skill_name, connection_id)
+                if hasattr(skill_content, "model_dump"):
+                    skill_content_dict = skill_content.model_dump()
+                elif hasattr(skill_content, "dict"):
+                    skill_content_dict = skill_content.dict()
+                else:
+                    skill_content_dict = skill_content
                 
                 result.update({
                     "skill_mode_enabled": True,
                     "selected_skill_name": skill_name,
                     "skill_confidence": routing_result.selected_skill.confidence,
-                    "loaded_skill_content": skill_content.model_dump(),
+                    "loaded_skill_content": skill_content_dict,
                     "skill_business_rules": skill_content.business_rules,
                     "skill_routing_strategy": routing_result.strategy_used,
                     "skill_routing_reasoning": routing_result.reasoning,

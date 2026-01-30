@@ -48,8 +48,7 @@ def build_schema_prompt(
             columns_by_table[table_name] = []
         columns_by_table[table_name].append(col)
     
-    # 格式化表结构（简洁的 SQL 注释风格）
-    schema_str = ""
+    schema_str = "【Schema 信息 - 严格约束】\n只能使用下列出现的表名与列名，禁止虚构。\n\n"
     
     for table in tables:
         table_name = table.get('table_name', '')
@@ -68,8 +67,8 @@ def build_schema_prompt(
                 is_fk = col.get('is_foreign_key', False)
                 
                 desc_str = f" ({col_desc})" if col_desc else ""
-                pk_flag = " PK" if is_pk else ""
-                fk_flag = " FK" if is_fk else ""
+                pk_flag = " PK(主键)" if is_pk else ""
+                fk_flag = " FK(外键)" if is_fk else ""
                 
                 schema_str += f"--   {col_name} {col_type}{pk_flag}{fk_flag}{desc_str}\n"
         

@@ -416,8 +416,8 @@ class QueryRouter:
             "standard": {
                 "skip_sql": False,
                 "skip_analysis": False,
-                "skip_chart": False,
-                "fast_mode": False
+                "skip_chart": True,
+                "fast_mode": True
             },
             "analysis_enhanced": {
                 "skip_sql": False,

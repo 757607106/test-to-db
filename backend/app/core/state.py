@@ -328,6 +328,12 @@ def create_initial_state(
         # Skill 模式（Phase 3 默认禁用）
         # ==========================================
         skill_mode_enabled=False,
+        selected_skill_name=None,
+        skill_confidence=0.0,
+        loaded_skill_content=None,
+        skill_business_rules=None,
+        skill_routing_strategy=None,
+        skill_routing_reasoning=None,
         
         # ==========================================
         # 智能规划（P2）

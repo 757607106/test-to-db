@@ -13,8 +13,8 @@ from .config import SCHEMA_CACHE_TTL
 logger = logging.getLogger(__name__)
 
 
-# Schema缓存（按connection_id缓存表结构信息）
-schema_cache: Dict[int, Dict[str, Any]] = {}
+# Schema缓存（按 cache_key 缓存表结构信息）
+schema_cache: Dict[str, Any] = {}
 schema_cache_timestamps: Dict[int, float] = {}
 
 # 完整 Schema 上下文缓存（按 connection_id + query_hash 缓存）
@@ -24,7 +24,7 @@ full_schema_context_timestamps: Dict[str, float] = {}
 
 def is_schema_cache_valid(connection_id: int) -> bool:
     """检查Schema缓存是否有效"""
-    if connection_id not in schema_cache:
+    if connection_id not in schema_cache_timestamps:
         return False
     cache_time = schema_cache_timestamps.get(connection_id, 0)
     return (time.time() - cache_time) < SCHEMA_CACHE_TTL

@@ -60,13 +60,62 @@ def execute_sql_query(
     timeout: int = 30
 ) -> str:
     """执行 SQL 查询并返回 JSON 格式结果"""
+    sql_query = (sql_query or "").strip()
+    if not sql_query:
+        return json.dumps({
+            "success": False,
+            "error": "SQL 语句为空",
+            "from_cache": False
+        }, ensure_ascii=False)
+
+    try:
+        timeout_seconds = int(timeout)
+    except Exception:
+        timeout_seconds = 30
+    timeout_seconds = max(1, min(timeout_seconds, 300))
+
+    sql_to_execute = sql_query
+    db_type = "mysql"
+
+    try:
+        from app.services.db_service import get_db_connection_by_id
+        connection = get_db_connection_by_id(connection_id)
+        if not connection:
+            return json.dumps({
+                "success": False,
+                "error": f"找不到连接 ID 为 {connection_id} 的数据库连接",
+                "from_cache": False
+            }, ensure_ascii=False)
+        if getattr(connection, "db_type", None):
+            db_type = str(connection.db_type).lower()
+
+        from app.services.sql_validator import sql_validator
+        validation = sql_validator.validate(
+            sql=sql_query,
+            schema_context=None,
+            db_type=db_type,
+            allow_write=False
+        )
+        if not validation.is_valid:
+            return json.dumps({
+                "success": False,
+                "error": "; ".join(validation.errors)[:500],
+                "from_cache": False
+            }, ensure_ascii=False)
+
+        if validation.fixed_sql:
+            sql_to_execute = validation.fixed_sql
+    except Exception as e:
+        logger.error(f"SQL 执行前置校验失败: {str(e)}")
+        return json.dumps({
+            "success": False,
+            "error": f"SQL 执行前置校验失败: {str(e)[:200]}",
+            "from_cache": False
+        }, ensure_ascii=False)
+
     # 生成缓存键
-    cache_key = f"{connection_id}:{hash(sql_query)}"
-    
-    # 检查是否是修改操作（不缓存修改操作）
-    sql_upper = sql_query.upper().strip()
-    is_modification = any(keyword in sql_upper for keyword in 
-                         ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE'])
+    cache_key = f"{connection_id}:{hash(sql_to_execute)}"
+    is_modification = False
     
     # 检查缓存（只对查询操作使用缓存，且未过期）
     if not is_modification and cache_key in _execution_cache:
@@ -105,20 +154,15 @@ def execute_sql_query(
     _cache_lock[cache_key] = True
     
     try:
-        from app.services.db_service import get_db_connection_by_id, execute_query_with_connection
-        
-        # 获取数据库连接
-        connection = get_db_connection_by_id(connection_id)
-        if not connection:
-            return json.dumps({
-                "success": False,
-                "error": f"找不到连接 ID 为 {connection_id} 的数据库连接",
-                "from_cache": False
-            }, ensure_ascii=False)
+        from app.services.db_service import execute_query_with_connection
         
         # 执行查询
         start_time = time.time()
-        result_data = execute_query_with_connection(connection, sql_query)
+        result_data = execute_query_with_connection(
+            connection=connection,
+            query=sql_to_execute,
+            timeout_seconds=timeout_seconds
+        )
         execution_time = time.time() - start_time
         
         # 构建结果

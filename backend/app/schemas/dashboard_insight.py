@@ -82,6 +82,7 @@ class DashboardInsightRequest(BaseModel):
     )
     included_widget_ids: Optional[List[int]] = Field(None, description="包含的Widget ID列表")
     force_refresh: bool = Field(False, description="强制重新分析")
+    force_requery: bool = Field(False, description="是否重新查询数据源")
     conditions: Optional[InsightConditions] = Field(None, description="查询条件")
     use_graph_relationships: bool = Field(True, description="是否启用图谱关系分析")
 
