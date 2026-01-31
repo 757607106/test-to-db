@@ -6,6 +6,10 @@ Skill 模式支持：
 - 读取 skill_context 中的业务规则 (business_rules)
 - 读取 skill_context 中的 JOIN 规则 (join_rules)
 - 将规则注入到 SQL 生成提示中
+
+数据库方言支持：
+- 根据 db_type 注入对应的语法规则指南
+- 确保生成的 SQL 符合目标数据库语法
 """
 from typing import Dict, Any, List
 from langchain_core.tools import tool
@@ -16,6 +20,7 @@ from langgraph.config import get_stream_writer
 from app.core.state import SQLMessageState
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 from app.schemas.stream_events import create_stage_message_event
+from app.services.db_dialect import get_syntax_guide_for_prompt, get_dialect
 
 
 @tool
@@ -40,9 +45,15 @@ def generate_sql_query(
         生成的SQL语句和相关信息
     """
     try:
+        # 获取数据库语法指南
+        syntax_guide = get_syntax_guide_for_prompt(db_type)
+        dialect = get_dialect(db_type)
+        
         # 构建详细的上下文信息
         context = f"""
 数据库类型: {db_type}
+
+{syntax_guide}
 
 可用的表和字段信息:
 {schema_info}
@@ -79,7 +90,7 @@ SQL: {sample.get('sql', '')}
 
 请生成一个准确、高效的SQL查询语句。要求：
 1. 只返回SQL语句，不要其他解释
-2. 确保语法正确
+2. 【重要】严格遵循上述数据库语法规则
 3. 使用适当的连接和过滤条件
 4. 限制结果数量（除非用户明确要求全部数据）
 5. 使用正确的值映射
@@ -118,7 +129,8 @@ def generate_sql_with_samples(
     user_query: str,
     schema_info: Dict[str, Any],
     sample_qa_pairs: List[Dict[str, Any]],
-    value_mappings: Dict[str, Any] = None
+    value_mappings: Dict[str, Any] = None,
+    db_type: str = "mysql"
 ) -> Dict[str, Any]:
     """
     基于样本生成高质量SQL查询
@@ -128,6 +140,7 @@ def generate_sql_with_samples(
         schema_info: 数据库模式信息
         sample_qa_pairs: 相关的SQL问答对样本
         value_mappings: 值映射信息
+        db_type: 数据库类型
 
     Returns:
         生成的SQL语句和样本分析
@@ -135,7 +148,7 @@ def generate_sql_with_samples(
     try:
         if not sample_qa_pairs:
             # 如果没有样本，回退到基本生成
-            return generate_sql_query(user_query, schema_info, value_mappings)
+            return generate_sql_query(user_query, schema_info, value_mappings, db_type)
 
         # 过滤并分析最佳样本
         min_similarity_threshold = 0.6
@@ -148,7 +161,7 @@ def generate_sql_with_samples(
 
         if not high_quality_samples:
             # 如果没有高质量样本，回退到基本生成
-            return generate_sql_query(user_query, schema_info, value_mappings)
+            return generate_sql_query(user_query, schema_info, value_mappings, db_type)
 
         # 选择最佳样本
         best_samples = sorted(
@@ -169,11 +182,18 @@ def generate_sql_with_samples(
 - 解释: {sample.get('explanation', '')}
 """
 
+        # 获取数据库语法指南
+        syntax_guide = get_syntax_guide_for_prompt(db_type)
+
         # 构建增强的生成提示
         prompt = f"""
 作为SQL专家，请基于以下信息生成高质量的SQL查询：
 
 用户查询: {user_query}
+
+数据库类型: {db_type}
+
+{syntax_guide}
 
 数据库模式:
 {schema_info}
@@ -185,17 +205,16 @@ def generate_sql_with_samples(
 
 请按照以下步骤生成SQL：
 1. 分析用户查询的意图和需求
-2. 参考最相关样本的SQL结构和模式
-3. 根据当前数据库模式调整表名和字段名
-4. 确保SQL语法正确且高效
+2. 【重要】严格遵循上述数据库语法规则
+3. 参考最相关样本的SQL结构和模式
+4. 根据当前数据库模式调整表名和字段名
 5. 添加适当的限制条件
 
 要求：
 - 只返回最终的SQL语句
-- 确保语法正确
+- 严格遵循目标数据库的语法规则
 - 参考样本的最佳实践
 - 适应当前的数据库结构
-- 优化查询性能
 """
 
         llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
@@ -320,6 +339,12 @@ SQL生成原则：
             if isinstance(user_query, list):
                 user_query = user_query[0]["text"]
             
+            # 获取数据库类型
+            db_type = state.get("db_type", "mysql")
+            
+            # 获取数据库语法指南
+            syntax_guide = get_syntax_guide_for_prompt(db_type)
+            
             # 获取模式信息
             schema_info = state.get("schema_info")
             if not schema_info:
@@ -359,10 +384,16 @@ SQL生成原则：
 请为以下用户查询生成SQL语句：
 
 用户查询: {user_query}
+
+数据库类型: {db_type}
+
+{syntax_guide}
+
 模式信息: {schema_info}
 {sample_info}
 {skill_prompt}
-请根据可用的样本生成、优化并解释SQL查询。
+
+【重要】请严格遵循上述数据库语法规则生成 SQL。
 """)
             ]
             

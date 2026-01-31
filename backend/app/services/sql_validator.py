@@ -6,6 +6,7 @@ SQL 验证服务
 2. 安全（无危险操作）
 3. 资源可控（有 LIMIT 限制）
 4. 列名/表名存在
+5. 数据库方言兼容性
 
 使用方式：
     from app.services.sql_validator import sql_validator
@@ -23,6 +24,8 @@ import re
 import logging
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass, field
+
+from app.services.db_dialect import validate_dialect_compatibility, get_dialect
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +119,10 @@ class SQLValidator:
         if fixed_sql:
             result.fixed_sql = fixed_sql
         
-        # 4. Schema 一致性检查（如果提供了 schema_context）
+        # 4. 数据库方言兼容性检查
+        self._check_dialect_compatibility(sql, db_type, result)
+        
+        # 5. Schema 一致性检查（如果提供了 schema_context）
         if schema_context:
             self._check_schema_consistency(sql, schema_context, result)
         
@@ -171,6 +177,26 @@ class SQLValidator:
         sql_no_strings = re.sub(r"'[^']*'", '', sql)
         if ';' in sql_no_strings.rstrip(';'):
             result.add_error("安全限制：禁止执行多条 SQL 语句")
+    
+    def _check_dialect_compatibility(
+        self,
+        sql: str,
+        db_type: str,
+        result: SQLValidationResult
+    ):
+        """
+        数据库方言兼容性检查
+        
+        使用 db_dialect 模块验证 SQL 是否符合目标数据库的语法要求。
+        """
+        dialect_result = validate_dialect_compatibility(sql, db_type)
+        
+        # 将方言验证的错误和警告合并到结果中
+        for error in dialect_result.get("errors", []):
+            result.add_error(error)
+        
+        for warning in dialect_result.get("warnings", []):
+            result.add_warning(warning)
     
     def _check_resource_limits(
         self, 
@@ -595,10 +621,25 @@ class SQLValidator:
         return columns
     
     def _is_table_alias(self, sql: str, name: str) -> bool:
-        """检查名称是否是表别名"""
-        # 简单检查：是否在 AS name 或 table_name name 模式中
-        pattern = rf'\b\w+\s+(?:AS\s+)?{re.escape(name)}\b'
-        return bool(re.search(pattern, sql, re.IGNORECASE))
+        """
+        检查名称是否是表别名
+        
+        别名模式：
+        - table_name AS alias
+        - table_name alias (无 AS 关键字)
+        
+        但排除：FROM name, JOIN name 等直接引用表名的情况
+        """
+        # 首先检查是否是直接的表引用（FROM table 或 JOIN table）
+        direct_ref_pattern = rf'\b(?:FROM|JOIN)\s+`?{re.escape(name)}`?\b'
+        if re.search(direct_ref_pattern, sql, re.IGNORECASE):
+            # 这是直接的表引用，不是别名
+            return False
+        
+        # 检查是否作为别名使用（table AS alias 或 table alias）
+        # 排除 SQL 关键字作为前缀的情况
+        alias_pattern = rf'\b(?!FROM|JOIN|LEFT|RIGHT|INNER|OUTER|CROSS|ON|WHERE|AND|OR|SELECT)\w+\s+(?:AS\s+)?{re.escape(name)}\b'
+        return bool(re.search(alias_pattern, sql, re.IGNORECASE))
     
     def _is_sql_function_or_keyword(self, name: str) -> bool:
         """检查是否是 SQL 函数或关键字"""

@@ -6,13 +6,11 @@ from typing import Dict, Any
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, AIMessage, AnyMessage
+from langchain_core.messages import AIMessage, AnyMessage
 from langgraph.prebuilt import create_react_agent
-from langgraph.config import get_stream_writer
 
 from app.core.state import SQLMessageState, SQLExecutionResult, extract_connection_id
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
-from app.schemas.stream_events import create_stage_message_event
 
 
 @tool
@@ -64,129 +62,6 @@ def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> Dict[
         }
 
 
-@tool
-def analyze_query_performance(sql_query: str, execution_result: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    分析查询性能
-    
-    Args:
-        sql_query: SQL查询语句
-        execution_result: 执行结果
-        
-    Returns:
-        性能分析结果
-    """
-    try:
-        execution_time = execution_result.get("execution_time", 0)
-        row_count = execution_result.get("rows_affected", 0)
-        
-        # 性能评估
-        performance_rating = "excellent"
-        if execution_time > 5:
-            performance_rating = "poor"
-        elif execution_time > 2:
-            performance_rating = "fair"
-        elif execution_time > 1:
-            performance_rating = "good"
-        
-        # 生成性能建议
-        suggestions = []
-        if execution_time > 2:
-            suggestions.append("查询执行时间较长，考虑添加索引或优化查询")
-        if row_count > 10000:
-            suggestions.append("返回行数较多，考虑添加分页或更严格的过滤条件")
-        
-        return {
-            "success": True,
-            "performance_rating": performance_rating,
-            "execution_time": execution_time,
-            "row_count": row_count,
-            "suggestions": suggestions
-        }
-        
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-
-@tool
-def format_query_results(execution_result: Dict[str, Any], format_type: str = "table") -> Dict[str, Any]:
-    """
-    格式化查询结果
-    
-    Args:
-        execution_result: 执行结果
-        format_type: 格式类型 (table, json, csv)
-        
-    Returns:
-        格式化后的结果
-    """
-    try:
-        if not execution_result.get("success"):
-            return execution_result
-        
-        data = execution_result.get("data", {})
-        columns = data.get("columns", [])
-        rows = data.get("data", [])
-        
-        if format_type == "table":
-            # 创建表格格式
-            if not columns or not rows:
-                formatted_result = "查询结果为空"
-            else:
-                # 创建简单的表格格式
-                header = " | ".join(columns)
-                separator = "-" * len(header)
-                row_strings = []
-                for row in rows[:10]:  # 限制显示前10行
-                    row_str = " | ".join(str(cell) for cell in row)
-                    row_strings.append(row_str)
-                
-                formatted_result = f"{header}\n{separator}\n" + "\n".join(row_strings)
-                if len(rows) > 10:
-                    formatted_result += f"\n... 还有 {len(rows) - 10} 行"
-        
-        elif format_type == "json":
-            # JSON格式
-            if columns and rows:
-                json_data = []
-                for row in rows:
-                    row_dict = dict(zip(columns, row))
-                    json_data.append(row_dict)
-                formatted_result = json_data
-            else:
-                formatted_result = []
-        
-        elif format_type == "csv":
-            # CSV格式
-            if columns and rows:
-                csv_lines = [",".join(columns)]
-                for row in rows:
-                    csv_line = ",".join(str(cell) for cell in row)
-                    csv_lines.append(csv_line)
-                formatted_result = "\n".join(csv_lines)
-            else:
-                formatted_result = ""
-        
-        else:
-            formatted_result = str(data)
-        
-        return {
-            "success": True,
-            "formatted_result": formatted_result,
-            "format_type": format_type,
-            "original_data": data
-        }
-        
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-
 class SQLExecutorAgent:
     """SQL执行代理"""
 
@@ -210,16 +85,12 @@ class SQLExecutorAgent:
         **重要：当前数据库connection_id是 {connection_id}**
         你的任务是：
             1. 安全地执行SQL查询
-            2. 分析查询性能
-            3. 格式化查询结果
             
             执行流程：
             使用 execute_sql_query 执行SQL查询
             
             执行原则：
             - 确保查询安全性
-            - 监控执行性能
-            - 提供清晰的结果展示
             - 处理执行错误
             
             如果执行失败，请提供详细的错误信息和解决建议。
@@ -239,25 +110,23 @@ class SQLExecutorAgent:
             if validation_result and not validation_result.is_valid:
                 raise ValueError("SQL验证未通过，无法执行")
             
-            # 准备输入消息
-            messages = [
-                HumanMessage(content=f"""
-请执行以下SQL查询并分析结果：
-
-SQL语句:
-{sql_query}
-
-请执行查询、分析性能并格式化结果。
-""")
-            ]
-            
-            # 调用代理
-            result = await self.agent.ainvoke({
-                "messages": messages
+            connection_id = extract_connection_id(state) or state.get("connection_id") or 15
+            raw_result = await execute_sql_query.ainvoke({
+                "sql_query": sql_query,
+                "connection_id": connection_id,
+                "timeout": 30
             })
-            
-            # 创建执行结果
-            execution_result = self._create_execution_result(result)
+
+            if not isinstance(raw_result, dict):
+                raise ValueError("SQL执行结果格式异常")
+
+            execution_result = SQLExecutionResult(
+                success=raw_result.get("success", False),
+                data=raw_result.get("data"),
+                error=raw_result.get("error"),
+                execution_time=raw_result.get("execution_time"),
+                rows_affected=raw_result.get("rows_affected")
+            )
             
             # 更新状态
             state["execution_result"] = execution_result
@@ -266,19 +135,10 @@ SQL语句:
             else:
                 state["current_stage"] = "error_recovery"
             
-            state["agent_messages"]["sql_executor"] = result
-            writer = get_stream_writer()
-            if writer and execution_result.success:
-                row_count = execution_result.rows_affected or 0
-                if execution_result.data and isinstance(execution_result.data, dict):
-                    row_count = execution_result.data.get("row_count", row_count)
-                writer(create_stage_message_event(
-                    message=f"SQL 执行完成，返回 {row_count} 条数据，准备分析结果。",
-                    step="sql_executor"
-                ))
+            state["agent_messages"]["sql_executor"] = raw_result
             
             return {
-                "messages": result["messages"],
+                "messages": [AIMessage(content="SQL执行成功")] if execution_result.success else [AIMessage(content="SQL执行失败")],
                 "execution_result": execution_result,
                 "current_stage": state["current_stage"]
             }
@@ -306,41 +166,5 @@ SQL语句:
                 "current_stage": "error_recovery"
             }
     
-    def _create_execution_result(self, result: Dict[str, Any]) -> SQLExecutionResult:
-        """从代理结果创建执行结果对象"""
-        messages = result.get("messages", [])
-        
-        success = True
-        data = None
-        error = None
-        execution_time = 0
-        rows_affected = 0
-        
-        for message in messages:
-            if hasattr(message, 'content'):
-                content = message.content
-                if "错误" in content or "失败" in content:
-                    success = False
-                    error = content
-                elif "执行时间" in content:
-                    import re
-                    time_match = re.search(r'(\d+\.?\d*)\s*秒', content)
-                    if time_match:
-                        execution_time = float(time_match.group(1))
-                elif "行数" in content:
-                    import re
-                    rows_match = re.search(r'(\d+)\s*行', content)
-                    if rows_match:
-                        rows_affected = int(rows_match.group(1))
-        
-        return SQLExecutionResult(
-            success=success,
-            data=data,
-            error=error,
-            execution_time=execution_time,
-            rows_affected=rows_affected
-        )
-
-
 # 创建全局实例
 sql_executor_agent = SQLExecutorAgent()

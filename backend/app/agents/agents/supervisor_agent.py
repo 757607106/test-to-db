@@ -97,9 +97,9 @@ class SupervisorAgent:
         """创建工作代理"""
         # 导入各个功能代理模块
         from app.agents.agents.schema_agent import schema_agent          # Schema分析代理：分析用户查询并获取相关数据库表结构
-        from app.agents.agents.sql_generator_agent import sql_generator_agent  # SQL生成代理：根据模式信息生成高质量SQL语句
-        from app.agents.agents.sql_validator_agent import sql_validator_agent  # SQL验证代理：验证SQL语法、安全性和性能
-        from app.agents.agents.sql_executor_agent import sql_executor_agent    # SQL执行代理：安全执行SQL并返回结果
+        from app.agents.agents.sql_generator_agent import sql_generator_agent  # SQL生成代理：根据模式信息生成高质量SQL语句（支持多数据库方言）
+        from app.agents.agents.sql_validator_agent import sql_validator_agent  # SQL验证代理：验证SQL语法、安全性和性能（基于目标数据库类型）
+        from app.agents.agents.sql_executor_agent import sql_executor_agent    # SQL执行代理：安全执行SQL并返回原始结果（不分析数据）
         from app.agents.agents.error_recovery_agent import error_recovery_agent  # 错误恢复代理：处理错误并提供修复方案
         from app.agents.agents.chart_generator_agent import chart_generator_agent  # 图表生成代理：根据查询结果生成数据可视化图表
         from app.agents.agents.data_analyst_agent import data_analyst_agent    # 数据分析代理：分析查询结果，生成数据洞察和业务建议
@@ -178,10 +178,10 @@ class SupervisorAgent:
 
 🔍 **schema_agent**: 分析用户查询，获取相关数据库表结构
 
-⚙️ **sql_generator_agent**: 根据模式信息和样本生成高质量SQL语句
-🔍 **sql_validator_agent**: 验证SQL的语法、安全性和性能
-🚀 **sql_executor_agent**: 安全执行SQL并返回结果
-📊 **data_analyst_agent**: 分析查询结果，生成数据洞察和业务建议
+⚙️ **sql_generator_agent**: 根据模式信息和样本生成高质量SQL语句（自动适配目标数据库语法）
+🔒 **sql_validator_agent**: 验证SQL语法正确性、安全性和性能（基于目标数据库类型进行方言兼容性检查）
+🚀 **sql_executor_agent**: 安全执行SQL并返回原始结果（仅执行，不分析数据）
+📊 **data_analyst_agent**: 分析查询结果，生成数据洞察和业务建议（SQL执行后必须调用）
 📈 **chart_generator_agent**: 根据查询结果生成数据可视化图表
 🔧 **error_recovery_agent**: 处理错误并提供修复方案
 
@@ -194,6 +194,11 @@ class SupervisorAgent:
 
 **标准流程:**
 用户查询 → schema_agent → sql_generator_agent → sql_validator_agent → sql_executor_agent → data_analyst_agent → [可选] chart_generator_agent → 完成
+
+**职责边界（重要）:**
+- sql_executor_agent 只负责执行 SQL，不做任何数据分析
+- 数据分析必须由 data_analyst_agent 完成
+- sql_validator_agent 会根据数据库类型验证方言兼容性（如 MySQL 不支持 IN 子查询中的 LIMIT）
 
 **数据分析必须执行:**
 - SQL 执行成功后，必须调用 data_analyst_agent 分析结果

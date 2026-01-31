@@ -8,7 +8,8 @@ import time
 import json
 import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, date
+from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app import crud, schemas
@@ -18,6 +19,30 @@ logger = logging.getLogger(__name__)
 
 # 并发限制配置
 MAX_CONCURRENT_REFRESHES = 5  # 最大并发刷新数
+
+
+def _serialize_value(val: Any) -> Any:
+    """
+    将数据库返回的特殊类型转换为 JSON 可序列化的类型
+    """
+    if isinstance(val, Decimal):
+        return float(val)
+    elif isinstance(val, (datetime, date)):
+        return val.isoformat()
+    elif isinstance(val, bytes):
+        return val.decode('utf-8', errors='replace')
+    return val
+
+
+def _serialize_row(row: Any) -> Any:
+    """
+    序列化单行数据
+    """
+    if isinstance(row, dict):
+        return {k: _serialize_value(v) for k, v in row.items()}
+    elif isinstance(row, (list, tuple)):
+        return [_serialize_value(v) for v in row]
+    return _serialize_value(row)
 REFRESH_TIMEOUT_SECONDS = 60  # 单个 Widget 刷新超时时间
 
 
@@ -163,7 +188,7 @@ class DashboardRefreshService:
             
             # P1-FIX: 使用run_in_executor执行同步的SQL查询
             loop = asyncio.get_event_loop()
-            result_json = await loop.run_in_executor(
+            result = await loop.run_in_executor(
                 None,  # 使用默认线程池
                 self._execute_sql_sync,
                 sql,
@@ -171,7 +196,7 @@ class DashboardRefreshService:
                 force
             )
             
-            result = json.loads(result_json)
+            # execute_sql_query 直接返回 dict，不需要 json.loads
             elapsed_ms = int((time.time() - start_time) * 1000)
             
             if result.get("success"):
@@ -179,13 +204,17 @@ class DashboardRefreshService:
                 rows = data.get("data", [])
                 columns = data.get("columns", [])
                 
-                # 格式化数据
+                # 格式化数据，同时处理 Decimal 等特殊类型
                 formatted_data = []
                 for row in rows:
                     if isinstance(row, list) and len(row) == len(columns):
-                        formatted_data.append(dict(zip(columns, row)))
+                        # 先序列化值，再构建字典
+                        serialized_row = [_serialize_value(v) for v in row]
+                        formatted_data.append(dict(zip(columns, serialized_row)))
                     elif isinstance(row, dict):
-                        formatted_data.append(row)
+                        formatted_data.append(_serialize_row(row))
+                    else:
+                        formatted_data.append(_serialize_row(row))
                 
                 # 更新Widget的data_cache
                 widget.data_cache = {
@@ -227,7 +256,7 @@ class DashboardRefreshService:
         sql: str,
         connection_id: int,
         force: bool
-    ) -> str:
+    ) -> Dict[str, Any]:
         """
         同步执行SQL查询（在线程池中运行）
         
@@ -237,7 +266,7 @@ class DashboardRefreshService:
             force: 是否强制刷新
             
         Returns:
-            JSON格式的结果字符串
+            查询结果字典
         """
         from app.agents.agents.sql_executor_agent import execute_sql_query
         

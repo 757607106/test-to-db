@@ -4,7 +4,6 @@ Text2SQL工具模块
 """
 import re
 import json
-import sqlparse
 from typing import Dict, Any, List, Optional, Tuple, Set
 from sqlalchemy.orm import Session
 from neo4j import GraphDatabase
@@ -350,22 +349,6 @@ def process_sql_with_value_mappings(sql: str, value_mappings: Dict[str, Dict[str
             sql = re.sub(pattern4, f"\\1%{db_value}%\\3", sql, flags=re.IGNORECASE)
 
     return sql
-
-
-def validate_sql(sql: str) -> bool:
-    """
-    验证SQL语法
-    """
-    try:
-        parsed = sqlparse.parse(sql)
-        if not parsed:
-            return False
-
-        # 检查是否是SELECT语句（为了安全）
-        stmt = parsed[0]
-        return stmt.get_type().upper() == 'SELECT'
-    except Exception:
-        return False
 
 
 def extract_sql_from_llm_response(response: str) -> str:

@@ -1,194 +1,67 @@
 """
 SQL验证代理
-负责验证生成的SQL语句的正确性、安全性和性能
+负责验证生成的SQL语句的语法正确性、安全性和数据库方言兼容性
+
+职责：
+1. 语法验证：检查 SQL 基本语法（括号、引号、关键字等）
+2. 安全验证：检查危险操作（DROP、DELETE 等）
+3. 方言验证：检查 SQL 是否符合目标数据库语法（如 MySQL 不支持 IN 子查询中的 LIMIT）
+4. 自动修复：尝试修复简单问题（如自动添加 LIMIT）
 """
-import re
 import sqlparse
 from typing import Dict, Any, List
 from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import AIMessage
 from langgraph.prebuilt import create_react_agent
 
 from app.core.state import SQLMessageState, SQLValidationResult
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
+from app.services.sql_validator import sql_validator as sql_validator_service
+from app.services.db_dialect import get_dialect, validate_dialect_compatibility
 
 
 @tool
-def validate_sql_syntax(sql_query: str, db_type: str = "mysql") -> Dict[str, Any]:
+def validate_sql_syntax(
+    sql_query: str, 
+    db_type: str = "mysql",
+    schema_context: Dict[str, Any] = None
+) -> Dict[str, Any]:
     """
-    验证SQL语法正确性
+    验证SQL语法正确性、安全性、数据库方言兼容性，以及表名/列名是否存在
     
     Args:
         sql_query: SQL查询语句
-        db_type: 数据库类型
+        db_type: 数据库类型（mysql, postgresql, sqlserver, oracle, sqlite）
+        schema_context: Schema 上下文（包含 tables, columns 信息），用于验证表名/列名
         
     Returns:
-        语法验证结果
+        验证结果，包含错误、警告和修复后的SQL
     """
     try:
-        errors = []
-        warnings = []
-        
-        # 使用sqlparse进行基础语法检查
-        try:
-            parsed = sqlparse.parse(sql_query)
-            if not parsed:
-                errors.append("SQL语句无法解析")
-        except Exception as e:
-            errors.append(f"SQL语法错误: {str(e)}")
-        
-        # 检查常见的SQL问题
-        sql_upper = sql_query.upper()
-        
-        # 检查是否包含危险操作
-        dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE']
-        for keyword in dangerous_keywords:
-            if keyword in sql_upper:
-                errors.append(f"包含危险操作: {keyword}")
-        
-        # 检查是否有SELECT语句
-        if 'SELECT' not in sql_upper:
-            errors.append("缺少SELECT语句")
-        
-        # 检查括号匹配
-        if sql_query.count('(') != sql_query.count(')'):
-            errors.append("括号不匹配")
-        
-        # 检查引号匹配
-        single_quotes = sql_query.count("'")
-        double_quotes = sql_query.count('"')
-        if single_quotes % 2 != 0:
-            warnings.append("单引号可能不匹配")
-        if double_quotes % 2 != 0:
-            warnings.append("双引号可能不匹配")
-        
-        # 检查是否有LIMIT子句（推荐）
-        if 'LIMIT' not in sql_upper and 'TOP' not in sql_upper:
-            warnings.append("建议添加LIMIT子句以限制结果集大小")
+        # 使用增强的 sql_validator 服务进行完整验证
+        result = sql_validator_service.validate(
+            sql=sql_query,
+            schema_context=schema_context,  # 传入 schema_context 启用表名/列名验证
+            db_type=db_type,
+            allow_write=False  # 只读模式
+        )
         
         return {
             "success": True,
-            "is_valid": len(errors) == 0,
-            "errors": errors,
-            "warnings": warnings
+            "is_valid": result.is_valid,
+            "errors": result.errors,
+            "warnings": result.warnings,
+            "fixed_sql": result.fixed_sql,  # 自动修复后的 SQL（如添加 LIMIT）
+            "db_type": db_type
         }
         
     except Exception as e:
         return {
             "success": False,
-            "error": str(e)
-        }
-
-
-@tool
-def validate_sql_security(sql_query: str) -> Dict[str, Any]:
-    """
-    验证SQL安全性，检查SQL注入风险
-    
-    Args:
-        sql_query: SQL查询语句
-        
-    Returns:
-        安全性验证结果
-    """
-    try:
-        security_issues = []
-        warnings = []
-        
-        # 检查SQL注入模式
-        injection_patterns = [
-            r"';.*--",  # 注释注入
-            r"union.*select",  # UNION注入
-            r"or.*1=1",  # 逻辑注入
-            r"and.*1=1",  # 逻辑注入
-            r"exec\s*\(",  # 执行函数
-            r"sp_",  # 存储过程
-            r"xp_",  # 扩展存储过程
-        ]
-        
-        sql_lower = sql_query.lower()
-        for pattern in injection_patterns:
-            if re.search(pattern, sql_lower):
-                security_issues.append(f"检测到潜在的SQL注入模式: {pattern}")
-        
-        # 检查动态SQL构造
-        if "concat" in sql_lower or "||" in sql_query:
-            warnings.append("检测到字符串拼接，请确保输入已正确转义")
-        
-        # 检查用户输入直接嵌入
-        if "'" in sql_query and not re.search(r"'[^']*'", sql_query):
-            warnings.append("检测到可能的未转义用户输入")
-        
-        return {
-            "success": True,
-            "is_secure": len(security_issues) == 0,
-            "security_issues": security_issues,
-            "warnings": warnings
-        }
-        
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-
-@tool
-def validate_sql_performance(sql_query: str, schema_info: Dict[str, Any] = None) -> Dict[str, Any]:
-    """
-    验证SQL性能，识别潜在的性能问题
-
-    Args:
-        sql_query: SQL查询语句
-        schema_info: 模式信息
-        
-    Returns:
-        性能验证结果
-    """
-    try:
-        performance_issues = []
-        suggestions = []
-        
-        sql_upper = sql_query.upper()
-        
-        # 检查是否使用SELECT *
-        if re.search(r'SELECT\s+\*', sql_upper):
-            performance_issues.append("使用SELECT *可能影响性能，建议明确指定需要的列")
-        
-        # 检查是否有WHERE子句
-        if 'WHERE' not in sql_upper and 'LIMIT' not in sql_upper:
-            performance_issues.append("缺少WHERE子句可能导致全表扫描")
-        
-        # 检查JOIN类型
-        if 'CROSS JOIN' in sql_upper:
-            performance_issues.append("CROSS JOIN可能产生笛卡尔积，影响性能")
-        
-        # 检查子查询
-        subquery_count = sql_query.count('(SELECT')
-        if subquery_count > 2:
-            suggestions.append(f"检测到{subquery_count}个子查询，考虑使用JOIN优化")
-        
-        # 检查ORDER BY
-        if 'ORDER BY' in sql_upper and 'LIMIT' not in sql_upper:
-            suggestions.append("ORDER BY without LIMIT可能影响性能")
-        
-        # 检查LIKE模式
-        like_patterns = re.findall(r"LIKE\s+'([^']*)'", sql_upper)
-        for pattern in like_patterns:
-            if pattern.startswith('%'):
-                performance_issues.append(f"LIKE模式'{pattern}'以通配符开头，无法使用索引")
-        
-        return {
-            "success": True,
-            "performance_score": max(0, 100 - len(performance_issues) * 20),
-            "performance_issues": performance_issues,
-            "suggestions": suggestions
-        }
-        
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
+            "is_valid": False,
+            "error": str(e),
+            "errors": [str(e)],
+            "warnings": []
         }
 
 
@@ -246,15 +119,13 @@ def fix_sql_issues(sql_query: str, validation_errors: List[str]) -> Dict[str, An
 
 
 class SQLValidatorAgent:
-    """SQL验证代理"""
+    """SQL验证代理 - 负责语法验证、安全验证和方言兼容性验证"""
 
     def __init__(self):
         self.name = "sql_validator_agent"
         self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
         self.tools = [
-            validate_sql_syntax, 
-            validate_sql_security, 
-            validate_sql_performance, 
+            validate_sql_syntax,
             fix_sql_issues
         ]
         
@@ -271,23 +142,71 @@ class SQLValidatorAgent:
         return """你是一个专业的SQL验证专家。你的任务是：
 
 1. 验证SQL语句的语法正确性
-2. 检查SQL的安全性，防止SQL注入
-3. 分析SQL的性能，识别潜在问题
-4. 修复发现的问题
+2. 验证SQL语句的安全性（禁止危险操作）
+3. 验证SQL语句的数据库方言兼容性
 
 验证流程：
-1. 使用 validate_sql_syntax 检查语法
-2. 使用 validate_sql_security 检查安全性
-3. 使用 validate_sql_performance 分析性能
-4. 如有问题，使用 fix_sql_issues 尝试修复
+1. 使用 validate_sql_syntax 检查语法、安全性和方言兼容性
+2. 如有问题，使用 fix_sql_issues 尝试修复
 
 验证标准：
 - 语法必须正确
-- 不能包含危险操作
-- 应该有适当的性能优化
-- 必须防止SQL注入
+- 不能包含危险操作（DROP、DELETE、UPDATE 等）
+- 必须符合目标数据库的语法规则（如 MySQL 不支持 IN 子查询中的 LIMIT）
+- 只能使用 schema 中定义的表和列
 
 如果发现问题，请提供具体的修复建议。"""
+    
+    def _build_schema_context(self, state: SQLMessageState) -> Dict[str, Any]:
+        """
+        从 state 中构建 schema_context 用于表名/列名验证
+        
+        Returns:
+            包含 tables, columns, relationships 的字典
+        """
+        schema_info = state.get("schema_info", {})
+        
+        if not schema_info:
+            return None
+        
+        # 从 schema_info 中提取表和列信息
+        tables = []
+        columns = []
+        relationships = []
+        
+        # 处理 schema_context 格式（全库检索模式）
+        schema_context = schema_info.get("schema_context", {})
+        if isinstance(schema_context, dict):
+            for table_name, table_data in schema_context.items():
+                if isinstance(table_data, dict):
+                    tables.append({
+                        "table_name": table_name,
+                        "description": table_data.get("description", "")
+                    })
+                    for col in table_data.get("columns", []):
+                        if isinstance(col, dict):
+                            columns.append({
+                                "table_name": table_name,
+                                "column_name": col.get("column_name", col.get("name", "")),
+                                "data_type": col.get("data_type", col.get("type", ""))
+                            })
+        
+        # 处理 skill_tables 格式（Skill 模式）
+        if not tables and schema_info.get("skill_tables"):
+            for table_name in schema_info.get("skill_tables", []):
+                tables.append({"table_name": table_name})
+        
+        # 获取关系信息
+        relationships = schema_info.get("relationships", [])
+        
+        if not tables:
+            return None
+        
+        return {
+            "tables": tables,
+            "columns": columns,
+            "relationships": relationships
+        }
 
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
         """处理SQL验证任务"""
@@ -297,37 +216,85 @@ class SQLValidatorAgent:
             if not sql_query:
                 raise ValueError("没有找到需要验证的SQL语句")
             
-            # 准备输入消息
-            messages = [
-                HumanMessage(content=f"""
-请验证以下SQL语句的正确性、安全性和性能：
-
-SQL语句:
-{sql_query}
-
-请进行全面的验证并提供修复建议。
-""")
-            ]
+            # 获取数据库类型
+            db_type = state.get("db_type", "mysql")
             
-            # 调用代理
-            result = await self.agent.ainvoke({
-                "messages": messages
+            # 获取 schema_context 用于表名/列名验证
+            schema_context = self._build_schema_context(state)
+
+            # 使用增强的验证服务
+            syntax_result = await validate_sql_syntax.ainvoke({
+                "sql_query": sql_query,
+                "db_type": db_type,
+                "schema_context": schema_context
             })
+
+            if not syntax_result.get("success", False):
+                raise ValueError(syntax_result.get("error", "SQL验证失败"))
+
+            errors = syntax_result.get("errors", [])
+            warnings = syntax_result.get("warnings", [])
+            fixed_sql = syntax_result.get("fixed_sql") or sql_query
+            fixes_applied = []
+
+            # 如果有错误，尝试修复
+            if errors:
+                fix_result = await fix_sql_issues.ainvoke({
+                    "sql_query": sql_query,
+                    "validation_errors": errors
+                })
+                if fix_result.get("success"):
+                    fixes_applied = fix_result.get("fixes_applied", [])
+                    candidate_sql = fix_result.get("fixed_sql", sql_query)
+                    
+                    # 重新验证修复后的 SQL
+                    if candidate_sql != sql_query:
+                        revalidate_result = await validate_sql_syntax.ainvoke({
+                            "sql_query": candidate_sql,
+                            "db_type": db_type,
+                            "schema_context": schema_context
+                        })
+                        if revalidate_result.get("is_valid"):
+                            fixed_sql = candidate_sql
+                            errors = revalidate_result.get("errors", [])
+                            warnings = revalidate_result.get("warnings", [])
             
-            # 创建验证结果
-            validation_result = self._create_validation_result(result)
-            
-            # 更新状态
+            # 如果服务返回了 fixed_sql（如自动添加 LIMIT），使用它
+            elif syntax_result.get("fixed_sql") and syntax_result.get("fixed_sql") != sql_query:
+                fixed_sql = syntax_result.get("fixed_sql")
+                fixes_applied.append("自动添加结果限制")
+
+            is_valid = len(errors) == 0
+            validation_result = SQLValidationResult(
+                is_valid=is_valid,
+                errors=errors,
+                warnings=warnings,
+                suggestions=fixes_applied
+            )
+
             state["validation_result"] = validation_result
-            if validation_result.is_valid:
+            if is_valid:
                 state["current_stage"] = "sql_execution"
+                if fixed_sql != sql_query:
+                    state["generated_sql"] = fixed_sql
             else:
                 state["current_stage"] = "error_recovery"
-            
-            state["agent_messages"]["sql_validator"] = result
-            
+
+            state["agent_messages"]["sql_validator"] = {
+                "syntax_result": syntax_result,
+                "fixes_applied": fixes_applied,
+                "db_type": db_type
+            }
+
+            # 构建摘要
+            summary = f"SQL验证通过（{db_type}）"
+            if fixes_applied:
+                summary = f"SQL验证通过，已修复: {', '.join(fixes_applied)}"
+            if not is_valid and errors:
+                summary = f"SQL验证失败: {errors[0]}"
+
             return {
-                "messages": result["messages"],
+                "messages": [AIMessage(content=summary)],
                 "validation_result": validation_result,
                 "current_stage": state["current_stage"]
             }
@@ -348,33 +315,5 @@ SQL语句:
                 "current_stage": "error_recovery"
             }
     
-    def _create_validation_result(self, result: Dict[str, Any]) -> SQLValidationResult:
-        """从代理结果创建验证结果对象"""
-        messages = result.get("messages", [])
-        
-        errors = []
-        warnings = []
-        suggestions = []
-        is_valid = True
-        
-        for message in messages:
-            if hasattr(message, 'content'):
-                content = message.content.lower()
-                if "错误" in content or "error" in content:
-                    errors.append(message.content)
-                    is_valid = False
-                elif "警告" in content or "warning" in content:
-                    warnings.append(message.content)
-                elif "建议" in content or "suggestion" in content:
-                    suggestions.append(message.content)
-        
-        return SQLValidationResult(
-            is_valid=is_valid,
-            errors=errors,
-            warnings=warnings,
-            suggestions=suggestions
-        )
-
-
 # 创建全局实例
 sql_validator_agent = SQLValidatorAgent()
