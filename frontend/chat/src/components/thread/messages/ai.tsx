@@ -311,7 +311,9 @@ export function AssistantMessage({
           {/* 流式文字内容 - AI 的分析 */}
           {contentString.length > 0 && (
             <div className="py-1">
-              <MarkdownText>{contentString}</MarkdownText>
+              <MarkdownText shouldAnimate={isLastMessage && isLoading}>
+                {contentString}
+              </MarkdownText>
             </div>
           )}
 

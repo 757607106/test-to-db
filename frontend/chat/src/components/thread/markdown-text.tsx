@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import "katex/dist/katex.min.css";
 
 // 打字机效果 Hook
-const useTypewriter = (text: string, speed: number = 5) => {
+const useTypewriter = (text: string, speed: number = 5, enabled: boolean = true) => {
   const [displayedText, setDisplayedText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   
@@ -25,6 +25,10 @@ const useTypewriter = (text: string, speed: number = 5) => {
   const displayedRef = useRef("");
   
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     textRef.current = text;
     setIsTyping(true);
     
@@ -60,7 +64,11 @@ const useTypewriter = (text: string, speed: number = 5) => {
     }, speed);
 
     return () => clearInterval(timer);
-  }, [text, speed]);
+  }, [text, speed, enabled]);
+
+  if (!enabled) {
+    return { displayedText: text, isTyping: false };
+  }
 
   return { displayedText, isTyping };
 };
@@ -309,7 +317,10 @@ const defaultComponents: any = {
   ),
 };
 
-const MarkdownTextImpl: FC<{ children: string }> = ({ children }) => {
+const MarkdownTextImpl: FC<{ children: string; shouldAnimate?: boolean }> = ({ 
+  children,
+  shouldAnimate = true
+}) => {
   // 如果内容是 JSON，则不使用打字机效果，直接渲染
   // 简单的 JSON 检测：以 { 或 [ 开头，以 } 或 ] 结尾
   const isJson = (children.trim().startsWith('{') && children.trim().endsWith('}')) || 
@@ -317,11 +328,12 @@ const MarkdownTextImpl: FC<{ children: string }> = ({ children }) => {
   
   // 如果是 JSON，或者内容很短（可能是加载中），或者内容很长（历史消息），可以考虑跳过打字机
   // 这里主要解决 JSON 逐字显示的问题
-  const shouldSkipTypewriter = isJson;
+  // 如果外部传入 shouldAnimate=false，则强制跳过
+  const shouldSkipTypewriter = !shouldAnimate || isJson;
 
-  const { displayedText, isTyping } = useTypewriter(children, 10);
+  const { displayedText, isTyping } = useTypewriter(children, 10, !shouldSkipTypewriter);
   
-  const textToRender = shouldSkipTypewriter ? children : displayedText;
+  const textToRender = displayedText;
   const showCursor = !shouldSkipTypewriter && isTyping;
   
   return (

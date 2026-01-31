@@ -23,7 +23,7 @@ from app.core.agent_config import get_agent_llm, CORE_AGENT_SUPERVISOR
 logger = logging.getLogger(__name__)
 
 # ===== 消息裁剪配置 =====
-MAX_MESSAGES_FOR_LLM = 10  # Supervisor LLM 最多看到的消息数（5轮对话 × 2）
+MAX_MESSAGES_FOR_LLM = 30  # Supervisor LLM 最多看到的消息数（15轮对话 × 2）
 KEEP_SYSTEM_MESSAGES = True  # 保留系统消息
 
 
@@ -164,7 +164,7 @@ class SupervisorAgent:
             model=self.llm,
             agents=self.worker_agents,
             prompt=self._get_supervisor_prompt(),
-            add_handoff_back_messages=True,
+            add_handoff_back_messages=False,   # 禁用自动生成的交接消息
             output_mode="last_message",  # 优化：只返回最后一条消息，减少 token
             pre_model_hook=trim_messages_hook,  # 消息历史裁剪
         )
