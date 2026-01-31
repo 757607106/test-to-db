@@ -25,14 +25,9 @@ import { useArtifact } from "../artifact";
 import { DataChartDisplay } from "./DataChartDisplay";
 import { InsightDisplay } from "./InsightDisplay";
 import {
-  AlertCircle,
-  CheckCircle2,
-  ChevronDown,
-  ChevronUp,
-  Loader2,
   Sparkles,
 } from "lucide-react";
-import { SQL_STEP_LABELS, type SQLStepEvent } from "@/types/stream-events";
+import { SQL_STEP_LABELS } from "@/types/stream-events";
 
 /**
  * 推荐问题组件
@@ -106,199 +101,6 @@ export function StageMessageBubble({
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-export function ThinkingPanel({
-  steps,
-  isLoading,
-}: {
-  steps: SQLStepEvent[];
-  isLoading: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-
-  const normalizedSteps = useMemo(() => {
-    const order = [
-      "cache_hit",
-      "intent_analysis",
-      "query_planning",
-      "query_rewrite",
-      "skill_routing",
-      "schema_agent",
-      "schema_mapping",
-      "clarification",
-      "few_shot",
-      "llm_parse",
-      "sql_fix",
-      "sql_generator",
-      "final_sql",
-      "sql_executor",
-      "data_analysis",
-      "data_analyst",
-      "chart_generation",
-      "chart_generator",
-      "result_aggregator",
-      "error_recovery",
-      "general_chat",
-    ];
-
-    const rank = new Map<string, number>(order.map((k, i) => [k, i]));
-    const dedup = new Map<string, SQLStepEvent>();
-
-    for (const s of steps) {
-      if (!s?.step) continue;
-      const prev = dedup.get(s.step);
-      if (!prev) {
-        dedup.set(s.step, s);
-        continue;
-      }
-      const score = (st: SQLStepEvent["status"]) => {
-        if (st === "error") return 3;
-        if (st === "running") return 2;
-        if (st === "completed") return 1;
-        return 0;
-      };
-      if (score(s.status) >= score(prev.status)) dedup.set(s.step, s);
-    }
-
-    return Array.from(dedup.values()).sort((a, b) => {
-      const ra = rank.get(a.step) ?? 10_000;
-      const rb = rank.get(b.step) ?? 10_000;
-      if (ra !== rb) return ra - rb;
-      return a.step.localeCompare(b.step);
-    });
-  }, [steps]);
-
-  const hasAny = normalizedSteps.length > 0;
-  const hasRunning = normalizedSteps.some((s) => s.status === "running");
-  const hasError = normalizedSteps.some((s) => s.status === "error");
-
-  if (!hasAny && !isLoading) return null;
-
-  const title = hasRunning || isLoading ? "思考中…" : hasError ? "执行遇到问题" : "思考过程";
-  const badge = hasRunning || isLoading ? "进行中" : hasError ? "异常" : "完成";
-
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900 overflow-hidden shadow-sm">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between px-4 py-3 bg-slate-50/60 dark:bg-slate-900/40 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors"
-      >
-        <div className="flex items-center gap-3 min-w-0">
-          <div
-            className={cn(
-              "h-8 w-8 rounded-lg flex items-center justify-center",
-              hasError
-                ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400"
-                : "bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400",
-            )}
-          >
-            {hasError ? (
-              <AlertCircle className="h-4 w-4" />
-            ) : hasRunning || isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <CheckCircle2 className="h-4 w-4" />
-            )}
-          </div>
-          <div className="flex flex-col items-start min-w-0">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="font-semibold text-sm text-slate-800 dark:text-slate-200 truncate">
-                {title}
-              </span>
-              <span
-                className={cn(
-                  "text-xs font-medium px-2 py-0.5 rounded-full shrink-0",
-                  hasError
-                    ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300"
-                    : hasRunning || isLoading
-                      ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
-                      : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
-                )}
-              >
-                {badge}
-              </span>
-            </div>
-            <span className="text-xs text-slate-500 dark:text-slate-400">
-              {hasAny ? `${normalizedSteps.length} 个步骤` : "等待步骤信息…"}
-            </span>
-          </div>
-        </div>
-        <div className="text-slate-400">
-          {open ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-        </div>
-      </button>
-
-      {open && (
-        <div className="px-4 py-3 bg-white dark:bg-slate-950">
-          <div className="flex flex-col gap-2">
-            {normalizedSteps.map((s) => {
-              const label = SQL_STEP_LABELS[s.step] ?? s.step;
-              const statusLabel =
-                s.status === "running"
-                  ? "进行中"
-                  : s.status === "completed"
-                    ? "完成"
-                    : s.status === "error"
-                      ? "异常"
-                      : s.status === "skipped"
-                        ? "跳过"
-                        : s.status;
-
-              return (
-                <div
-                  key={`${s.step}`}
-                  className="rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden"
-                >
-                  <div className="flex items-center justify-between gap-3 px-3 py-2 bg-slate-50/50 dark:bg-slate-900/30">
-                    <div className="flex items-center gap-2 min-w-0">
-                      {s.status === "running" ? (
-                        <Loader2 className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 animate-spin shrink-0" />
-                      ) : s.status === "error" ? (
-                        <AlertCircle className="h-3.5 w-3.5 text-red-600 dark:text-red-400 shrink-0" />
-                      ) : s.status === "completed" ? (
-                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                      ) : (
-                        <div className="h-3.5 w-3.5 shrink-0" />
-                      )}
-                      <span className="text-sm font-medium text-slate-800 dark:text-slate-200 truncate">
-                        {label}
-                      </span>
-                      <span
-                        className={cn(
-                          "text-[11px] px-2 py-0.5 rounded-full shrink-0",
-                          s.status === "error"
-                            ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300"
-                            : s.status === "running"
-                              ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
-                              : s.status === "completed"
-                                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-                                : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
-                        )}
-                      >
-                        {statusLabel}
-                      </span>
-                    </div>
-                    <span className="text-xs text-slate-500 dark:text-slate-400 shrink-0">
-                      {s.time_ms ? formatDuration(s.time_ms) : ""}
-                    </span>
-                  </div>
-                  {s.result && (
-                    <div className="px-3 py-2 bg-white dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800">
-                      <pre className="text-xs text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words max-h-48 overflow-auto">
-                        {s.result}
-                      </pre>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -494,15 +296,6 @@ export function AssistantMessage({
     <div className="group mr-auto flex w-full items-start gap-2">
       <div className="flex w-full flex-col gap-2">
         <>
-          {showTransientComponents && (
-            <div className="mb-4">
-              <ThinkingPanel
-                steps={thread.queryContext?.sqlSteps ?? []}
-                isLoading={isLoading}
-              />
-            </div>
-          )}
-
           {/* 数据可视化图表 */}
           {hasChartConfig && thread.queryContext?.dataQuery && showTransientComponents && (
             <div className="mb-4">
@@ -547,8 +340,8 @@ export function AssistantMessage({
           {/* 操作栏 */}
           <div
             className={cn(
-              "mr-auto flex items-center gap-2 transition-opacity",
-              "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
+              "mr-auto flex items-center gap-2",
+              // "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100", // 移除隐藏逻辑，使其常驻显示
             )}
           >
             <BranchSwitcher

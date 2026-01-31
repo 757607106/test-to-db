@@ -72,6 +72,51 @@ export function ensureToolCallsHaveResponses(messages: Message[]): ToolMessage[]
 }
 
 /**
+ * 确保所有 ToolMessage 都有对应的父 AI 消息
+ * 修复 "messages with role 'tool' must be a response to a preceeding message with 'tool_calls'" 错误
+ */
+export function ensureOrphanedToolMessagesHaveParents(messages: Message[]): Message[] {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return [];
+  }
+
+  const newMessages: Message[] = [];
+  const existingToolCallIdsInAI = new Set<string>();
+
+  // 收集所有 AI 消息引用的 tool_call_id
+  messages.forEach((msg) => {
+    if (msg.type === "ai" && msg.tool_calls) {
+      msg.tool_calls.forEach((tc) => {
+        if (tc.id) existingToolCallIdsInAI.add(tc.id);
+      });
+    }
+  });
+
+  // 检查每个 ToolMessage
+  messages.forEach((msg) => {
+    if (msg.type === "tool" && msg.tool_call_id) {
+      if (!existingToolCallIdsInAI.has(msg.tool_call_id)) {
+        // 发现孤立的 ToolMessage，创建一个虚拟的父 AI 消息
+        newMessages.push({
+          type: "ai",
+          id: `${DO_NOT_RENDER_ID_PREFIX}fix-${uuidv4()}`,
+          content: "",
+          tool_calls: [
+            {
+              name: msg.name || "unknown",
+              args: {},
+              id: msg.tool_call_id,
+            }
+          ]
+        } as unknown as Message);
+      }
+    }
+  });
+
+  return newMessages;
+}
+
+/**
  * 检查消息是否是占位消息（不应该渲染）
  */
 export function isPlaceholderMessage(message: Message): boolean {
