@@ -338,26 +338,28 @@ export function AssistantMessage({
           />
           
           {/* 操作栏 */}
-          <div
-            className={cn(
-              "mr-auto flex items-center gap-2",
-              // "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100", // 移除隐藏逻辑，使其常驻显示
-            )}
-          >
-            <BranchSwitcher
-              branch={meta?.branch}
-              branchOptions={meta?.branchOptions}
-              onSelect={(branch) => thread.setBranch(branch)}
-              isLoading={isLoading}
-            />
-            <CommandBar
-              content={contentString}
-              isLoading={isLoading}
-              isAiMessage={true}
-              handleRegenerate={() => handleRegenerate(parentCheckpoint)}
-              feedbackContext={feedbackContext}
-            />
-          </div>
+          {contentString.length > 0 && (
+            <div
+              className={cn(
+                "mr-auto flex items-center gap-2 transition-opacity duration-200",
+                isLastMessage ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+              )}
+            >
+              <BranchSwitcher
+                branch={meta?.branch}
+                branchOptions={meta?.branchOptions}
+                onSelect={(branch) => thread.setBranch(branch)}
+                isLoading={isLoading}
+              />
+              <CommandBar
+                content={contentString}
+                isLoading={isLoading}
+                isAiMessage={true}
+                handleRegenerate={() => handleRegenerate(parentCheckpoint)}
+                feedbackContext={feedbackContext}
+              />
+            </div>
+          )}
         </>
       </div>
     </div>
