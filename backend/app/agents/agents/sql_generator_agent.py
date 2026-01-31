@@ -11,9 +11,11 @@ from typing import Dict, Any, List
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage
 from langgraph.prebuilt import create_react_agent
+from langgraph.config import get_stream_writer
 
 from app.core.state import SQLMessageState
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
+from app.schemas.stream_events import create_stage_message_event
 
 
 @tool
@@ -376,6 +378,16 @@ SQL生成原则：
             state["generated_sql"] = generated_sql
             state["current_stage"] = "sql_validation"
             state["agent_messages"]["sql_generator"] = result
+            writer = get_stream_writer()
+            if writer:
+                sql_preview = generated_sql.strip() if generated_sql else ""
+                message = "SQL 已生成，准备执行查询。"
+                if sql_preview:
+                    message = f"SQL 已生成：\n{sql_preview}"
+                writer(create_stage_message_event(
+                    message=message,
+                    step="sql_generator"
+                ))
             
             return {
                 "messages": result["messages"],

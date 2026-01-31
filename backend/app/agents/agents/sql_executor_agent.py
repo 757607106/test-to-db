@@ -8,9 +8,11 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage, AnyMessage
 from langgraph.prebuilt import create_react_agent
+from langgraph.config import get_stream_writer
 
 from app.core.state import SQLMessageState, SQLExecutionResult, extract_connection_id
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
+from app.schemas.stream_events import create_stage_message_event
 
 
 @tool
@@ -265,6 +267,15 @@ SQL语句:
                 state["current_stage"] = "error_recovery"
             
             state["agent_messages"]["sql_executor"] = result
+            writer = get_stream_writer()
+            if writer and execution_result.success:
+                row_count = execution_result.rows_affected or 0
+                if execution_result.data and isinstance(execution_result.data, dict):
+                    row_count = execution_result.data.get("row_count", row_count)
+                writer(create_stage_message_event(
+                    message=f"SQL 执行完成，返回 {row_count} 条数据，准备分析结果。",
+                    step="sql_executor"
+                ))
             
             return {
                 "messages": result["messages"],

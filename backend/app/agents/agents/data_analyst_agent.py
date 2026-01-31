@@ -30,7 +30,7 @@ from langgraph.types import StreamWriter
 from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
 from app.core.agent_config import get_agent_llm, CORE_AGENT_CHART_ANALYST
-from app.schemas.stream_events import create_sql_step_event, create_insight_event
+from app.schemas.stream_events import create_sql_step_event, create_insight_event, create_stage_message_event
 from app.agents.nodes.base import ErrorStage
 
 logger = logging.getLogger(__name__)
@@ -281,6 +281,12 @@ class DataAnalystAgent:
                     insights=structured_insights.get("insights", []),
                     recommendations=structured_insights.get("recommendations", []),
                     raw_content=analysis_content,
+                    time_ms=elapsed_ms
+                ))
+                stage_message = structured_insights.get("summary") or "分析完成，已生成洞察。"
+                writer(create_stage_message_event(
+                    message=f"分析完成：\n{stage_message}",
+                    step="data_analyst",
                     time_ms=elapsed_ms
                 ))
             

@@ -12,11 +12,13 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage, AnyMessage
 from langgraph.prebuilt import create_react_agent
+from langgraph.config import get_stream_writer
 
 from app.core.state import SQLMessageState, extract_connection_id
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 from app.db.session import SessionLocal
 from app.services.text2sql_utils import retrieve_relevant_schema, get_value_mappings, analyze_query_with_llm
+from app.schemas.stream_events import create_stage_message_event
 
 
 @tool
@@ -271,6 +273,12 @@ class SchemaAnalysisAgent:
         column_count = sum(len(t.get("columns", [])) for t in schema_context.values())
         
         summary = f"已加载业务领域 [{skill_names}] 的表结构: {table_count} 个表, {column_count} 个字段"
+        writer = get_stream_writer()
+        if writer:
+            writer(create_stage_message_event(
+                message=f"已完成 Schema 分析（Skill 模式），识别到 {table_count} 个相关表。",
+                step="schema_agent"
+            ))
         
         return {
             "messages": [AIMessage(content=summary)],
@@ -302,6 +310,12 @@ class SchemaAnalysisAgent:
         # 更新状态
         state["current_stage"] = "sql_generation"
         state["agent_messages"]["schema_agent"] = result
+        writer = get_stream_writer()
+        if writer:
+            writer(create_stage_message_event(
+                message="已完成 Schema 分析，准备生成 SQL。",
+                step="schema_agent"
+            ))
         
         return {
             "messages": result["messages"],
