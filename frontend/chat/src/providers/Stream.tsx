@@ -99,7 +99,7 @@ const StreamSession = ({
     if (!tid) return;
     
     // 只有在有实际数据时才保存
-    const hasData = ctx.sqlSteps.length > 0 || ctx.dataQuery || ctx.intentAnalysis || ctx.cacheHit;
+    const hasData = ctx.sqlSteps.length > 0 || ctx.stageMessages.length > 0 || ctx.dataQuery || ctx.intentAnalysis || ctx.cacheHit;
     if (hasData) {
       try {
         localStorage.setItem(getStorageKey(tid), JSON.stringify(ctx));
@@ -116,7 +116,12 @@ const StreamSession = ({
     try {
       const stored = localStorage.getItem(getStorageKey(tid));
       if (stored) {
-        return JSON.parse(stored) as QueryContext;
+        const parsed = JSON.parse(stored) as QueryContext;
+        return {
+          ...parsed,
+          sqlSteps: parsed.sqlSteps ?? [],
+          stageMessages: parsed.stageMessages ?? []
+        };
       }
     } catch (e) {
       console.warn("Failed to load queryContext from localStorage:", e);
@@ -252,6 +257,13 @@ const StreamSession = ({
                 return { ...prev, sqlSteps: [...prev.sqlSteps, streamEvent] };
               }
             });
+            break;
+          }
+          case "stage_message": {
+            setQueryContext(prev => ({
+              ...prev,
+              stageMessages: [...prev.stageMessages, streamEvent]
+            }));
             break;
           }
             

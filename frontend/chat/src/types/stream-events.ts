@@ -85,6 +85,16 @@ export interface SQLStepEvent {
 }
 
 /**
+ * 阶段性消息事件 - 用于分段输出
+ */
+export interface StageMessageEvent {
+  type: "stage_message";
+  message: string;      // 阶段性输出内容
+  step?: string;        // 关联步骤
+  time_ms: number;      // 耗时(毫秒)
+}
+
+/**
  * 图表配置
  */
 export interface ChartConfig {
@@ -166,6 +176,7 @@ export type StreamEvent =
   | CacheHitEvent
   | IntentAnalysisEvent 
   | SQLStepEvent 
+  | StageMessageEvent
   | DataQueryEvent 
   | SimilarQuestionsEvent
   | InsightEvent
@@ -178,6 +189,7 @@ export interface QueryContext {
   cacheHit?: CacheHitEvent;               // 缓存命中信息
   intentAnalysis?: IntentAnalysisEvent;
   sqlSteps: SQLStepEvent[];
+  stageMessages: StageMessageEvent[];
   dataQuery?: DataQueryEvent;
   similarQuestions?: SimilarQuestionsEvent;
   insight?: InsightEvent;                 // 数据洞察
@@ -189,7 +201,8 @@ export interface QueryContext {
  */
 export function createEmptyQueryContext(): QueryContext {
   return {
-    sqlSteps: []
+    sqlSteps: [],
+    stageMessages: []
   };
 }
 
@@ -203,6 +216,7 @@ export function isStreamEvent(event: unknown): event is StreamEvent {
     e.type === "cache_hit" ||
     e.type === "intent_analysis" ||
     e.type === "sql_step" ||
+    e.type === "stage_message" ||
     e.type === "data_query" ||
     e.type === "similar_questions" ||
     e.type === "insight" ||

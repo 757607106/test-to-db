@@ -49,6 +49,19 @@ async def schema_agent_node(state: SQLMessageState, writer: StreamWriter) -> Dic
     # ✅ 修复：只有在成功时才设置 schema_done，保留 error_recovery 状态
     if result.get("current_stage") != "error_recovery":
         result["current_stage"] = "schema_done"
+        if writer:
+            from app.schemas.stream_events import create_stage_message_event
+            schema_info = result.get("schema_info", {})
+            table_count = 0
+            tables = schema_info.get("tables")
+            if isinstance(tables, dict):
+                table_count = len(tables)
+            elif isinstance(tables, list):
+                table_count = len(tables)
+            writer(create_stage_message_event(
+                message=f"已完成 Schema 分析，识别到 {table_count} 个相关表，准备生成 SQL。",
+                step="schema_agent"
+            ))
     
     return result
 
@@ -77,6 +90,18 @@ async def sql_generator_node(state: SQLMessageState, writer: StreamWriter) -> Di
     if result_stage != "error_recovery":
         result["current_stage"] = "sql_generated"
         logger.info(f"[sql_generator_node] 设置 current_stage 为 sql_generated")
+        if writer:
+            from app.schemas.stream_events import create_stage_message_event
+            sql_preview = result.get("generated_sql", "")
+            if sql_preview:
+                sql_preview = sql_preview.strip()
+            message = "SQL 已生成，准备执行查询。"
+            if sql_preview:
+                message = f"SQL 已生成：\n{sql_preview}"
+            writer(create_stage_message_event(
+                message=message,
+                step="sql_generator"
+            ))
     else:
         logger.info(f"[sql_generator_node] 保留 error_recovery 状态，不覆盖")
     
@@ -93,7 +118,7 @@ async def sql_executor_node(state: SQLMessageState, writer: StreamWriter) -> Dic
     
     执行生成的 SQL 并处理结果。需要特殊处理执行失败的情况。
     """
-    from app.schemas.stream_events import create_sql_step_event
+    from app.schemas.stream_events import create_sql_step_event, create_stage_message_event
     from app.agents.agents.sql_executor_agent import sql_executor_agent
     
     logger.info("[Worker] sql_executor 开始执行")
@@ -162,6 +187,11 @@ async def sql_executor_node(state: SQLMessageState, writer: StreamWriter) -> Dic
             result=f"查询成功，返回 {row_count} 条数据",
             time_ms=elapsed_ms
         ))
+        writer(create_stage_message_event(
+            message=f"SQL 执行完成，返回 {row_count} 条数据，准备分析结果。",
+            step="sql_executor",
+            time_ms=elapsed_ms
+        ))
         
         logger.info(f"[Worker] sql_executor 完成 ({elapsed_ms}ms)")
         result["current_stage"] = "execution_done"
@@ -207,6 +237,16 @@ async def data_analyst_node(state: SQLMessageState, writer: StreamWriter) -> Dic
     # ✅ 修复：保留 error_recovery 状态
     if result.get("current_stage") != "error_recovery":
         result["current_stage"] = "analysis_done"
+        if writer:
+            from app.schemas.stream_events import create_stage_message_event
+            summary = result.get("analysis_result") or result.get("analysis_summary") or ""
+            message = "分析完成，已生成洞察。"
+            if summary:
+                message = f"分析完成：\n{summary}"
+            writer(create_stage_message_event(
+                message=message,
+                step="data_analyst"
+            ))
     
     return result
 

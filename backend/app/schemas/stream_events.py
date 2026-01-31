@@ -13,6 +13,7 @@
 - intent_analysis: 意图解析完成
 - cache_hit: 缓存命中（thread_history/exact/semantic）
 - sql_step: SQL生成各步骤
+- stage_message: 阶段性输出内容
 - data_query: 数据查询结果
 - similar_questions: 相似问题推荐
 - insight: 数据洞察分析结果
@@ -53,6 +54,14 @@ class SQLStepEvent(BaseModel):
     step: str = Field(description="步骤名称: schema_mapping | few_shot | llm_parse | sql_fix | final_sql")
     status: str = Field(description="步骤状态: pending | running | completed | error")
     result: Optional[str] = Field(default=None, description="步骤结果")
+    time_ms: int = Field(default=0, description="耗时(毫秒)")
+
+
+class StageMessageEvent(BaseModel):
+    """阶段性消息事件 - 用于分段输出"""
+    type: Literal["stage_message"] = "stage_message"
+    message: str = Field(description="阶段性输出内容")
+    step: Optional[str] = Field(default=None, description="关联步骤名称")
     time_ms: int = Field(default=0, description="耗时(毫秒)")
 
 
@@ -137,6 +146,19 @@ def create_sql_step_event(
         step=step,
         status=status,
         result=result,
+        time_ms=time_ms
+    ).model_dump()
+
+
+def create_stage_message_event(
+    message: str,
+    step: Optional[str] = None,
+    time_ms: int = 0
+) -> Dict[str, Any]:
+    """创建阶段性消息事件"""
+    return StageMessageEvent(
+        message=message,
+        step=step,
         time_ms=time_ms
     ).model_dump()
 

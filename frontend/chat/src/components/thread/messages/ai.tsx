@@ -75,6 +75,39 @@ function formatDuration(ms: number | undefined) {
   return `${ms}ms`;
 }
 
+function StageOutputs({ messages }: { messages: { message: string; step?: string }[] }) {
+  if (!messages.length) return null;
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900 overflow-hidden shadow-sm">
+      <div className="px-4 py-2.5 bg-slate-50/60 dark:bg-slate-900/40 border-b border-slate-200 dark:border-slate-700">
+        <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+          阶段输出
+        </span>
+      </div>
+      <div className="p-4 space-y-3">
+        {messages.map((msg, index) => (
+          <div
+            key={`${msg.step ?? "stage"}-${index}`}
+            className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950"
+          >
+            <div className="px-3 py-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40">
+              <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                {msg.step ? SQL_STEP_LABELS[msg.step] ?? msg.step : "阶段消息"}
+              </span>
+            </div>
+            <div className="px-3 py-2">
+              <pre className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words">
+                {msg.message}
+              </pre>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function ThinkingPanel({
   steps,
   isLoading,
@@ -408,6 +441,7 @@ export function AssistantMessage({
     thread.queryContext.similarQuestions.questions.length > 0;
   const hasInsight = thread.queryContext?.insight && 
     (thread.queryContext.insight.summary || thread.queryContext.insight.insights.length > 0);
+  const stageMessages = thread.queryContext?.stageMessages ?? [];
 
   // 只有当消息是最后一条消息时，才关联全局的 queryContext
   // 这是因为 queryContext 是 ephemeral (瞬态) 的
@@ -466,6 +500,12 @@ export function AssistantMessage({
                 steps={thread.queryContext?.sqlSteps ?? []}
                 isLoading={isLoading}
               />
+            </div>
+          )}
+
+          {showTransientComponents && stageMessages.length > 0 && (
+            <div className="mb-4">
+              <StageOutputs messages={stageMessages} />
             </div>
           )}
 
