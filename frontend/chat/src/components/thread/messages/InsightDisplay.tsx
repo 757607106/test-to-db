@@ -6,8 +6,7 @@
  * - 结构化洞察（趋势/异常/指标/对比）
  * - 业务建议
  */
-import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState, memo } from "react";
 import {
   Lightbulb,
   TrendingUp,
@@ -48,7 +47,7 @@ const INSIGHT_COLORS: Record<InsightItem["type"], string> = {
   comparison: "bg-purple-50 border-purple-200 text-purple-700",
 };
 
-export function InsightDisplay({ insight }: InsightDisplayProps) {
+export const InsightDisplay = memo(function InsightDisplay({ insight }: InsightDisplayProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   // 如果没有洞察数据，不渲染
@@ -89,26 +88,18 @@ export function InsightDisplay({ insight }: InsightDisplayProps) {
         </div>
 
         {hasDetails && (
-          <motion.div
-            animate={{ rotate: isExpanded ? 180 : 0 }}
-            transition={{ duration: 0.2 }}
-            className="ml-2 mt-1"
+          <div
+            className="ml-2 mt-1 transition-transform duration-200"
+            style={{ transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
           >
             <ChevronDown className="h-4 w-4 text-slate-400" />
-          </motion.div>
+          </div>
         )}
       </button>
 
       {/* 展开区域 - 详细洞察和建议 */}
-      <AnimatePresence>
-        {isExpanded && hasDetails && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-          >
-            <div className="p-4 space-y-4">
+      {isExpanded && hasDetails && (
+        <div className="p-4 space-y-4">
               {/* 结构化洞察 */}
               {insight.insights.length > 0 && (
                 <div className="space-y-3">
@@ -172,12 +163,10 @@ export function InsightDisplay({ insight }: InsightDisplayProps) {
                   分析耗时: {insight.time_ms}ms
                 </div>
               )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+        </div>
+      )}
     </div>
   );
-}
+});
 
 export default InsightDisplay;

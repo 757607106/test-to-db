@@ -161,9 +161,13 @@ const StreamSession = ({
     }
   }, [threadId, loadQueryContextFromStorage]);
   
-  // 当 queryContext 更新时，保存到 localStorage
+  // 当 queryContext 更新时，保存到 localStorage（使用防抖）
   useEffect(() => {
-    saveQueryContextToStorage(threadId, queryContext);
+    const timeoutId = setTimeout(() => {
+      saveQueryContextToStorage(threadId, queryContext);
+    }, 500); // 500ms 防抖，减少频繁写入
+    
+    return () => clearTimeout(timeoutId);
   }, [queryContext, threadId, saveQueryContextToStorage]);
   
   const streamValue = useTypedStream({

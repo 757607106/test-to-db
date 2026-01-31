@@ -4,30 +4,42 @@ const nextConfig = {
     serverActions: {
       bodySizeLimit: "10mb",
     },
+    // 性能优化：启用增量静态生成
+    incrementalCacheHandlerPath: undefined,
+    // 启用 Turbopack（Next.js 15+ 实验性功能，显著提升开发速度）
+    // turbo: {},
   },
-  // 禁用页面缓存，确保刷新后获取最新代码
-  generateEtags: false,
-  // 添加自定义响应头禁用缓存
+  // 开发环境性能优化
+  ...(process.env.NODE_ENV === 'development' && {
+    // 开发环境启用更快的刷新
+    reactStrictMode: false, // 减少双重渲染
+  }),
+  // 生产环境禁用页面缓存，开发环境允许缓存以提升性能
+  generateEtags: process.env.NODE_ENV === 'production' ? false : true,
+  // 仅在生产环境添加自定义响应头禁用缓存
   async headers() {
-    return [
-      {
-        source: '/:path*',
-        headers: [
-          {
-            key: 'Cache-Control',
-            value: 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
-          },
-          {
-            key: 'Pragma',
-            value: 'no-cache',
-          },
-          {
-            key: 'Expires',
-            value: '0',
-          },
-        ],
-      },
-    ];
+    if (process.env.NODE_ENV === 'production') {
+      return [
+        {
+          source: '/:path*',
+          headers: [
+            {
+              key: 'Cache-Control',
+              value: 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+            },
+            {
+              key: 'Pragma',
+              value: 'no-cache',
+            },
+            {
+              key: 'Expires',
+              value: '0',
+            },
+          ],
+        },
+      ];
+    }
+    return [];
   },
   async rewrites() {
     // 将特定的 API 路径代理到 FastAPI 后端，避免与 LangGraph 路由冲突

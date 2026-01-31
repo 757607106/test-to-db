@@ -3,7 +3,7 @@
  * 
  * 智能匹配合适的图表类型，支持最多5种图表
  */
-import { useState, useMemo } from "react";
+import { useState, useMemo, memo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   BarChart2,
@@ -47,21 +47,25 @@ export function DataChartDisplay({ dataQuery }: DataChartDisplayProps) {
     return transformQueryData(dataQuery.columns, dataQuery.rows);
   }, [dataQuery?.columns, dataQuery?.rows]);
 
+  // 生成图表配置 - 提取到 useMemo 中
+  const chartConfigs = useMemo(() => {
+    if (!dataQuery?.chart_config || !dataQuery.columns || !dataQuery.rows?.length) return [];
+    return generateChartConfigs(tableData, dataQuery.columns, dataQuery.chart_config);
+  }, [tableData, dataQuery?.columns, dataQuery?.chart_config]);
+
   if (!dataQuery || !dataQuery.chart_config) return null;
 
-  const { columns, rows, chart_config } = dataQuery;
+  const { columns, rows } = dataQuery;
   const hasData = rows && rows.length > 0;
 
   if (!hasData) return null;
-
-  // 生成多个图表配置（最多5个）
-  const chartConfigs = generateChartConfigs(tableData, columns, chart_config);
 
   // 如果没有可用的图表配置，不渲染
   if (chartConfigs.length === 0) return null;
 
   return (
     <div className="mt-4 rounded-xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+      {/* 展开/折叠按钮 */}
       <button
         onClick={() => setIsExpanded(!isExpanded)}
         className="w-full flex items-center justify-between px-4 py-3 bg-gradient-to-r from-emerald-50 to-teal-50 border-b border-slate-200 hover:bg-emerald-50/80 transition-colors"
@@ -74,55 +78,48 @@ export function DataChartDisplay({ dataQuery }: DataChartDisplayProps) {
           </span>
         </div>
 
-        <motion.div
-          animate={{ rotate: isExpanded ? 180 : 0 }}
-          transition={{ duration: 0.2 }}
+        {/* 简化动画：只使用 CSS transition */}
+        <div
+          className="transition-transform duration-200"
+          style={{ transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
         >
           <ChevronDown className="h-4 w-4 text-slate-400" />
-        </motion.div>
+        </div>
       </button>
 
-      <AnimatePresence>
-        {isExpanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-          >
-            <div className="p-4 space-y-4">
-              {/* 图表选择器 */}
-              {chartConfigs.length > 1 && (
-                <div className="flex items-center gap-2 overflow-x-auto pb-2">
-                  {chartConfigs.map((config, index) => (
-                    <button
-                      key={index}
-                      onClick={() => setSelectedChartIndex(index)}
-                      className={cn(
-                        "flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all whitespace-nowrap",
-                        selectedChartIndex === index
-                          ? "bg-emerald-600 text-white shadow-md"
-                          : "bg-white text-slate-600 border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50"
-                      )}
-                    >
-                      {getChartIcon(config.type)}
-                      <span>{config.label}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {/* 图表显示区域 */}
-              <div className="bg-white rounded-lg border border-slate-200 p-4">
-                <ChartRenderer
-                  data={tableData}
-                  config={chartConfigs[selectedChartIndex]}
-                />
-              </div>
+      {/* 展开内容：使用简单的显示/隐藏而非复杂动画 */}
+      {isExpanded && (
+        <div className="p-4 space-y-4">
+          {/* 图表选择器 */}
+          {chartConfigs.length > 1 && (
+            <div className="flex items-center gap-2 overflow-x-auto pb-2">
+              {chartConfigs.map((config, index) => (
+                <button
+                  key={index}
+                  onClick={() => setSelectedChartIndex(index)}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all whitespace-nowrap",
+                    selectedChartIndex === index
+                      ? "bg-emerald-600 text-white shadow-md"
+                      : "bg-white text-slate-600 border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50"
+                  )}
+                >
+                  {getChartIcon(config.type)}
+                  <span>{config.label}</span>
+                </button>
+              ))}
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          )}
+
+          {/* 图表显示区域 */}
+          <div className="bg-white rounded-lg border border-slate-200 p-4">
+            <ChartRenderer
+              data={tableData}
+              config={chartConfigs[selectedChartIndex]}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

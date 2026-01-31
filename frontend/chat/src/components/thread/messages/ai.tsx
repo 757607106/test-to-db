@@ -11,7 +11,7 @@ import { BranchSwitcher, CommandBar } from "./shared";
 import { MarkdownText } from "../markdown-text";
 import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 import { cn } from "@/lib/utils";
-import { Fragment, useCallback, useMemo, useState } from "react";
+import { Fragment, useCallback, useMemo, useState, memo } from "react";
 import { isAgentInboxInterruptSchema } from "@/lib/agent-inbox-interrupt";
 import { DO_NOT_RENDER_ID_PREFIX } from "@/lib/ensure-tool-responses";
 import { ThreadView } from "../agent-inbox";
@@ -30,9 +30,9 @@ import {
 import { SQL_STEP_LABELS } from "@/types/stream-events";
 
 /**
- * 推荐问题组件
+ * 推荐问题组件 - 使用 memo 优化
  */
-function SimilarQuestions({ 
+const SimilarQuestions = memo(function SimilarQuestions({ 
   questions,
   onSelectQuestion 
 }: { 
@@ -62,7 +62,7 @@ function SimilarQuestions({
       </div>
     </div>
   );
-}
+});
 
 function formatDuration(ms: number | undefined) {
   if (ms == null) return "";
@@ -187,15 +187,19 @@ export function AssistantMessage({
   const [threadId] = useQueryState("threadId");
 
   const thread = useStreamContext();
+  
+  // 性能优化：避免每次都复制和反转整个消息数组
   const lastRenderableMessageId = useMemo(() => {
-    const last = [...thread.messages]
-      .reverse()
-      .find(
-        (m) =>
-          m.type !== "tool" && !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX),
-      );
-    return last?.id;
-  }, [thread.messages]);
+    // 从后向前查找，不需要复制数组
+    for (let i = thread.messages.length - 1; i >= 0; i--) {
+      const m = thread.messages[i];
+      if (m.type !== "tool" && !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX)) {
+        return m.id;
+      }
+    }
+    return undefined;
+  }, [thread.messages.length, thread.messages[thread.messages.length - 1]?.id]); // 只依赖长度和最后一条消息
+  
   const isLastMessage = lastRenderableMessageId === message?.id;
   const hasNoAIOrToolMessages = !thread.messages.find(
     (m) => m.type === "ai" || m.type === "tool",
