@@ -1,7 +1,11 @@
 """
 重试工具模块
 
-提供指数退避重试策略，用于处理临时性故障（如 LLM API 超时）。
+[已废弃] 对于 LLM 调用,请使用 app.core.llm_wrapper.LLMWrapper 统一处理重试。
+
+本模块仅保留用于非 LLM 场景(如数据库查询、外部 API 调用等)。
+
+提供指数退避重试策略,用于处理临时性故障。
 
 LangGraph 最佳实践: graceful degradation with retry/fallback
 """
@@ -29,8 +33,10 @@ async def retry_with_backoff(
     """
     指数退避重试策略
     
-    当函数执行失败时，按指数增长的延迟时间重试。
-    适用于调用外部 API（如 LLM）时的临时性故障处理。
+    [已废弃用于 LLM] 对于 LLM 调用,请使用 app.core.llm_wrapper.LLMWrapper
+    
+    当函数执行失败时,按指数增长的延迟时间重试。
+    适用于非 LLM 的外部 API(如数据库查询、HTTP 请求)临时性故障处理。
     
     Args:
         func: 要执行的异步函数
@@ -49,13 +55,19 @@ async def retry_with_backoff(
     Raises:
         最后一次重试的异常
         
-    Usage:
+    Usage (非 LLM 场景):
+        # 数据库查询重试
         result = await retry_with_backoff(
-            llm.ainvoke,
-            messages,
-            max_retries=3,
-            base_delay=1.0
+            db.execute,
+            query,
+            max_retries=2,
+            base_delay=0.5
         )
+        
+        # LLM 调用请使用:
+        # from app.core.llm_wrapper import get_llm_wrapper
+        # wrapper = get_llm_wrapper()
+        # result = await wrapper.ainvoke(messages)
     """
     last_exception = None
     
@@ -189,7 +201,7 @@ class RetryConfig:
 class RetryConfigs:
     """预定义的重试配置"""
     
-    # LLM 调用配置：较长延迟，适应 API 限流
+    # [已废弃] LLM 调用请使用 app.core.llm_wrapper.LLMWrapper
     LLM_CALL = RetryConfig(
         max_retries=3,
         base_delay=2.0,

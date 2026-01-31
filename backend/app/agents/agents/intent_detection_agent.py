@@ -30,6 +30,7 @@ from langgraph.prebuilt import create_react_agent
 
 from app.core.llms import get_default_model
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR, CORE_AGENT_ROUTER
+from app.core.llm_wrapper import LLMWrapper
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +191,8 @@ INTENT_DETECTION_PROMPT = """你是一个数据查询意图分析专家。分析
 async def detect_intent_with_llm(query: str) -> IntentResult:
     """使用 LLM 进行深度意图识别"""
     try:
-        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
+        # 使用 LLMWrapper 统一处理重试和超时
+        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR, use_wrapper=True)
         
         messages = [
             SystemMessage(content=INTENT_DETECTION_PROMPT),
@@ -287,7 +289,8 @@ class IntentDetectionAgent:
     """意图识别代理"""
     
     def __init__(self):
-        self.llm = get_agent_llm(CORE_AGENT_ROUTER)
+        # 获取原生 LLM（create_react_agent 需要原生 LLM）
+        self._raw_llm = get_agent_llm(CORE_AGENT_ROUTER)
         self.tools = [detect_query_intent]
         self.agent = self._create_agent()
     
@@ -303,7 +306,7 @@ class IntentDetectionAgent:
 使用 detect_query_intent 工具来分析用户查询。"""
         
         return create_react_agent(
-            model=self.llm,
+            model=self._raw_llm,
             tools=self.tools,
             prompt=system_prompt,
             name="intent_detection_agent"

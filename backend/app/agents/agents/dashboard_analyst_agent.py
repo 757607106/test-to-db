@@ -21,8 +21,8 @@ from typing import Dict, Any, List, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.core.llms import get_default_model
 from app.core.agent_config import get_agent_llm, CORE_AGENT_CHART_ANALYST
+from app.core.llm_wrapper import LLMWrapper, LLMWrapperConfig
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +42,19 @@ class DashboardAnalystAgent:
         初始化 Dashboard 分析专家
         
         Args:
-            llm: 自定义 LLM 模型，默认使用 CORE_AGENT_CHART_ANALYST 配置
+            llm: 自定义 LLM 模型或 LLMWrapper，默认使用 CORE_AGENT_CHART_ANALYST 配置
         """
         self.name = "dashboard_analyst_agent"
-        self.llm = llm or get_agent_llm(CORE_AGENT_CHART_ANALYST)
+        # 使用 LLMWrapper 统一处理重试和超时
+        if llm is not None:
+            # 如果传入的是原生 LLM，包装它
+            if isinstance(llm, LLMWrapper):
+                self.llm = llm
+            else:
+                self.llm = LLMWrapper(llm=llm, name=self.name)
+        else:
+            # 使用 get_agent_llm 获取带 wrapper 的 LLM
+            self.llm = get_agent_llm(CORE_AGENT_CHART_ANALYST, use_wrapper=True)
     
     def _create_system_prompt(self) -> str:
         """创建系统提示词"""

@@ -3,10 +3,12 @@
 
 提供：
 1. 统一的重试策略（指数退避）
-2. 超时控制
-3. LangSmith 追踪集成
-4. 错误分类和处理
-5. 性能监控
+2. LangSmith 追踪集成
+3. 错误分类和处理
+4. 性能监控
+
+注意：不设置超时限制，因为复杂任务执行时间无法预估。
+重试机制针对可恢复错误（如 429 限流、服务器错误）。
 
 使用方式：
     from app.core.llm_wrapper import LLMWrapper, get_llm_wrapper
@@ -56,18 +58,18 @@ class LLMWrapperConfig:
     retry_max_delay: float = 30.0  # 最大延迟（秒）
     retry_exponential_base: float = 2.0  # 指数基数
     
-    # 超时配置
-    timeout: float = 60.0  # 默认超时（秒）
-    connect_timeout: float = 10.0  # 连接超时（秒）
-    
     # 监控配置
     enable_tracing: bool = True
     enable_metrics: bool = True
     
-    # 错误处理
+    # 错误处理（哪些错误类型允许重试）
     retry_on_timeout: bool = True
     retry_on_rate_limit: bool = True
     retry_on_server_error: bool = True
+    
+    # 保留 timeout 字段以保持向后兼容（但不再使用）
+    timeout: float = None  # 已废弃，不再使用
+    connect_timeout: float = None  # 已废弃，不再使用
 
 
 # 默认配置
@@ -304,17 +306,15 @@ class LLMWrapper:
         messages: List[BaseMessage],
         trace_id: str = None,
         metadata: Dict[str, Any] = None,
-        timeout: float = None,
         **kwargs
     ) -> AIMessage:
         """
-        异步调用 LLM（带重试和超时）
+        异步调用 LLM（带重试机制，无超时限制）
         
         Args:
             messages: 消息列表
             trace_id: 追踪 ID（用于日志关联）
             metadata: 额外元数据
-            timeout: 超时时间（覆盖默认值）
             **kwargs: 传递给 LLM 的额外参数
             
         Returns:
@@ -322,9 +322,12 @@ class LLMWrapper:
             
         Raises:
             Exception: 当所有重试都失败时
+            
+        Note:
+            不设置超时限制，因为复杂任务执行时间无法预估。
+            重试机制针对可恢复错误（如 429 限流、服务器错误）。
         """
         trace_id = trace_id or str(uuid.uuid4())[:8]
-        timeout = timeout or self.config.timeout
         
         last_error = None
         retries = 0
@@ -332,11 +335,8 @@ class LLMWrapper:
         
         for attempt in range(self.config.max_retries + 1):
             try:
-                # 添加超时控制
-                response = await asyncio.wait_for(
-                    self.llm.ainvoke(messages, **kwargs),
-                    timeout=timeout
-                )
+                # 直接调用，不设置超时限制
+                response = await self.llm.ainvoke(messages, **kwargs)
                 
                 # 记录成功
                 latency_ms = (time.time() - start_time) * 1000
@@ -352,15 +352,6 @@ class LLMWrapper:
                 )
                 
                 return response
-                
-            except asyncio.TimeoutError as e:
-                last_error = e
-                error_type = LLMErrorType.TIMEOUT
-                logger.warning(
-                    f"[{trace_id}] LLM call timeout: "
-                    f"attempt={attempt + 1}/{self.config.max_retries + 1}, "
-                    f"timeout={timeout}s"
-                )
                 
             except Exception as e:
                 last_error = e
@@ -401,16 +392,14 @@ class LLMWrapper:
         messages: List[BaseMessage],
         trace_id: str = None,
         metadata: Dict[str, Any] = None,
-        timeout: float = None,
         **kwargs
     ) -> AIMessage:
         """
-        同步调用 LLM（带重试和超时）
+        同步调用 LLM（带重试机制，无超时限制）
         
         注意：在异步环境中请使用 ainvoke
         """
         trace_id = trace_id or str(uuid.uuid4())[:8]
-        timeout = timeout or self.config.timeout
         
         last_error = None
         retries = 0

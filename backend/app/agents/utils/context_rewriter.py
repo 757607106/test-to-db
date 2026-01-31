@@ -200,7 +200,8 @@ async def rewrite_query_with_context(
 """
     
     try:
-        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
+        # 使用 LLMWrapper 统一处理重试和超时
+        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR, use_wrapper=True)
         response = await llm.ainvoke([HumanMessage(content=prompt)])
         
         rewritten = response.content.strip()

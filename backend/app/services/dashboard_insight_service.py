@@ -107,9 +107,10 @@ class DashboardInsightService:
         sql_upper = sql.upper()
         invalid_refs = []
         
-        # 1. 检查是否是 SELECT 语句
-        if not sql_upper.strip().startswith("SELECT"):
-            return False, "SQL 必须是 SELECT 语句", ["non-select"]
+        # 1. 检查是否是 SELECT 语句（支持 WITH CTE）
+        sql_stripped = sql_upper.strip()
+        if not (sql_stripped.startswith("SELECT") or sql_stripped.startswith("WITH")):
+            return False, "SQL 必须是 SELECT 语句或 WITH CTE", ["non-select"]
         
         # 2. 检查危险关键词
         dangerous_keywords = ["DROP", "DELETE", "TRUNCATE", "UPDATE", "INSERT", "ALTER", "CREATE"]
@@ -384,10 +385,11 @@ SQL 语法注意事项（{db_type}）：
 只返回 JSON，不要有其他文字。
 """
         
-        # 4. 调用 LLM（使用 SQL Generator Agent 配置的模型，增加超时时间）
+        # 4. 调用 LLM（使用 LLMWrapper 统一处理重试和超时）
         try:
             import json
-            from app.core.model_registry import create_chat_model
+            from app.core.llm_wrapper import LLMWrapper, LLMWrapperConfig
+            from app.core.llms import get_default_model
             from app.models.agent_profile import AgentProfile
             from app.models.llm_config import LLMConfiguration
             from app.core.config import settings
@@ -395,36 +397,24 @@ SQL 语法注意事项（{db_type}）：
             # 获取 Agent 配置
             profile = db.query(AgentProfile).filter(AgentProfile.name == CORE_AGENT_SQL_GENERATOR).first()
             
-            # 构建 LLM 参数
-            api_key = settings.OPENAI_API_KEY
-            api_base = settings.OPENAI_API_BASE
-            model_name = settings.LLM_MODEL
-            provider = settings.LLM_PROVIDER.lower()
-            
+            # 获取 LLM 配置
+            llm_config = None
             if profile and profile.llm_config_id:
                 llm_config = db.query(LLMConfiguration).filter(
                     LLMConfiguration.id == profile.llm_config_id,
                     LLMConfiguration.is_active == True
                 ).first()
-                if llm_config:
-                    api_key = llm_config.api_key
-                    api_base = llm_config.base_url
-                    model_name = llm_config.model_name
-                    provider = llm_config.provider.lower()
             
-            # 创建 LLM（增加超时时间到 120 秒）
-            llm = create_chat_model(
-                provider=provider,
-                model_name=model_name,
-                api_key=api_key,
-                base_url=api_base,
-                temperature=0.3,
-                max_tokens=8192,
-                timeout=120.0,  # 挖掘任务需要更长超时
-                max_retries=2
+            # 使用 LLMWrapper（统一重试策略，无超时限制）
+            llm = get_default_model(config_override=llm_config, caller="dashboard_mining")
+            wrapper_config = LLMWrapperConfig(
+                max_retries=3,
+                retry_base_delay=2.0,
+                enable_tracing=settings.LANGCHAIN_TRACING_V2,
             )
+            wrapper = LLMWrapper(llm=llm, config=wrapper_config, name="dashboard_mining")
             
-            response = await llm.ainvoke([
+            response = await wrapper.ainvoke([
                 SystemMessage(content="你是一个专业的数据分析师。只返回 JSON 格式的响应。"),
                 HumanMessage(content=prompt)
             ])
@@ -560,13 +550,12 @@ SQL 语法注意事项（{db_type}）：
         后台任务：执行实际的洞察分析逻辑
         
         P1-FIX: 优化Session生命周期管理，使用上下文管理器和更健壮的错误处理
+        注意: LLM 重试由 LLMWrapper 统一处理，此处不再需要外层重试逻辑
         """
         import logging
         from contextlib import contextmanager
         
         logger = logging.getLogger(__name__)
-        max_retries = 2
-        retry_count = 0
         
         @contextmanager
         def get_db_session():

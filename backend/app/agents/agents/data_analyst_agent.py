@@ -30,6 +30,7 @@ from langgraph.types import StreamWriter
 from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
 from app.core.agent_config import get_agent_llm, CORE_AGENT_CHART_ANALYST
+from app.core.llm_wrapper import LLMWrapper, LLMWrapperConfig
 from app.schemas.stream_events import create_sql_step_event, create_insight_event, create_stage_message_event
 from app.agents.nodes.base import ErrorStage
 
@@ -139,12 +140,25 @@ class DataAnalystAgent:
         """
         self.name = "data_analyst_agent"
         self.custom_prompt = custom_prompt
-        self.llm = llm or get_agent_llm(CORE_AGENT_CHART_ANALYST)
+        
+        # 获取原生 LLM（用于 create_react_agent）
+        raw_llm = llm or get_agent_llm(CORE_AGENT_CHART_ANALYST)
+        
+        # 创建 LLMWrapper（用于直接调用，统一重试和超时）
+        if isinstance(raw_llm, LLMWrapper):
+            self.llm = raw_llm
+            # 如果传入的是 wrapper，获取底层 LLM 给 react agent
+            self._raw_llm = raw_llm.llm
+        else:
+            self.llm = LLMWrapper(llm=raw_llm, name=self.name)
+            self._raw_llm = raw_llm
+        
         self.tools = [analyze_query_results]
         
         # 创建 LangGraph ReAct Agent（用于 supervisor 集成）
+        # 注意：create_react_agent 需要原生 LLM
         self.agent = create_react_agent(
-            model=self.llm,
+            model=self._raw_llm,
             tools=self.tools,
             prompt=self._get_agent_prompt(),
             name="data_analyst_agent"

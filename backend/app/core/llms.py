@@ -223,7 +223,9 @@ def get_default_model(config_override: Optional[LLMConfiguration] = None, caller
             
             logger.info(f"Creating LLM from env: {provider}/{model_name}")
 
-        # 使用工厂函数创建模型（消除硬编码）
+        # 使用工厂函数创建模型(消除硬编码)
+        # 注意: max_retries=0, 重试由 LLMWrapper 统一处理
+        # timeout=None 禁用超时限制，复杂任务执行时间无法预估
         llm = create_chat_model(
             provider=provider,
             model_name=model_name,
@@ -231,8 +233,8 @@ def get_default_model(config_override: Optional[LLMConfiguration] = None, caller
             base_url=api_base,
             temperature=0.2,
             max_tokens=8192,
-            timeout=30.0,
-            max_retries=3
+            timeout=None,  # 禁用超时限制
+            max_retries=0  # 重试由 LLMWrapper 统一处理
         )
         
         # 缓存LLM实例
@@ -434,7 +436,8 @@ def create_llm_from_config(config: LLMConfiguration) -> BaseChatModel:
             f"provider={provider}, model={model_name}"
         )
         
-        # 使用工厂函数创建模型（消除硬编码）
+        # 使用工厂函数创建模型(消除硬编码)
+        # 注意: max_retries=0, 重试由 LLMWrapper 统一处理
         return create_chat_model(
             provider=provider,
             model_name=model_name,
@@ -443,7 +446,7 @@ def create_llm_from_config(config: LLMConfiguration) -> BaseChatModel:
             temperature=0.2,
             max_tokens=8192,
             timeout=30.0,
-            max_retries=3
+            max_retries=0  # 重试由 LLMWrapper 统一处理
         )
     except Exception as e:
         logger.error(

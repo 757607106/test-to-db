@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union
 import logging
 from langchain_core.language_models import BaseChatModel
 from sqlalchemy.orm import Session
@@ -7,6 +7,7 @@ from app.db.session import SessionLocal
 from app.models.agent_profile import AgentProfile
 from app.models.llm_config import LLMConfiguration
 from app.core.llms import get_default_model
+from app.core.llm_wrapper import LLMWrapper, LLMWrapperConfig
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +25,23 @@ AGENT_DISPLAY_NAMES = {
     CORE_AGENT_SUPERVISOR: "Supervisor 协调器",
 }
 
-def get_agent_llm(agent_name: str, db: Optional[Session] = None) -> BaseChatModel:
+def get_agent_llm(
+    agent_name: str, 
+    db: Optional[Session] = None,
+    use_wrapper: bool = False
+) -> Union[BaseChatModel, LLMWrapper]:
     """
     获取指定 Agent 的 LLM 模型实例。
-    如果 AgentProfile 存在且配置了 LLM，则返回特定模型；
+    如果 AgentProfile 存在且配置了 LLM,则返回特定模型;
     否则返回全局默认模型。
+    
+    Args:
+        agent_name: Agent 名称
+        db: 数据库会话(可选)
+        use_wrapper: 是否返回 LLMWrapper(带重试和超时保护),默认 False 保持兼容性
+        
+    Returns:
+        BaseChatModel 或 LLMWrapper 实例
     """
     should_close = False
     if db is None:
@@ -58,13 +71,33 @@ def get_agent_llm(agent_name: str, db: Optional[Session] = None) -> BaseChatMode
                     logger.warning(f"Agent [{agent_name}] LLM config disabled, using default")
                     return get_default_model()
                 
-                # 使用特定配置（简化日志）
+                # 使用特定配置(简化日志)
                 logger.debug(f"Agent [{agent_name}] using {llm_config.provider}/{llm_config.model_name}")
-                return get_default_model(config_override=llm_config, caller=f"agent:{agent_name}")
-        
+                llm = get_default_model(config_override=llm_config, caller=f"agent:{agent_name}")
+                        
+                # 如果需要包装器,返回带重试保护的版本
+                if use_wrapper:
+                    wrapper_config = LLMWrapperConfig(
+                        max_retries=3,
+                        retry_base_delay=1.0,
+                        timeout=60.0,
+                    )
+                    return LLMWrapper(llm=llm, config=wrapper_config, name=f"agent:{agent_name}")
+                return llm
+                
         # 3. 回退到全局默认
         logger.debug(f"Agent [{agent_name}] using global default")
-        return get_default_model(caller=f"agent:{agent_name}")
+        llm = get_default_model(caller=f"agent:{agent_name}")
+                
+        # 如果需要包装器,返回带重试保护的版本
+        if use_wrapper:
+            wrapper_config = LLMWrapperConfig(
+                max_retries=3,
+                retry_base_delay=1.0,
+                timeout=60.0,
+            )
+            return LLMWrapper(llm=llm, config=wrapper_config, name=f"agent:{agent_name}")
+        return llm
         
     except Exception as e:
         logger.error(f"Error fetching agent LLM for {agent_name}: {e}")

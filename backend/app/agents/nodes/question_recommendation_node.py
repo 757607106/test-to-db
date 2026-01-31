@@ -20,7 +20,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import StreamWriter
 
 from app.core.state import SQLMessageState
-from app.core.llms import get_default_model
+from app.core.llm_wrapper import get_llm_wrapper
 from app.schemas.stream_events import create_similar_questions_event
 
 logger = logging.getLogger(__name__)
@@ -205,7 +205,8 @@ async def _generate_questions_with_llm(
     - 要求不同维度的问题，避免重复
     """
     try:
-        llm = get_default_model()
+        # 使用 LLMWrapper 统一处理重试和超时
+        llm = get_llm_wrapper(name="question_recommendation")
         
         # 提取表名和字段信息
         tables_info, available_fields = _extract_tables_info_enhanced(schema_info, generated_sql)

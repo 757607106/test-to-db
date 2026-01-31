@@ -28,6 +28,7 @@ from langchain_core.messages import HumanMessage
 
 from app.core.llms import get_default_model
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
+from app.core.llm_wrapper import LLMWrapper
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -189,9 +190,8 @@ def _quick_clarification_check_impl(
     try:
         logger.info(f"开始澄清检测: {query[:50]}...")
         
-        # 获取 LLM 并禁用流式输出
-        base_llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
-        llm = base_llm.with_config({"callbacks": []})
+        # 使用 LLMWrapper 统一处理重试和超时
+        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR, use_wrapper=True)
         
         # 构建 Schema 上下文
         schema_context = _build_schema_context_for_clarification(schema_info)
@@ -203,8 +203,8 @@ def _quick_clarification_check_impl(
             schema_context=schema_context
         )
         
-        # 使用 invoke 而不是 stream
-        response = llm.invoke([HumanMessage(content=prompt)], config={"callbacks": []})
+        # 使用 invoke 进行同步调用（LLMWrapper 支持）
+        response = llm.invoke([HumanMessage(content=prompt)])
         
         # 解析响应
         try:

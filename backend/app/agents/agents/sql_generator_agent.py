@@ -19,6 +19,7 @@ from langgraph.config import get_stream_writer
 
 from app.core.state import SQLMessageState
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
+from app.core.llm_wrapper import LLMWrapper
 from app.schemas.stream_events import create_stage_message_event
 from app.services.db_dialect import get_syntax_guide_for_prompt, get_dialect
 
@@ -98,7 +99,8 @@ SQL: {sample.get('sql', '')}
 7. 优先参考高成功率的样本
 """
         
-        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
+        # 使用 LLMWrapper 统一处理重试和超时
+        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR, use_wrapper=True)
         response = llm.invoke([HumanMessage(content=prompt)])
         
         # 提取SQL语句
@@ -217,7 +219,8 @@ def generate_sql_with_samples(
 - 适应当前的数据库结构
 """
 
-        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
+        # 使用 LLMWrapper 统一处理重试和超时
+        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR, use_wrapper=True)
         response = llm.invoke([HumanMessage(content=prompt)])
 
         # 清理SQL语句
@@ -267,7 +270,8 @@ def explain_sql_query(sql_query: str) -> Dict[str, Any]:
 4. 结果集预期
 """
         
-        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
+        # 使用 LLMWrapper 统一处理重试和超时
+        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR, use_wrapper=True)
         response = llm.invoke([HumanMessage(content=prompt)])
         
         return {
@@ -288,12 +292,13 @@ class SQLGeneratorAgent:
 
     def __init__(self):
         self.name = "sql_generator_agent"
-        self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
+        # 获取原生 LLM（create_react_agent 需要原生 LLM）
+        self._raw_llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
         self.tools = [generate_sql_query, generate_sql_with_samples, explain_sql_query]
         
-        # 创建ReAct代理
+        # 创建ReAct代理（使用原生 LLM）
         self.agent = create_react_agent(
-            self.llm,
+            self._raw_llm,
             self.tools,
             prompt=self._create_system_prompt(),
             name=self.name

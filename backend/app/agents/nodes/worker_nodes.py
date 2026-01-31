@@ -345,7 +345,7 @@ async def general_chat_node(state: SQLMessageState, writer: StreamWriter) -> Dic
     使用默认 LLM 处理非数据查询的对话。
     """
     from app.schemas.stream_events import create_sql_step_event, create_stage_message_event
-    from app.core.llms import get_default_model
+    from app.core.llm_wrapper import get_llm_wrapper
     from app.agents.nodes.base import extract_user_query
     
     logger.info("[Worker] general_chat 开始执行")
@@ -360,7 +360,8 @@ async def general_chat_node(state: SQLMessageState, writer: StreamWriter) -> Dic
     messages = state.get("messages", [])
     user_query = extract_user_query(messages) or ""
     
-    llm = get_default_model()
+    # 使用 LLMWrapper 统一处理重试和超时
+    llm = get_llm_wrapper(name="general_chat")
     response = await llm.ainvoke([
         {"role": "system", "content": "你是一个友好的数据分析助手。请用简洁的中文回答用户的问题。"},
         {"role": "user", "content": user_query}
