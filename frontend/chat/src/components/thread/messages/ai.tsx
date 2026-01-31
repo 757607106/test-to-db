@@ -361,7 +361,7 @@ export function AssistantMessage({
                 content={contentString}
                 isLoading={isLoading}
                 isAiMessage={true}
-                handleRegenerate={() => handleRegenerate(parentCheckpoint)}
+                handleRegenerate={parentCheckpoint ? () => handleRegenerate(parentCheckpoint) : undefined}
                 feedbackContext={feedbackContext}
               />
             </div>

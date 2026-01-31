@@ -7,45 +7,6 @@ export interface UserSimple {
   avatar_url?: string;
 }
 
-// ===== P0: 数据溯源类型定义 =====
-
-export interface ExecutionMetadata {
-  executionTimeMs: number;
-  fromCache: boolean;
-  rowCount: number;
-  dbType?: string;
-  connectionId?: number;
-}
-
-export interface SqlGenerationTrace {
-  userIntent?: string;
-  schemaTablesUsed: string[];
-  fewShotSamplesCount: number;
-  generationMethod: 'standard' | 'template' | 'cache';
-  generationTimeMs?: number;
-}
-
-export interface InsightLineage {
-  sourceTables: string[];
-  generatedSql?: string;
-  sqlGenerationTrace: SqlGenerationTrace;
-  executionMetadata: ExecutionMetadata;
-  dataTransformations: string[];
-  schemaContext?: Record<string, any>;
-}
-
-export interface EnhancedInsightResponse {
-  widgetId: number;
-  insights: InsightResult;
-  lineage: InsightLineage;
-  confidenceScore: number;
-  analysisMethod: string;
-  analyzedWidgetCount: number;
-  relationshipCount: number;
-  generatedAt: string;
-  status: 'processing' | 'completed' | 'failed';
-}
-
 // ===== P1: 动态刷新类型定义 =====
 
 export interface RefreshConfig {
@@ -323,36 +284,4 @@ export interface InsightRecommendation {
   category?: string;
   content: string;
   priority?: 'high' | 'medium' | 'low';
-}
-
-export interface InsightResult {
-  summary?: InsightSummary;
-  trends?: InsightTrend;
-  anomalies?: InsightAnomaly[];
-  correlations?: InsightCorrelation[];
-  recommendations?: InsightRecommendation[];
-}
-
-export interface TimeRangeCondition {
-  start?: string;  // 修改为与后端Schema一致
-  end?: string;    // 修改为与后端Schema一致
-  relative_range?: string;
-}
-
-export interface InsightConditions {
-  time_range?: TimeRangeCondition;
-  dimension_filters?: Record<string, any>;
-  aggregation_level?: string;
-}
-
-export interface DashboardInsightRequest {
-  conditions?: InsightConditions;
-  use_graph_relationships?: boolean;
-}
-
-export interface DashboardInsightResponse {
-  dashboard_id: number;
-  insights: InsightResult;
-  widget_id?: number;
-  generated_at: string;
 }

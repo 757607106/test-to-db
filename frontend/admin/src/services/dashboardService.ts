@@ -16,11 +16,7 @@ import type {
   PermissionCreate,
   PermissionUpdate,
   LayoutUpdateRequest,
-  DashboardInsightRequest,
-  DashboardInsightResponse,
-  InsightConditions,
   AIChartRecommendResponse,
-  EnhancedInsightResponse,
   RefreshConfig,
   GlobalRefreshRequest,
   GlobalRefreshResponse,
@@ -95,62 +91,6 @@ export const dashboardService = {
   async deleteDashboardPermission(dashboardId: number, userId: number): Promise<{ message: string }> {
     const response = await api.delete(`/dashboards/${dashboardId}/permissions/${userId}`);
     return response.data;
-  },
-
-  // 生成Dashboard洞察
-  async generateDashboardInsights(
-    dashboardId: number,
-    request?: DashboardInsightRequest
-  ): Promise<DashboardInsightResponse> {
-    const response = await api.post(`/dashboards/${dashboardId}/insights`, request || {});
-    return response.data;
-  },
-
-  // 获取Dashboard洞察
-  async getDashboardInsights(dashboardId: number): Promise<Widget | null> {
-    const response = await api.get(`/dashboards/${dashboardId}/insights`);
-    return response.data;
-  },
-
-  // P0: 获取洞察详情（含数据溯源）
-  async getInsightDetail(
-    dashboardId: number,
-    widgetId?: number
-  ): Promise<EnhancedInsightResponse> {
-    const params = widgetId ? { widget_id: widgetId } : {};
-    const response = await api.get(`/dashboards/${dashboardId}/insights/detail`, { params });
-    // 转换后端snake_case为前端camelCase
-    const data = response.data;
-    return {
-      widgetId: data.widget_id,
-      insights: data.insights,
-      lineage: {
-        sourceTables: data.lineage?.source_tables || [],
-        generatedSql: data.lineage?.generated_sql,
-        sqlGenerationTrace: {
-          userIntent: data.lineage?.sql_generation_trace?.user_intent,
-          schemaTablesUsed: data.lineage?.sql_generation_trace?.schema_tables_used || [],
-          fewShotSamplesCount: data.lineage?.sql_generation_trace?.few_shot_samples_count || 0,
-          generationMethod: data.lineage?.sql_generation_trace?.generation_method || 'standard',
-          generationTimeMs: data.lineage?.sql_generation_trace?.generation_time_ms,
-        },
-        executionMetadata: {
-          executionTimeMs: data.lineage?.execution_metadata?.execution_time_ms || 0,
-          fromCache: data.lineage?.execution_metadata?.from_cache || false,
-          rowCount: data.lineage?.execution_metadata?.row_count || 0,
-          dbType: data.lineage?.execution_metadata?.db_type,
-          connectionId: data.lineage?.execution_metadata?.connection_id,
-        },
-        dataTransformations: data.lineage?.data_transformations || [],
-        schemaContext: data.lineage?.schema_context,
-      },
-      confidenceScore: data.confidence_score || 0.8,
-      analysisMethod: data.analysis_method || 'auto',
-      analyzedWidgetCount: data.analyzed_widget_count || 0,
-      relationshipCount: data.relationship_count || 0,
-      generatedAt: data.generated_at,
-      status: data.status || 'completed',
-    };
   },
 
   // 生成智能挖掘建议
@@ -298,15 +238,6 @@ export const widgetService = {
     } catch (error) {
       throw new Error('Failed to update widget positions');
     }
-  },
-
-  // 刷新洞察Widget
-  async refreshInsightWidget(
-    widgetId: number,
-    conditions?: InsightConditions
-  ): Promise<DashboardInsightResponse> {
-    const response = await api.put(`/widgets/${widgetId}/refresh-insights`, { conditions });
-    return response.data;
   },
 
   // AI 智能推荐图表类型

@@ -1,23 +1,11 @@
 /**
  * ClarificationInterruptView 组件
- * 处理澄清类型的 interrupt，显示澄清问题并收集用户回复
- * 
- * 问卷式多选设计 (2026-01-23)
- * - 选项使用字母标记 (A/B/C/D)
- * - 最后一个选项为自定义输入
- * - 支持"推荐选项"提示
- * - 2026-01-24: UI 重构，适配亮/暗色模式，移除硬编码深色背景
+ * 简洁的澄清确认卡片，显示问题和选项
  */
 import { useState, useMemo } from "react";
 import { useStreamContext } from "@/providers/Stream";
 import { cn } from "@/lib/utils";
-import { 
-  MessageCircleQuestion, 
-  LoaderCircle, 
-  Sparkles,
-  Check
-} from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { LoaderCircle, X } from "lucide-react";
 
 export interface ClarificationQuestion {
   id: string;
@@ -25,7 +13,7 @@ export interface ClarificationQuestion {
   type: "choice" | "text";
   options?: string[];
   related_ambiguity?: string;
-  recommended_option?: string; // 推荐选项
+  recommended_option?: string;
 }
 
 export interface ClarificationInterruptData {
@@ -38,65 +26,52 @@ export interface ClarificationInterruptData {
   session_id?: string;
   original_query?: string;
   related_ambiguity?: string;
+  default_value?: string;
 }
 
 interface ClarificationInterruptViewProps {
   interrupt: ClarificationInterruptData;
 }
 
-// 选项字母标记
-const OPTION_LETTERS = ["A", "B", "C", "D", "E", "F", "G", "H"];
-
 export function ClarificationInterruptView({
   interrupt,
 }: ClarificationInterruptViewProps) {
   const stream = useStreamContext();
-  const [responses, setResponses] = useState<Record<string, string>>({});
-  const [customInputs, setCustomInputs] = useState<Record<string, string>>({});
+  const [selectedOption, setSelectedOption] = useState<string | null>(null);
+  const [customInput, setCustomInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showCustomInput, setShowCustomInput] = useState(false);
 
-  const questions = interrupt.questions || [];
-  
-  // 计算是否全部回答完成
-  const allAnswered = useMemo(() => {
-    return questions.every((q) => {
-      const response = responses[q.id];
-      if (!response) return false;
-      // 如果选择了"其他"选项，需要检查自定义输入是否有值
-      if (response === "__custom__") {
-        return !!customInputs[q.id]?.trim();
-      }
-      return true;
-    });
-  }, [questions, responses, customInputs]);
+  const question = interrupt.questions?.[0];
+  const options = question?.options || [];
 
-  const handleOptionSelect = (questionId: string, option: string, isCustom: boolean = false) => {
-    setResponses((prev) => ({
-      ...prev,
-      [questionId]: isCustom ? "__custom__" : option,
-    }));
+  const handleSelect = (option: string) => {
+    setSelectedOption(option);
+    setShowCustomInput(false);
+    // 直接提交选中的选项
+    submitAnswer(option);
   };
 
-  const handleCustomInputChange = (questionId: string, value: string) => {
-    setCustomInputs((prev) => ({
-      ...prev,
-      [questionId]: value,
-    }));
+  const handleCustomClick = () => {
+    setShowCustomInput(true);
+    setSelectedOption(null);
   };
 
-  const handleSubmit = async () => {
-    if (!allAnswered) return;
+  const handleCustomSubmit = () => {
+    if (customInput.trim()) {
+      submitAnswer(customInput.trim());
+    }
+  };
 
+  const submitAnswer = async (answer: string) => {
     setIsSubmitting(true);
-
+    
     const formattedResponses = {
       session_id: interrupt.session_id,
-      answers: questions.map((q) => ({
-        question_id: q.id,
-        answer: responses[q.id] === "__custom__" 
-          ? customInputs[q.id] 
-          : responses[q.id],
-      })),
+      answers: [{
+        question_id: question?.id || "q_default",
+        answer: answer,
+      }],
     };
 
     try {
@@ -113,7 +88,7 @@ export function ClarificationInterruptView({
     }
   };
 
-  const handleCancel = () => {
+  const handleSkip = () => {
     stream.submit(
       {},
       {
@@ -130,187 +105,78 @@ export function ClarificationInterruptView({
     );
   };
 
+  if (!question) return null;
+
   return (
-    <div className="w-full max-w-2xl my-4">
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-        className="rounded-2xl overflow-hidden bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-xl"
-      >
-        {/* 头部标题 */}
-        <div className="px-6 py-4 border-b border-slate-100 dark:border-zinc-800 bg-slate-50/50 dark:bg-zinc-900/50">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400 rounded-lg">
-              <MessageCircleQuestion className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-base font-semibold text-slate-800 dark:text-slate-100">需要您的确认</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400">为了准确执行，请帮忙澄清以下细节</p>
-            </div>
-          </div>
+    <div className="w-full max-w-xl my-3">
+      <div className="rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-sm overflow-hidden">
+        {/* 问题 + 关闭按钮 */}
+        <div className="px-4 py-3 flex items-start justify-between gap-3">
+          <p className="text-sm text-slate-700 dark:text-slate-200">
+            {question.question}
+          </p>
+          <button
+            onClick={handleSkip}
+            className="flex-shrink-0 p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:text-slate-300 dark:hover:bg-zinc-800 transition-colors"
+            title="跳过"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
 
-        {/* 问题列表 */}
-        <div className="px-6 py-6 space-y-8">
-          <AnimatePresence mode="wait">
-            {questions.map((question, qIndex) => (
-              <motion.div
-                key={question.id}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2, delay: qIndex * 0.1 }}
-                className="space-y-4"
-              >
-                {/* 问题标题 */}
-                <div className="flex gap-3">
-                   <span className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-100 dark:bg-zinc-800 text-xs font-bold text-slate-500 dark:text-slate-400 flex-shrink-0 mt-0.5">
-                     {qIndex + 1}
-                   </span>
-                   <p className="text-sm font-medium text-slate-800 dark:text-slate-200 leading-relaxed">
-                     {question.question}
-                   </p>
-                </div>
-
-                {/* 选项列表 */}
-                <div className="pl-9 space-y-2.5">
-                  {question.type === "choice" && question.options ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {question.options.map((option, optIndex) => {
-                        const letter = OPTION_LETTERS[optIndex] || String(optIndex + 1);
-                        const isSelected = responses[question.id] === option;
-                        const isRecommended = question.recommended_option === option;
-                        
-                        return (
-                          <button
-                            key={option}
-                            onClick={() => handleOptionSelect(question.id, option)}
-                            className={cn(
-                              "group w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all border shadow-sm",
-                              isSelected
-                                ? "bg-indigo-50 border-indigo-200 shadow-indigo-100 dark:bg-indigo-900/20 dark:border-indigo-800 dark:shadow-none"
-                                : "bg-white border-slate-200 hover:border-indigo-200 hover:shadow-md dark:bg-zinc-800/50 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:border-zinc-600",
-                              isRecommended && "ring-2 ring-amber-400/30 dark:ring-amber-500/20 animate-pulse-slow"
-                            )}
-                          >
-                            <span className={cn(
-                              "flex items-center justify-center w-6 h-6 rounded-md text-xs font-bold flex-shrink-0 transition-colors",
-                              isSelected
-                                ? "bg-indigo-600 text-white"
-                                : "bg-slate-100 text-slate-500 group-hover:bg-indigo-50 group-hover:text-indigo-600 dark:bg-zinc-700 dark:text-zinc-400 dark:group-hover:bg-zinc-600"
-                            )}>
-                              {isSelected ? <Check className="w-3.5 h-3.5" /> : letter}
-                            </span>
-                            <span className={cn(
-                              "text-sm flex-1 transition-colors truncate",
-                              isSelected 
-                                ? "text-indigo-900 font-medium dark:text-indigo-100" 
-                                : "text-slate-600 group-hover:text-slate-900 dark:text-slate-300 dark:group-hover:text-slate-100"
-                            )}>
-                              {option}
-                              {isRecommended && (
-                                <span className="ml-2 inline-flex items-center gap-1 text-xs font-normal text-amber-500 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 px-2 py-0.5 rounded-full border border-amber-100 dark:border-amber-800/50">
-                                  <Sparkles className="w-3 h-3" /> 推荐
-                                </span>
-                              )}
-                            </span>
-                          </button>
-                        );
-                      })}
-                      
-                      {/* 自定义输入选项 */}
-                      <div className="relative col-span-1 sm:col-span-2">
-                        <button
-                          onClick={() => handleOptionSelect(question.id, "", true)}
-                          className={cn(
-                            "group w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all border shadow-sm",
-                            responses[question.id] === "__custom__"
-                              ? "bg-indigo-50 border-indigo-200 dark:bg-indigo-900/20 dark:border-indigo-800"
-                              : "bg-white border-slate-200 hover:border-indigo-200 hover:shadow-md dark:bg-zinc-800/50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                          )}
-                        >
-                          <span className={cn(
-                            "flex items-center justify-center w-6 h-6 rounded-md text-xs font-bold flex-shrink-0 transition-colors",
-                            responses[question.id] === "__custom__"
-                              ? "bg-indigo-600 text-white"
-                              : "bg-slate-100 text-slate-500 group-hover:bg-indigo-50 group-hover:text-indigo-600 dark:bg-zinc-700 dark:text-zinc-400"
-                          )}>
-                            {responses[question.id] === "__custom__" ? <Check className="w-3.5 h-3.5" /> : (OPTION_LETTERS[question.options.length] || "E")}
-                          </span>
-                          
-                          {responses[question.id] === "__custom__" ? (
-                            <motion.input
-                              initial={{ width: 0, opacity: 0 }}
-                              animate={{ width: "100%", opacity: 1 }}
-                              type="text"
-                              value={customInputs[question.id] || ""}
-                              onChange={(e) => handleCustomInputChange(question.id, e.target.value)}
-                              onClick={(e) => e.stopPropagation()}
-                              placeholder="请输入您的具体需求..."
-                              autoFocus
-                              className="flex-1 bg-transparent text-sm text-indigo-900 dark:text-indigo-100 placeholder-indigo-300 outline-none min-w-0"
-                            />
-                          ) : (
-                            <span className="text-sm text-slate-500 dark:text-slate-400">其他 (自定义输入)</span>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    /* 纯文本输入类型 */
-                    <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-white dark:bg-zinc-800 border border-slate-200 dark:border-zinc-700 focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-500 transition-all shadow-sm">
-                      <span className="flex items-center justify-center w-6 h-6 rounded-md bg-slate-100 dark:bg-zinc-700 text-xs font-bold text-slate-500 dark:text-slate-400 flex-shrink-0">
-                        A
-                      </span>
-                      <input
-                        type="text"
-                        value={responses[question.id] || ""}
-                        onChange={(e) => setResponses(prev => ({ ...prev, [question.id]: e.target.value }))}
-                        placeholder="请输入您的回答..."
-                        className="flex-1 bg-transparent text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 outline-none"
-                      />
-                    </div>
-                  )}
-                </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </div>
-
-        {/* 底部操作栏 */}
-        <div className="px-6 py-4 border-t border-slate-100 dark:border-zinc-800 bg-slate-50/50 dark:bg-zinc-900/50 flex items-center justify-end gap-3">
+        {/* 选项按钮 */}
+        <div className="px-4 pb-4 flex flex-wrap gap-2">
+          {options.map((option) => (
             <button
-              onClick={handleCancel}
+              key={option}
+              onClick={() => handleSelect(option)}
               disabled={isSubmitting}
-              className="px-4 py-2 text-sm font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-200/50 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-zinc-800 rounded-lg transition-colors"
-            >
-              跳过/取消
-            </button>
-            <button
-              onClick={handleSubmit}
-              disabled={isSubmitting || !allAnswered}
               className={cn(
-                "relative px-6 py-2 rounded-lg text-sm font-medium transition-all shadow-sm flex items-center gap-2 overflow-hidden",
-                allAnswered && !isSubmitting
-                  ? "bg-indigo-600 text-white hover:bg-indigo-700 hover:shadow-indigo-200 dark:hover:shadow-none"
-                  : "bg-slate-200 text-slate-400 cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-600"
+                "px-3 py-1.5 rounded-lg text-sm border transition-all",
+                selectedOption === option
+                  ? "bg-indigo-600 text-white border-indigo-600"
+                  : "bg-slate-50 text-slate-600 border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-600 dark:bg-zinc-800 dark:text-slate-300 dark:border-zinc-700 dark:hover:border-indigo-500 dark:hover:text-indigo-400",
+                isSubmitting && "opacity-50 cursor-not-allowed"
               )}
             >
-              {isSubmitting && (
-                <div className="absolute inset-0 bg-white/20 dark:bg-black/20 z-10" />
-              )}
-              {isSubmitting ? (
-                <>
-                  <LoaderCircle className="w-4 h-4 animate-spin" />
-                  <span>提交中...</span>
-                </>
-              ) : (
-                "确认提交"
-              )}
+              {isSubmitting && selectedOption === option ? (
+                <LoaderCircle className="w-4 h-4 animate-spin inline mr-1" />
+              ) : null}
+              {option}
             </button>
+          ))}
+          
+          {/* 其他选项 */}
+          {showCustomInput ? (
+            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+              <input
+                type="text"
+                value={customInput}
+                onChange={(e) => setCustomInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleCustomSubmit()}
+                placeholder="输入自定义值..."
+                autoFocus
+                className="flex-1 px-3 py-1.5 rounded-lg text-sm border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-700 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+              />
+              <button
+                onClick={handleCustomSubmit}
+                disabled={!customInput.trim() || isSubmitting}
+                className="px-3 py-1.5 rounded-lg text-sm bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                确定
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={handleCustomClick}
+              disabled={isSubmitting}
+              className="px-3 py-1.5 rounded-lg text-sm border border-dashed border-slate-300 text-slate-500 hover:border-indigo-300 hover:text-indigo-600 dark:border-zinc-600 dark:text-slate-400 dark:hover:border-indigo-500 dark:hover:text-indigo-400 transition-colors"
+            >
+              其他...
+            </button>
+          )}
         </div>
-      </motion.div>
+      </div>
     </div>
   );
 }

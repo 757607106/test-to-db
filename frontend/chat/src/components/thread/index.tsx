@@ -21,6 +21,7 @@ import { HumanMessage } from "./messages/human";
 import {
   DO_NOT_RENDER_ID_PREFIX,
   ensureToolCallsHaveResponses,
+  ensureOrphanedToolMessagesHaveParents,
 } from "@/lib/ensure-tool-responses";
 import { LangGraphLogoSVG } from "../icons/langgraph";
 import { TooltipIconButton } from "./tooltip-icon-button";
@@ -189,6 +190,10 @@ export function Thread() {
     };
 
     const toolMessages = ensureToolCallsHaveResponses(Array.isArray(stream.messages) ? stream.messages : []);
+    
+    // 同时确保孤立的 ToolMessage 有对应的父 AI 消息
+    // 修复 "messages with role 'tool' must be a response to a preceeding message with 'tool_calls'" 错误
+    const orphanFixMessages = ensureOrphanedToolMessagesHaveParents(Array.isArray(stream.messages) ? stream.messages : []);
 
     const context = {
       ...(Object.keys(artifactContext).length > 0 ? artifactContext : {}),
@@ -197,7 +202,7 @@ export function Thread() {
 
     stream.submit(
       {
-        messages: [...toolMessages, newHumanMessage],
+        messages: [...orphanFixMessages, ...toolMessages, newHumanMessage],
         // 直接传递 connection_id 和 agent_id 到 state 根级别
         connection_id: selectedConnectionId || undefined,
         agent_id: selectedAgentId || undefined,
@@ -226,15 +231,41 @@ export function Thread() {
   const handleRegenerate = (
     parentCheckpoint: Checkpoint | null | undefined,
   ) => {
-    // Do this so the loading state is correct
+    // 安全检查：没有 parentCheckpoint 时不执行（第一条消息无法重新生成）
+    if (!parentCheckpoint) {
+      toast.warning("无法重新生成", {
+        description: "这是对话的第一条消息，无法重新生成。",
+        duration: 3000,
+      });
+      return;
+    }
+    
+    // 检查是否正在加载中
+    if (isLoading || stream.isLoading) {
+      toast.info("请等待当前请求完成");
+      return;
+    }
+    
+    // 更新状态以正确显示加载状态
     prevMessageLength.current = prevMessageLength.current - 1;
     setFirstTokenReceived(false);
-    stream.submit(undefined, {
-      checkpoint: parentCheckpoint,
-      streamMode: ["values"],  // 只使用 values 模式
-      streamSubgraphs: true,
-      streamResumable: true,
-    } as any);
+    
+    // 提示用户
+    toast.info("正在重新生成...");
+    
+    try {
+      // 使用 checkpoint 回滚到父状态并重新生成
+      stream.submit(undefined, {
+        checkpoint: parentCheckpoint,
+        streamMode: ["values"],
+        streamSubgraphs: true,
+      } as any);
+    } catch (error) {
+      console.error("[Regenerate] 失败:", error);
+      toast.error("重新生成失败", {
+        description: String(error),
+      });
+    }
   };
 
   const chatStarted = !!threadId || !!messages.length;

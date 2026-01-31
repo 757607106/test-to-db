@@ -220,6 +220,69 @@ class SupervisorAgent:
 
         return system_msg
 
+    async def _pre_fetch_schema(self, state: SQLMessageState) -> Dict[str, Any]:
+        """
+        预获取 Schema 信息（用于澄清检测）
+        
+        修复澄清从不触发的问题：澄清检测需要 schema_info 来生成有效选项，
+        但之前澄清在 schema_agent 之前执行，导致 schema_info 为空。
+        
+        Returns:
+            schema_info 字典
+        """
+        # 如果已有 schema_info，直接返回
+        if state.get("schema_info"):
+            return state["schema_info"]
+        
+        try:
+            from app.db.session import SessionLocal
+            from app.services.text2sql_utils import retrieve_relevant_schema, get_value_mappings
+            
+            # 提取用户查询
+            user_query = state.get("enriched_query")
+            if not user_query:
+                messages = state.get("messages", [])
+                for msg in reversed(messages):
+                    if hasattr(msg, 'type') and msg.type == 'human':
+                        user_query = msg.content
+                        break
+            
+            if not user_query:
+                logger.warning("无法提取用户查询，跳过 schema 预获取")
+                return {}
+            
+            connection_id = state.get("connection_id", 15)
+            
+            db = SessionLocal()
+            try:
+                # 获取相关表结构
+                schema_context = retrieve_relevant_schema(
+                    db=db,
+                    connection_id=connection_id,
+                    query=user_query
+                )
+                
+                # 获取值映射
+                value_mappings = get_value_mappings(db, schema_context)
+                
+                schema_info = {
+                    "tables": schema_context.get("tables", []),
+                    "columns": schema_context.get("columns", []),
+                    "value_mappings": value_mappings,
+                    "semantic_layer": schema_context.get("semantic_layer", {}),
+                    "connection_id": connection_id,
+                }
+                
+                logger.info(f"[澄清前置] Schema 预获取成功: {len(schema_info.get('tables', []))} 张表")
+                return schema_info
+                
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.warning(f"Schema 预获取失败: {e}，澄清将使用空 schema")
+            return {}
+
     async def _check_clarification(self, state: SQLMessageState) -> Optional[Dict[str, Any]]:
         """
         检查是否需要澄清
@@ -259,9 +322,13 @@ class SupervisorAgent:
                 logger.info("查询可以跳过澄清")
                 return None
             
-            # 使用 LLM 检测澄清需求
+            # ✅ 修复：预获取 schema_info，确保澄清检测有数据库结构信息
             connection_id = state.get("connection_id", 15)
-            schema_info = state.get("schema_info")
+            schema_info = await self._pre_fetch_schema(state)
+            
+            # 将 schema_info 存入 state，供后续 schema_agent 复用
+            if schema_info:
+                state["schema_info"] = schema_info
             
             result = quick_clarification_check(
                 query=user_query,

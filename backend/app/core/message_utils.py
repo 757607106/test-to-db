@@ -106,7 +106,11 @@ def create_ai_message_with_tools(content: str, tool_calls: List[Dict[str, Any]])
 
 def validate_and_fix_message_history(messages: List[BaseMessage]) -> List[BaseMessage]:
     """
-    验证并修复消息历史，确保所有Tool Call都有对应的ToolMessage
+    验证并修复消息历史，确保消息链完整性
+    
+    修复两类问题：
+    1. AI消息有 tool_calls 但缺少对应的 ToolMessage → 创建占位 ToolMessage
+    2. ToolMessage 缺少对应的 AI消息（孤立 ToolMessage）→ 创建虚拟父 AI消息
     
     Args:
         messages: 消息历史列表
@@ -119,27 +123,50 @@ def validate_and_fix_message_history(messages: List[BaseMessage]) -> List[BaseMe
     if not messages:
         return messages
     
-    fixed_messages = []
-    pending_tool_calls = {}
+    # === 第一遍：收集所有 tool_call_id 的引用关系 ===
+    ai_tool_call_ids = set()  # AI消息中引用的 tool_call_id
+    tool_message_ids = {}     # ToolMessage 的 tool_call_id -> ToolMessage
+    pending_tool_calls = {}   # 待匹配的 tool_calls
     
     for message in messages:
-        fixed_messages.append(message)
-        
-        # 收集Tool Calls
+        # 收集 AI 消息的 tool_calls
         if isinstance(message, AIMessage) and hasattr(message, "tool_calls") and message.tool_calls:
             for tool_call in message.tool_calls:
-                # 使用tool_call的id作为键
                 tool_call_id = tool_call.get("id") if isinstance(tool_call, dict) else getattr(tool_call, "id", None)
                 if tool_call_id:
+                    ai_tool_call_ids.add(tool_call_id)
                     pending_tool_calls[tool_call_id] = tool_call
         
-        # 匹配ToolMessages
-        if isinstance(message, ToolMessage):
-            tool_call_id = message.tool_call_id
-            if tool_call_id in pending_tool_calls:
-                del pending_tool_calls[tool_call_id]
+        # 收集 ToolMessage
+        if isinstance(message, ToolMessage) and message.tool_call_id:
+            tool_message_ids[message.tool_call_id] = message
+            # 匹配成功，从 pending 中移除
+            if message.tool_call_id in pending_tool_calls:
+                del pending_tool_calls[message.tool_call_id]
     
-    # 为未匹配的Tool Calls创建占位ToolMessage
+    # === 第二遍：构建修复后的消息列表 ===
+    fixed_messages = []
+    
+    # 找出孤立的 ToolMessage（有 ToolMessage 但没有对应的 AI 消息）
+    orphan_tool_call_ids = set(tool_message_ids.keys()) - ai_tool_call_ids
+    
+    # 为孤立的 ToolMessage 创建虚拟父 AI 消息（放在消息列表最前面）
+    for orphan_id in orphan_tool_call_ids:
+        tool_msg = tool_message_ids[orphan_id]
+        virtual_ai = AIMessage(
+            content="",
+            tool_calls=[{
+                "name": tool_msg.name or "unknown",
+                "args": {},
+                "id": orphan_id
+            }]
+        )
+        fixed_messages.append(virtual_ai)
+    
+    # 添加原始消息
+    fixed_messages.extend(messages)
+    
+    # 为未匹配的 Tool Calls 创建占位 ToolMessage
     for tool_call_id, tool_call in pending_tool_calls.items():
         tool_name = tool_call.get("name") if isinstance(tool_call, dict) else getattr(tool_call, "name", "unknown_tool")
         

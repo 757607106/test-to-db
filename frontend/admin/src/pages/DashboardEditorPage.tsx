@@ -58,19 +58,14 @@ import type {
   DashboardDetail,
   Widget,
   WidgetUpdate,
-  InsightConditions,
-  InsightResult,
   LayoutUpdateRequest,
 } from '../types/dashboard';
-import { DashboardInsightWidget } from '../components/DashboardInsightWidget';
-import { InsightConditionPanel } from '../components/InsightConditionPanel';
 import { AddWidgetForm } from '../components/AddWidgetForm';
 import { SmartChart, SmartChartAction } from '../components/SmartChart';
 import { ChartConfigPanel, ChartConfig } from '../components/ChartConfigPanel';
 import { GuidedMiningWizard } from '../components/GuidedMiningWizard';
 // P0/P1/P2 新功能组件
 import { RefreshControlPanel } from '../components/RefreshControlPanel';
-import { InsightLineagePanel } from '../components/InsightLineagePanel';
 import { PredictionConfigPanel } from '../components/PredictionConfigPanel';
 import { PredictionChart } from '../components/PredictionChart';
 import { CategoricalAnalysisDisplay } from '../components/CategoricalAnalysisDisplay';
@@ -78,7 +73,7 @@ import InventoryAnalysisWidget from '../components/InventoryAnalysisWidget';
 import type { InventoryAnalysisConfig } from '../types/inventoryAnalysis';
 import { useAutoRefresh } from '../hooks/useAutoRefresh';
 import { predictionService } from '../services/predictionService';
-import type { RefreshConfig, GlobalRefreshResponse, InsightLineage, EnhancedInsightResponse } from '../types/dashboard';
+import type { RefreshConfig, GlobalRefreshResponse } from '../types/dashboard';
 import type { PredictionResult, PredictionRequest, PredictionColumnsResponse, CategoricalAnalysisRequest, CategoricalAnalysisResult } from '../types/prediction';
 
 const ReactGridLayout = WidthProvider(GridLayout);
@@ -208,10 +203,7 @@ const DashboardEditorPage: React.FC = () => {
   const [configWidget, setConfigWidget] = useState<Widget | null>(null);
   const [detailModalVisible, setDetailModalVisible] = useState<boolean>(false);
   const [detailWidget, setDetailWidget] = useState<Widget | null>(null);
-  const [conditionPanelVisible, setConditionPanelVisible] = useState<boolean>(false);
-  const [currentInsightWidget, setCurrentInsightWidget] = useState<Widget | null>(null);
   const [miningWizardVisible, setMiningWizardVisible] = useState<boolean>(false);
-  const [generatingInsights, setGeneratingInsights] = useState<boolean>(false);
   
   // 字段映射表 (英文名 -> 中文名)
   const [fieldMap, setFieldMap] = useState<Record<string, string>>({});
@@ -223,10 +215,6 @@ const DashboardEditorPage: React.FC = () => {
     autoRefreshWidgetIds: [],
   });
   const [isGlobalRefreshing, setIsGlobalRefreshing] = useState<boolean>(false);
-  
-  // P0: 溯源面板状态
-  const [lineagePanelVisible, setLineagePanelVisible] = useState<boolean>(false);
-  const [currentLineage, setCurrentLineage] = useState<InsightLineage | null>(null);
   
   // P2: 预测面板状态
   const [predictionPanelVisible, setPredictionPanelVisible] = useState<boolean>(false);
@@ -295,18 +283,6 @@ const DashboardEditorPage: React.FC = () => {
     },
     enabled: refreshConfig.enabled,
   });
-
-  // P0: 获取洞察溯源数据
-  const handleViewLineage = async (widgetId?: number) => {
-    try {
-      const response = await dashboardService.getInsightDetail(dashboardId, widgetId);
-      setCurrentLineage(response.lineage);
-      setLineagePanelVisible(true);
-    } catch (error) {
-      message.error('获取溯源数据失败');
-      console.error(error);
-    }
-  };
 
   // P2: 打开预测面板
   const handleOpenPrediction = (widget: Widget) => {
@@ -693,51 +669,6 @@ const DashboardEditorPage: React.FC = () => {
     }
   };
 
-  // 洞察相关
-  const handleGenerateInsights = async (conditions?: InsightConditions) => {
-    const dataWidgets = dashboard?.widgets.filter((w) => w.widget_type !== 'insight_analysis') || [];
-    if (dataWidgets.length === 0) {
-      message.warning('请先添加数据组件后再生成洞察分析');
-      return;
-    }
-
-    setGeneratingInsights(true);
-    try {
-      await dashboardService.generateDashboardInsights(dashboardId, {
-        conditions,
-        use_graph_relationships: true,
-      });
-      message.success('洞察分析生成成功');
-      await fetchDashboard();
-    } catch (error: any) {
-      message.error(error?.response?.data?.detail || '生成洞察分析失败');
-      console.error(error);
-    } finally {
-      setGeneratingInsights(false);
-    }
-  };
-
-  const handleRefreshInsights = async (widgetId: number, conditions?: InsightConditions) => {
-    setRefreshing((prev) => ({ ...prev, [widgetId]: true }));
-    try {
-      const response = await widgetService.refreshInsightWidget(widgetId, conditions);
-      message.success('洞察分析刷新成功');
-      if (dashboard) {
-        const updatedWidgets = dashboard.widgets.map((w) =>
-          w.id === widgetId
-            ? { ...w, data_cache: response.insights, last_refresh_at: response.generated_at }
-            : w
-        );
-        setDashboard({ ...dashboard, widgets: updatedWidgets });
-      }
-    } catch (error: any) {
-      message.error(error?.response?.data?.detail || '刷新洞察失败');
-      console.error(error);
-    } finally {
-      setRefreshing((prev) => ({ ...prev, [widgetId]: false }));
-    }
-  };
-
   // 获取Widget的数据列
   const getWidgetColumns = (widget: Widget): string[] => {
     if (!widget.data_cache) return [];
@@ -752,23 +683,6 @@ const DashboardEditorPage: React.FC = () => {
   // 渲染Widget
   const renderWidget = (widget: Widget) => {
     const isRefreshing = refreshing[widget.id] || false;
-
-    // 洞察组件单独渲染
-    if (widget.widget_type === 'insight_analysis') {
-      return (
-        <DashboardInsightWidget
-          widgetId={widget.id}
-          insights={widget.data_cache as InsightResult}
-          loading={isRefreshing}
-          onRefresh={() => handleRefreshInsights(widget.id)}
-          onOpenConditionPanel={() => {
-            setCurrentInsightWidget(widget);
-            setConditionPanelVisible(true);
-          }}
-          onViewLineage={() => handleViewLineage(widget.id)}
-        />
-      );
-    }
 
     // 库存分析组件单独渲染
     if (widget.widget_type === 'inventory_analysis') {
@@ -1067,17 +981,6 @@ const DashboardEditorPage: React.FC = () => {
                   智能挖掘
                 </Button>
 
-                <Button
-                  icon={<BulbOutlined />}
-                  onClick={() => {
-                    setCurrentInsightWidget(null);
-                    setConditionPanelVisible(true);
-                  }}
-                  loading={generatingInsights}
-                >
-                  生成洞察
-                </Button>
-
                 <Divider type="vertical" />
 
                 <Button
@@ -1297,25 +1200,6 @@ const DashboardEditorPage: React.FC = () => {
         onAIRecommend={handleAIRecommend}
       />
 
-      {/* 洞察条件面板 */}
-      <InsightConditionPanel
-        visible={conditionPanelVisible}
-        currentConditions={currentInsightWidget?.query_config?.parameters as InsightConditions}
-        onSubmit={async (conditions) => {
-          if (currentInsightWidget) {
-            await handleRefreshInsights(currentInsightWidget.id, conditions);
-          } else {
-            await handleGenerateInsights(conditions);
-          }
-          setConditionPanelVisible(false);
-          setCurrentInsightWidget(null);
-        }}
-        onCancel={() => {
-          setConditionPanelVisible(false);
-          setCurrentInsightWidget(null);
-        }}
-      />
-
       {/* 智能挖掘向导 */}
       <GuidedMiningWizard
         visible={miningWizardVisible}
@@ -1327,31 +1211,6 @@ const DashboardEditorPage: React.FC = () => {
           fetchDashboard();
         }}
       />
-
-      {/* P0: 数据溯源面板 */}
-      <Modal
-        title="数据溯源"
-        open={lineagePanelVisible}
-        onCancel={() => {
-          setLineagePanelVisible(false);
-          setCurrentLineage(null);
-        }}
-        footer={[
-          <Button key="close" onClick={() => setLineagePanelVisible(false)}>
-            关闭
-          </Button>,
-        ]}
-        width={700}
-      >
-        {currentLineage && (
-          <InsightLineagePanel
-            lineage={currentLineage}
-            onViewTables={(tables) => {
-              message.info(`查看表: ${tables.join(', ')}`);
-            }}
-          />
-        )}
-      </Modal>
 
       {/* P2: 数据预测面板 */}
       <Modal

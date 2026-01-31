@@ -83,6 +83,32 @@ class MethodSelectionReason(BaseModel):
     method_scores: Dict[str, float] = Field(default_factory=dict, description="各方法评分")
 
 
+class DataSourceInfo(BaseModel):
+    """数据来源信息 - 让用户知道用了哪些数据"""
+    tables: List[str] = Field(default_factory=list, description="数据表名")
+    columns: List[str] = Field(default_factory=list, description="使用的字段")
+    row_count: int = Field(0, description="数据行数")
+    time_range: Optional[str] = Field(None, description="时间范围")
+    filters_applied: List[str] = Field(default_factory=list, description="应用的筛选条件")
+
+
+class KeyMetricValue(BaseModel):
+    """关键指标值 - 展示计算依据的核心数据"""
+    name: str = Field(..., description="指标名称（如'均值'、'标准差'）")
+    value: float = Field(..., description="指标值")
+    description: str = Field("", description="指标说明")
+    used_in_steps: List[int] = Field(default_factory=list, description="用于哪些推理步骤（步骤序号）")
+
+
+class ReasoningStep(BaseModel):
+    """推理步骤 - 记录从数据到结论的计算过程"""
+    step: int = Field(..., description="步骤序号")
+    description: str = Field(..., description="步骤描述")
+    formula: Optional[str] = Field(None, description="计算公式")
+    input_description: str = Field("", description="输入数据描述")
+    output_description: str = Field("", description="输出结果描述")
+
+
 class PredictionExplanation(BaseModel):
     """预测解释 - 让用户理解预测结果是怎么来的"""
     method_explanation: str = Field(..., description="算法原理说明")
@@ -91,6 +117,10 @@ class PredictionExplanation(BaseModel):
     calculation_steps: List[str] = Field(default_factory=list, description="计算步骤说明")
     confidence_explanation: str = Field("", description="置信区间说明")
     reliability_assessment: str = Field("", description="可靠性评估")
+    # 新增：详细的推理依据
+    data_source: Optional[DataSourceInfo] = Field(None, description="数据来源信息")
+    key_metrics: List[KeyMetricValue] = Field(default_factory=list, description="关键指标值")
+    reasoning_chain: List[ReasoningStep] = Field(default_factory=list, description="详细推理步骤")
 
 
 class PredictionResult(BaseModel):

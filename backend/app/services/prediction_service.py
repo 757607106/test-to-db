@@ -24,6 +24,9 @@ from app.schemas.prediction import (
     DataQualityInfo,
     MethodSelectionReason,
     PredictionExplanation,
+    DataSourceInfo,
+    KeyMetricValue,
+    ReasoningStep,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,7 +132,8 @@ class PredictionService:
         
         # 11. 生成预测解释
         explanation = self._generate_explanation(
-            method, key_params, values, predictions, confidence_level, accuracy
+            method, key_params, values, predictions, confidence_level, accuracy,
+            categories=dates, date_column=date_column, value_column=value_column
         )
         
         return PredictionResult(
@@ -172,22 +176,45 @@ class PredictionService:
         ]
         
         for idx, row in enumerate(data):
-            date_str = str(row.get(date_column, ""))
+            date_val = row.get(date_column)
             value_raw = row.get(value_column)
             
-            # 解析日期
+            # 解析日期 - 优先处理数值型和时间戳
             parsed_date = None
-            for fmt in date_formats:
-                try:
-                    parsed_date = datetime.strptime(date_str[:10], fmt)
-                    break
-                except (ValueError, TypeError):
-                    continue
+            date_str = str(date_val) if date_val is not None else ""
             
+            # 1. 如果是数值类型（序号或时间戳）
+            if isinstance(date_val, (int, float)):
+                # 判断是Unix时间戳还是简单序号
+                if 946684800 < date_val < 4102444800:  # 2000-2100年的时间戳
+                    try:
+                        parsed_date = datetime.fromtimestamp(date_val)
+                    except (ValueError, OSError):
+                        pass
+                
+                # 如果不是时间戳，作为序号处理（不输出警告）
+                if parsed_date is None:
+                    parsed_date = datetime(2000, 1, 1) + timedelta(days=int(date_val))
+            
+            # 2. 如果是datetime对象
+            elif isinstance(date_val, datetime):
+                parsed_date = date_val
+            
+            # 3. 如果是字符串，尝试各种格式
+            elif isinstance(date_val, str) and date_str.strip():
+                for fmt in date_formats:
+                    try:
+                        parsed_date = datetime.strptime(date_str[:10], fmt)
+                        break
+                    except (ValueError, TypeError):
+                        continue
+            
+            # 4. 最后的fallback
             if parsed_date is None:
-                # 无法解析的日期，使用索引作为时间戳
                 parsed_date = datetime(2000, 1, 1) + timedelta(days=idx)
-                logger.warning(f"[预测] 日期解析失败: {date_str}, 使用索引代替")
+                # 只对非数值类型输出警告
+                if not isinstance(date_val, (int, float)):
+                    logger.warning(f"[预测] 日期解析失败: {date_str}, 使用索引代替")
             
             # 解析数值
             value = None
@@ -911,7 +938,10 @@ class PredictionService:
         values: List[float],
         predictions: List[float],
         confidence_level: float,
-        accuracy: AccuracyMetrics
+        accuracy: AccuracyMetrics,
+        categories: Optional[List[str]] = None,
+        date_column: str = "",
+        value_column: str = ""
     ) -> PredictionExplanation:
         """生成预测解释 - 让用户理解预测结果是怎么来的"""
         
@@ -935,9 +965,146 @@ class PredictionService:
         
         info = method_explanations.get(method, method_explanations["linear"])
         
-        # 构建计算步骤
-        steps = []
+        # ==================== 数据来源信息 ====================
+        data_source = DataSourceInfo(
+            tables=["聚合数据"],  # 可从外部传入
+            columns=[date_column, value_column] if date_column and value_column else [],
+            row_count=len(values),
+            time_range=f"{categories[0]} 至 {categories[-1]}" if categories and len(categories) >= 2 else None
+        )
         
+        # ==================== 关键指标值 ====================
+        import numpy as np
+        mean_val = float(np.mean(values))
+        std_val = float(np.std(values))
+        min_val = float(min(values))
+        max_val = float(max(values))
+        
+        key_metrics = [
+            KeyMetricValue(
+                name="均值", 
+                value=round(mean_val, 2),
+                description="历史数据的平均水平",
+                used_in_steps=[1, 3] if method == "linear" else [1]
+            ),
+            KeyMetricValue(
+                name="标准差",
+                value=round(std_val, 2),
+                description="数据波动程度",
+                used_in_steps=[3] if method == "linear" else []
+            ),
+            KeyMetricValue(
+                name="最小值",
+                value=round(min_val, 2),
+                description="历史最低值",
+                used_in_steps=[]
+            ),
+            KeyMetricValue(
+                name="最大值",
+                value=round(max_val, 2),
+                description="历史最高值",
+                used_in_steps=[]
+            )
+        ]
+        
+        # ==================== 详细推理步骤 ====================
+        reasoning_chain = []
+        
+        if method == "linear":
+            slope = key_params.get("slope", 0)
+            intercept = key_params.get("intercept", 0)
+            reasoning_chain = [
+                ReasoningStep(
+                    step=1,
+                    description="统计历史数据基本信息",
+                    input_description=f"{len(values)}个历史数据点",
+                    output_description=f"均值={mean_val:.2f}, 标准差={std_val:.2f}"
+                ),
+                ReasoningStep(
+                    step=2,
+                    description="使用最小二乘法拟合趋势线",
+                    formula="minimize Σ(y_actual - y_predicted)²",
+                    input_description="所有历史数据点",
+                    output_description=f"拟合优度 R²={accuracy.r_squared:.3f}"
+                ),
+                ReasoningStep(
+                    step=3,
+                    description="确定线性方程参数",
+                    formula=f"y = {intercept:.2f} + {slope:.4f} × x",
+                    input_description="拟合结果",
+                    output_description=f"斜率={slope:.4f}(每期变化), 截距={intercept:.2f}(基准值)"
+                ),
+                ReasoningStep(
+                    step=4,
+                    description="计算预测值",
+                    formula=f"{intercept:.2f} + {slope:.4f} × {len(values)}",
+                    input_description=f"下一期序号={len(values)}",
+                    output_description=f"预测值={predictions[0]:.2f}"
+                )
+            ]
+        elif method == "moving_average":
+            window = key_params.get("window", 3)
+            last_avg = key_params.get("last_window_avg", 0)
+            reasoning_chain = [
+                ReasoningStep(
+                    step=1,
+                    description="统计历史数据基本信息",
+                    input_description=f"{len(values)}个历史数据点",
+                    output_description=f"均值={mean_val:.2f}"
+                ),
+                ReasoningStep(
+                    step=2,
+                    description=f"选择最优窗口大小",
+                    input_description="测试不同窗口参数",
+                    output_description=f"最优窗口={window}"
+                ),
+                ReasoningStep(
+                    step=3,
+                    description=f"计算最近{window}期的平均值",
+                    formula=f"avg = (x_{len(values)-window+1} + ... + x_{len(values)}) / {window}",
+                    input_description=f"最近{window}个数据点",
+                    output_description=f"移动平均={last_avg:.2f}"
+                ),
+                ReasoningStep(
+                    step=4,
+                    description="将移动平均作为预测值",
+                    input_description=f"移动平均={last_avg:.2f}",
+                    output_description=f"预测值={predictions[0]:.2f}"
+                )
+            ]
+        else:  # exponential_smoothing
+            alpha = key_params.get("alpha", 0.3)
+            last_smooth = key_params.get("last_smoothed_value", 0)
+            reasoning_chain = [
+                ReasoningStep(
+                    step=1,
+                    description="统计历史数据基本信息",
+                    input_description=f"{len(values)}个历史数据点",
+                    output_description=f"均值={mean_val:.2f}"
+                ),
+                ReasoningStep(
+                    step=2,
+                    description="自动优化平滑系数",
+                    input_description="测试不同α值(0.1~0.9)",
+                    output_description=f"最优α={alpha}"
+                ),
+                ReasoningStep(
+                    step=3,
+                    description="迭代计算指数平滑值",
+                    formula=f"S_t = {alpha} × x_t + {1-alpha} × S_(t-1)",
+                    input_description="逐期应用平滑公式",
+                    output_description=f"最终平滑值={last_smooth:.2f}"
+                ),
+                ReasoningStep(
+                    step=4,
+                    description="将平滑值作为预测值",
+                    input_description=f"平滑值={last_smooth:.2f}",
+                    output_description=f"预测值={predictions[0]:.2f}"
+                )
+            ]
+        
+        # 构建原有的简化步骤（向后兼容）
+        steps = []
         if method == "linear":
             slope = key_params.get("slope", 0)
             intercept = key_params.get("intercept", 0)
@@ -991,7 +1158,11 @@ class PredictionService:
             key_parameters=key_params,
             calculation_steps=steps,
             confidence_explanation=confidence_explanation,
-            reliability_assessment=reliability
+            reliability_assessment=reliability,
+            # 新增字段
+            data_source=data_source,
+            key_metrics=key_metrics,
+            reasoning_chain=reasoning_chain
         )
     
     # ==================== 工具方法 ====================

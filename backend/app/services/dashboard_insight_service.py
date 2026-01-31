@@ -621,6 +621,8 @@ SQL 语法注意事项（{db_type}）：
 
                 # 4. 洞察分析（带重试机制）
                 insights = None
+                retry_count = 0
+                max_retries = 0  # 当前使用规则引擎，无需重试
                 while retry_count <= max_retries:
                     try:
                         analysis_method_parts = [
