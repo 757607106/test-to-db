@@ -21,6 +21,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# 步骤名称到中文标签的映射
+_STEP_LABELS = {
+    "schema_agent": "Schema 分析",
+    "sql_generator": "SQL 生成",
+    "sql_executor": "SQL 执行",
+    "data_analyst": "数据分析",
+    "chart_generator": "图表生成",
+    "error_recovery": "错误恢复",
+    "general_chat": "闲聊处理",
+    "question_recommendation": "问题推荐",
+    "cache_check": "缓存检查",
+    "thread_history_check": "历史记录检查",
+}
+
+
+def _get_step_label(step_name: str) -> str:
+    """获取步骤的中文标签"""
+    return _STEP_LABELS.get(step_name, step_name)
+
+
 def streaming_node(
     step_name: str,
     fallback_stage: str = "error_recovery",

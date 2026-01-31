@@ -74,16 +74,16 @@ export function ensureToolCallsHaveResponses(messages: Message[]): ToolMessage[]
 /**
  * 确保所有 ToolMessage 都有对应的父 AI 消息
  * 修复 "messages with role 'tool' must be a response to a preceeding message with 'tool_calls'" 错误
+ * 
+ * 重要：修复后的消息需要**替换**原消息列表，而不是追加
  */
 export function ensureOrphanedToolMessagesHaveParents(messages: Message[]): Message[] {
   if (!Array.isArray(messages) || messages.length === 0) {
-    return [];
+    return messages;
   }
 
-  const newMessages: Message[] = [];
-  const existingToolCallIdsInAI = new Set<string>();
-
   // 收集所有 AI 消息引用的 tool_call_id
+  const existingToolCallIdsInAI = new Set<string>();
   messages.forEach((msg) => {
     if (msg.type === "ai" && msg.tool_calls) {
       msg.tool_calls.forEach((tc) => {
@@ -92,28 +92,45 @@ export function ensureOrphanedToolMessagesHaveParents(messages: Message[]): Mess
     }
   });
 
-  // 检查每个 ToolMessage
+  // 找出孤立的 ToolMessage
+  const orphanToolMessages: Map<string, Message> = new Map();
   messages.forEach((msg) => {
     if (msg.type === "tool" && msg.tool_call_id) {
       if (!existingToolCallIdsInAI.has(msg.tool_call_id)) {
-        // 发现孤立的 ToolMessage，创建一个虚拟的父 AI 消息
-        newMessages.push({
-          type: "ai",
-          id: `${DO_NOT_RENDER_ID_PREFIX}fix-${uuidv4()}`,
-          content: "",
-          tool_calls: [
-            {
-              name: msg.name || "unknown",
-              args: {},
-              id: msg.tool_call_id,
-            }
-          ]
-        } as unknown as Message);
+        orphanToolMessages.set(msg.tool_call_id, msg);
       }
     }
   });
 
-  return newMessages;
+  // 如果没有孤立的 ToolMessage，直接返回原消息
+  if (orphanToolMessages.size === 0) {
+    return messages;
+  }
+
+  // 重建消息列表，在每个孤立的 ToolMessage 之前插入虚拟父 AI 消息
+  const fixedMessages: Message[] = [];
+  
+  messages.forEach((msg) => {
+    if (msg.type === "tool" && msg.tool_call_id && orphanToolMessages.has(msg.tool_call_id)) {
+      // 在孤立的 ToolMessage 之前插入虚拟父 AI 消息
+      const virtualAI: Message = {
+        type: "ai",
+        id: `${DO_NOT_RENDER_ID_PREFIX}fix-${uuidv4()}`,
+        content: "",
+        tool_calls: [
+          {
+            name: (msg as any).name || "unknown",
+            args: {},
+            id: msg.tool_call_id,
+          }
+        ]
+      } as unknown as Message;
+      fixedMessages.push(virtualAI);
+    }
+    fixedMessages.push(msg);
+  });
+
+  return fixedMessages;
 }
 
 /**

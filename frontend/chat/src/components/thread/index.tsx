@@ -285,8 +285,9 @@ export function Thread() {
       break;
     }
   }
+  // 修复：stage messages 应该在最后一个 AI 消息之后显示（index + 1）
   const stageInsertIndex =
-    lastAssistantIndex >= 0 ? lastAssistantIndex : filteredMessages.length;
+    lastAssistantIndex >= 0 ? lastAssistantIndex + 1 : filteredMessages.length;
   const shouldAppendStageMessages = stageInsertIndex === filteredMessages.length;
   const stageMessageNodes =
     stageMessages.length > 0
