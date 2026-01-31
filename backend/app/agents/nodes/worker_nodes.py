@@ -265,12 +265,27 @@ async def chart_generator_node(state: SQLMessageState, writer: StreamWriter) -> 
     """
     from app.agents.agents.chart_generator_agent import chart_generator_agent
     
+    start_time = time.time()
     agent = get_custom_agent(state, "chart_generator", chart_generator_agent)
     result = await agent.process(state, writer=writer)
+    elapsed_ms = int((time.time() - start_time) * 1000)
     
     # ✅ 修复：保留 error_recovery 状态
     if result.get("current_stage") != "error_recovery":
         result["current_stage"] = "chart_done"
+        if writer:
+            from app.schemas.stream_events import create_stage_message_event
+            chart_config = result.get("chart_config")
+            message = "图表配置已生成。"
+            if isinstance(chart_config, dict):
+                chart_type = chart_config.get("type")
+                if chart_type:
+                    message = f"图表配置已生成：{chart_type} 图。"
+            writer(create_stage_message_event(
+                message=message,
+                step="chart_generator",
+                time_ms=elapsed_ms
+            ))
     
     return result
 
@@ -288,7 +303,34 @@ async def error_recovery_node(state: SQLMessageState, writer: StreamWriter) -> D
     """
     from app.agents.agents.error_recovery_agent import error_recovery_agent
     
+    start_time = time.time()
+    if writer:
+        from app.schemas.stream_events import create_stage_message_event
+        writer(create_stage_message_event(
+            message="检测到错误，正在尝试自动恢复。",
+            step="error_recovery",
+            time_ms=0
+        ))
+    
     result = await error_recovery_agent.process(state)
+    elapsed_ms = int((time.time() - start_time) * 1000)
+    
+    if writer:
+        from app.schemas.stream_events import create_stage_message_event
+        recovery_successful = result.get("recovery_successful")
+        next_stage = result.get("next_stage") or state.get("current_stage")
+        if recovery_successful:
+            message = f"错误恢复成功，继续执行 {next_stage} 阶段。"
+        else:
+            if state.get("current_stage") == "terminated":
+                message = "错误恢复失败，已达到最大重试次数。"
+            else:
+                message = "错误恢复未成功，准备重试。"
+        writer(create_stage_message_event(
+            message=message,
+            step="error_recovery",
+            time_ms=elapsed_ms
+        ))
     return result
 
 
@@ -302,7 +344,7 @@ async def general_chat_node(state: SQLMessageState, writer: StreamWriter) -> Dic
     
     使用默认 LLM 处理非数据查询的对话。
     """
-    from app.schemas.stream_events import create_sql_step_event
+    from app.schemas.stream_events import create_sql_step_event, create_stage_message_event
     from app.core.llms import get_default_model
     from app.agents.nodes.base import extract_user_query
     
@@ -352,6 +394,7 @@ async def clarification_node_wrapper(state: SQLMessageState, writer: StreamWrite
     from app.agents.nodes.clarification_node import clarification_node
     
     logger.info("[Worker] clarification 开始执行")
+    start_time = time.time()
     
     writer(create_sql_step_event(
         step="clarification",
@@ -363,6 +406,7 @@ async def clarification_node_wrapper(state: SQLMessageState, writer: StreamWrite
     try:
         result = clarification_node(state)
         
+        elapsed_ms = int((time.time() - start_time) * 1000)
         if result.get("current_stage") != "schema_analysis":
             result["current_stage"] = "clarification_done"
             writer(create_sql_step_event(
@@ -370,6 +414,17 @@ async def clarification_node_wrapper(state: SQLMessageState, writer: StreamWrite
                 status="completed",
                 result="澄清完成",
                 time_ms=0
+            ))
+            writer(create_stage_message_event(
+                message="澄清完成，继续进行 Schema 分析。",
+                step="clarification",
+                time_ms=elapsed_ms
+            ))
+        else:
+            writer(create_stage_message_event(
+                message="无需澄清，继续进行 Schema 分析。",
+                step="clarification",
+                time_ms=elapsed_ms
             ))
         
         return result

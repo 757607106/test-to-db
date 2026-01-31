@@ -10,14 +10,13 @@
  */
 
 import { v4 as uuidv4 } from "uuid";
-import React, { useEffect, useRef } from "react";
+import React, { Fragment, FormEvent, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useStreamContext, StateType } from "@/providers/Stream";
-import { useState, FormEvent } from "react";
 import { Button } from "../ui/button";
 import { Checkpoint, Message } from "@langchain/langgraph-sdk";
-import { AssistantMessage, AssistantMessageLoading } from "./messages/ai";
+import { AssistantMessage, AssistantMessageLoading, StageMessageBubble } from "./messages/ai";
 import { HumanMessage } from "./messages/human";
 import {
   DO_NOT_RENDER_ID_PREFIX,
@@ -242,6 +241,33 @@ export function Thread() {
   const hasNoAIOrToolMessages = !messages.find(
     (m) => m.type === "ai" || m.type === "tool",
   );
+  const stageMessages = stream.queryContext?.stageMessages ?? [];
+  const filteredMessages = messages.filter(
+    (m) =>
+      !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX) &&
+      m.type !== "tool",
+  );
+  let lastAssistantIndex = -1;
+  for (let i = filteredMessages.length - 1; i >= 0; i -= 1) {
+    if (filteredMessages[i].type === "ai") {
+      lastAssistantIndex = i;
+      break;
+    }
+  }
+  const stageInsertIndex =
+    lastAssistantIndex >= 0 ? lastAssistantIndex : filteredMessages.length;
+  const shouldAppendStageMessages = stageInsertIndex === filteredMessages.length;
+  const stageMessageNodes =
+    stageMessages.length > 0
+      ? stageMessages.map((stage, index) => (
+          <StageMessageBubble
+            key={`stage-${stage.step ?? "stage"}-${stage.time_ms}-${index}`}
+            message={stage.message}
+            step={stage.step}
+            timeMs={stage.time_ms}
+          />
+        ))
+      : null;
 
   return (
     <div className="flex h-screen w-full overflow-hidden">
@@ -387,29 +413,25 @@ export function Thread() {
               contentClassName="pt-8 pb-16  max-w-3xl mx-auto flex flex-col gap-4 w-full"
               content={
                 <>
-                  {messages
-                    .filter(
-                      (m) =>
-                        !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX) &&
-                        m.type !== "tool",
-                    )
-                    .map((message, index) =>
-                      message.type === "human" ? (
+                  {filteredMessages.map((message, index) => (
+                    <Fragment key={message.id || `${message.type}-${index}`}>
+                      {index === stageInsertIndex && stageMessageNodes}
+                      {message.type === "human" ? (
                         <HumanMessage
-                          key={message.id || `${message.type}-${index}`}
                           message={message}
                           isLoading={isLoading}
                         />
                       ) : (
                         <AssistantMessage
-                          key={message.id || `${message.type}-${index}`}
                           message={message}
                           isLoading={isLoading}
                           handleRegenerate={handleRegenerate}
                           connectionId={selectedConnectionId || undefined}
                         />
-                      ),
-                    )}
+                      )}
+                    </Fragment>
+                  ))}
+                  {shouldAppendStageMessages && stageMessageNodes}
                   {/* Special rendering case where there are no AI/tool messages, but there is an interrupt.
                     We need to render it outside of the messages list, since there are no messages to render */}
                   {hasNoAIOrToolMessages && !!stream.interrupt && (

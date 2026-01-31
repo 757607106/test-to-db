@@ -95,13 +95,14 @@ class SupervisorAgent:
 
     def _create_worker_agents(self) -> List[Any]:
         """创建工作代理"""
-        from app.agents.agents.schema_agent import schema_agent
-        from app.agents.agents.sql_generator_agent import sql_generator_agent
-        from app.agents.agents.sql_validator_agent import sql_validator_agent
-        from app.agents.agents.sql_executor_agent import sql_executor_agent
-        from app.agents.agents.error_recovery_agent import error_recovery_agent
-        from app.agents.agents.chart_generator_agent import chart_generator_agent
-        from app.agents.agents.data_analyst_agent import data_analyst_agent
+        # 导入各个功能代理模块
+        from app.agents.agents.schema_agent import schema_agent          # Schema分析代理：分析用户查询并获取相关数据库表结构
+        from app.agents.agents.sql_generator_agent import sql_generator_agent  # SQL生成代理：根据模式信息生成高质量SQL语句
+        from app.agents.agents.sql_validator_agent import sql_validator_agent  # SQL验证代理：验证SQL语法、安全性和性能
+        from app.agents.agents.sql_executor_agent import sql_executor_agent    # SQL执行代理：安全执行SQL并返回结果
+        from app.agents.agents.error_recovery_agent import error_recovery_agent  # 错误恢复代理：处理错误并提供修复方案
+        from app.agents.agents.chart_generator_agent import chart_generator_agent  # 图表生成代理：根据查询结果生成数据可视化图表
+        from app.agents.agents.data_analyst_agent import data_analyst_agent    # 数据分析代理：分析查询结果，生成数据洞察和业务建议
 
         # 获取数据分析 agent（支持自定义）
         analyst_agent = self._get_data_analyst_agent()
