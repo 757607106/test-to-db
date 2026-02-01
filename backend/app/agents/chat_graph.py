@@ -232,7 +232,9 @@ class IntelligentSQLGraph:
         query: str, 
         connection_id: int = 15,
         messages: Optional[List[BaseMessage]] = None,
-        agent_id: Optional[int] = None
+        agent_id: Optional[int] = None,
+        thread_id: Optional[str] = None,
+        tenant_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         处理SQL查询（带意图路由和多轮对话改写）
@@ -286,7 +288,13 @@ class IntelligentSQLGraph:
                 return await self._handle_dashboard_insight(enriched_query, connection_id, intent)
             
             else:  # sql_supervisor
-                result = await self._handle_sql_query(enriched_query, connection_id, intent)
+                result = await self._handle_sql_query(
+                    enriched_query,
+                    connection_id,
+                    intent,
+                    thread_id=thread_id,
+                    tenant_id=tenant_id
+                )
                 # 添加改写信息
                 result["original_query"] = query
                 result["enriched_query"] = enriched_query
@@ -370,7 +378,9 @@ class IntelligentSQLGraph:
         self, 
         query: str, 
         connection_id: int,
-        intent: IntentResult
+        intent: IntentResult,
+        thread_id: Optional[str] = None,
+        tenant_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """处理 SQL 查询（使用 supervisor）"""
         logger.info("处理 SQL 查询")
@@ -392,6 +402,11 @@ class IntelligentSQLGraph:
             max_retries=3,
             error_history=[]
         )
+
+        if thread_id:
+            initial_state["thread_id"] = thread_id
+        if tenant_id is not None:
+            initial_state["tenant_id"] = tenant_id
         
         # 3. 添加意图信息
         initial_state["query_type"] = intent.query_type.value
@@ -438,7 +453,7 @@ class IntelligentSQLGraph:
             initial_state["sample_retrieval_result"] = {"qa_pairs": [], "enabled": False}
         
         # 6. 委托给 supervisor 处理
-        result = await self.supervisor_agent.supervise(initial_state)
+        result = await self.supervisor_agent.supervise(initial_state, thread_id=thread_id)
 
         if result.get("success"):
             return {

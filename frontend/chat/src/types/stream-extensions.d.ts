@@ -16,7 +16,7 @@ declare module "@langchain/langgraph-sdk/react" {
    * Extended return type for useStream hook
    * Adds missing methods that exist at runtime
    */
-  export interface UseStreamReturn<TState = any, TBag = any> {
+  export interface UseStreamReturn<TState = any, _TBag = any> {
     /**
      * Set the conversation branch
      * Used for navigating between different conversation branches

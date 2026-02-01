@@ -2,7 +2,7 @@
  * ClarificationInterruptView 组件
  * 简洁的澄清确认卡片，显示问题和选项
  */
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useStreamContext } from "@/providers/Stream";
 import { cn } from "@/lib/utils";
 import { LoaderCircle, X } from "lucide-react";
@@ -79,7 +79,7 @@ export function ClarificationInterruptView({
         {},
         {
           command: { resume: formattedResponses },
-          streamMode: ["values"],
+          streamMode: ["values", "custom"],
           streamSubgraphs: true,
         } as any
       );
@@ -99,7 +99,7 @@ export function ClarificationInterruptView({
             original_query: interrupt.original_query 
           } 
         },
-        streamMode: ["values"],
+        streamMode: ["values", "custom"],
         streamSubgraphs: true,
       } as any
     );
@@ -256,8 +256,3 @@ export function extractClarificationData(
 /**
  * 检查 interrupt 是否为澄清类型
  */
-export function isClarificationInterrupt(
-  interrupt: unknown
-): boolean {
-  return extractClarificationData(interrupt) !== null;
-}

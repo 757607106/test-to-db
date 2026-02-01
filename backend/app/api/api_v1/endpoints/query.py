@@ -2,7 +2,6 @@ from typing import Any, List, Optional
 from uuid import uuid4
 import time
 import json
-import warnings
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse

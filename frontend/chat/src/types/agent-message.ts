@@ -88,7 +88,7 @@ export function parseToolResult(content: string | any): ToolResponse {
     
     // 递归处理解析后的对象
     return parseToolResult(parsed);
-  } catch (error) {
+  } catch {
     // JSON 解析失败，判断是否为成功的纯文本消息
     const lowerContent = content.toLowerCase();
     const isErrorMessage = 

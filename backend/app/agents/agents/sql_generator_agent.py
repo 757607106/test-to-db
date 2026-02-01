@@ -389,47 +389,6 @@ def generate_sql_with_samples(
         }
 
 
-@tool
-def explain_sql_query(sql_query: str) -> Dict[str, Any]:
-    """
-    解释SQL查询的逻辑和执行计划
-    
-    Args:
-        sql_query: SQL查询语句
-        
-    Returns:
-        SQL查询的解释和分析
-    """
-    try:
-        prompt = f"""
-请详细解释以下SQL查询：
-
-{sql_query}
-
-请提供：
-1. 查询逻辑说明
-2. 执行步骤分析
-3. 可能的性能瓶颈
-4. 结果集预期
-"""
-        
-        # 使用 LLMWrapper 统一处理重试和超时
-        llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR, use_wrapper=True)
-        response = llm.invoke([HumanMessage(content=prompt)])
-        
-        return {
-            "success": True,
-            "explanation": response.content,
-            "sql_query": sql_query
-        }
-        
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-
 class SQLGeneratorAgent:
     """SQL生成代理"""
 
@@ -476,7 +435,7 @@ class SQLGeneratorAgent:
         self.name = "sql_generator_agent"
         # 获取原生 LLM（create_react_agent 需要原生 LLM）
         self._raw_llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
-        self.tools = [generate_sql_query, generate_sql_with_samples, explain_sql_query]
+        self.tools = [generate_sql_query, generate_sql_with_samples]
         
         # 创建ReAct代理（使用原生 LLM）
         self.agent = create_react_agent(
@@ -493,15 +452,14 @@ class SQLGeneratorAgent:
 1. 根据用户查询和数据库模式信息生成准确的SQL语句
 2. 智能判断是否需要优化SQL查询
 3. 仅在必要时进行SQL优化
-4. 提供SQL查询的详细解释
 
 智能工作流程：
 1. 检查是否有样本检索结果
 2. 如果有样本，优先使用 generate_sql_with_samples 工具
 3. 如果没有样本，使用 generate_sql_query 工具生成基础SQL
-4. 根据需要使用 explain_sql_query 工具解释查询逻辑
 
 SQL生成原则：
+- **禁止输出任何解释性文本**：只输出 SQL 语句，不要解释为什么这么写，也不要预测结果。
 - 确保语法正确性
 - 使用适当的连接方式
 - 应用正确的过滤条件
@@ -516,7 +474,7 @@ SQL生成原则：
 - 适应当前查询的具体需求
 - 保持SQL的正确性和效率
 
-请始终生成高质量、可执行的SQL语句，并充分利用样本的指导作用。"""
+请始终生成高质量、可执行的SQL语句，并充分利用样本的指导作用。记住：只给 SQL，不给解释。"""
 
     def _detect_business_ambiguity(self, query: str) -> Optional[Dict[str, Any]]:
         """

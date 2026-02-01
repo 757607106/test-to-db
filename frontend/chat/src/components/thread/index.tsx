@@ -21,7 +21,6 @@ import { HumanMessage } from "./messages/human";
 import {
   DO_NOT_RENDER_ID_PREFIX,
   ensureToolCallsHaveResponses,
-  ensureOrphanedToolMessagesHaveParents,
 } from "@/lib/ensure-tool-responses";
 import { LangGraphLogoSVG } from "../icons/langgraph";
 import { TooltipIconButton } from "./tooltip-icon-button";
@@ -190,10 +189,6 @@ export function Thread() {
     };
 
     const toolMessages = ensureToolCallsHaveResponses(Array.isArray(stream.messages) ? stream.messages : []);
-    
-    // 同时确保孤立的 ToolMessage 有对应的父 AI 消息
-    // 修复 "messages with role 'tool' must be a response to a preceeding message with 'tool_calls'" 错误
-    const orphanFixMessages = ensureOrphanedToolMessagesHaveParents(Array.isArray(stream.messages) ? stream.messages : []);
 
     const context = {
       ...(Object.keys(artifactContext).length > 0 ? artifactContext : {}),
@@ -202,14 +197,14 @@ export function Thread() {
 
     stream.submit(
       {
-        messages: [...orphanFixMessages, ...toolMessages, newHumanMessage],
+        messages: [newHumanMessage],
         // 直接传递 connection_id 和 agent_id 到 state 根级别
         connection_id: selectedConnectionId || undefined,
         agent_id: selectedAgentId || undefined,
         context: Object.keys(context).length > 0 ? context : undefined,
       } as any,
       {
-        streamMode: ["values"],  // 只使用 values 模式，避免内部 LLM 调用的 JSON 响应泄漏
+        streamMode: ["values", "custom"],
         streamSubgraphs: true,
         streamResumable: true,
         optimisticValues: (prev: StateType) => ({
@@ -257,7 +252,7 @@ export function Thread() {
       // 使用 checkpoint 回滚到父状态并重新生成
       stream.submit(undefined, {
         checkpoint: parentCheckpoint,
-        streamMode: ["values"],
+        streamMode: ["values", "custom"],
         streamSubgraphs: true,
       } as any);
     } catch (error) {
@@ -275,8 +270,7 @@ export function Thread() {
   const stageMessages = stream.queryContext?.stageMessages ?? [];
   const filteredMessages = messages.filter(
     (m) =>
-      !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX) &&
-      m.type !== "tool",
+      !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX),
   );
   let lastAssistantIndex = -1;
   for (let i = filteredMessages.length - 1; i >= 0; i -= 1) {

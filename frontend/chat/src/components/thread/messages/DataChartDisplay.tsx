@@ -3,8 +3,7 @@
  * 
  * 智能匹配合适的图表类型，支持最多5种图表
  */
-import { useState, useMemo, memo } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState, useMemo } from "react";
 import {
   BarChart2,
   LineChart as LineChartIcon,
@@ -49,13 +48,13 @@ export function DataChartDisplay({ dataQuery }: DataChartDisplayProps) {
 
   // 生成图表配置 - 提取到 useMemo 中
   const chartConfigs = useMemo(() => {
-    if (!dataQuery?.chart_config || !dataQuery.columns || !dataQuery.rows?.length) return [];
+    if (!dataQuery?.chart_config || !dataQuery.columns || tableData.length === 0) return [];
     return generateChartConfigs(tableData, dataQuery.columns, dataQuery.chart_config);
   }, [tableData, dataQuery?.columns, dataQuery?.chart_config]);
 
   if (!dataQuery || !dataQuery.chart_config) return null;
 
-  const { columns, rows } = dataQuery;
+  const { rows } = dataQuery;
   const hasData = rows && rows.length > 0;
 
   if (!hasData) return null;

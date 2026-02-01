@@ -13,6 +13,7 @@ LangGraph Checkpointer 工厂模块 (异步版本)
 https://langchain-ai.github.io/langgraph/reference/checkpoints/#asyncpostgressaver
 """
 from typing import Optional, Any
+import os
 import logging
 import asyncio
 import sys
@@ -33,6 +34,15 @@ _connection_pool: Optional[AsyncConnectionPool] = None
 _postgres_saver_cm: Optional[Any] = None
 
 
+def _is_langgraph_api_runtime() -> bool:
+    return bool(
+        os.getenv("LANGGRAPH_API_URL")
+        or os.getenv("LANGGRAPH_RUNTIME_EDITION")
+        or os.getenv("LANGSERVE_GRAPHS")
+        or os.getenv("LANGSMITH_LANGGRAPH_API_VARIANT")
+    )
+
+
 async def create_checkpointer_async() -> Optional[AsyncPostgresSaver]:
     """
     创建 AsyncPostgresSaver 实例（官方推荐）
@@ -51,6 +61,10 @@ async def create_checkpointer_async() -> Optional[AsyncPostgresSaver]:
     """
     global _connection_pool
     
+    if _is_langgraph_api_runtime():
+        logger.info("LangGraph API 运行环境，跳过自定义 Checkpointer")
+        return None
+
     mode = settings.CHECKPOINT_MODE.lower()
     
     # 检查是否禁用
@@ -104,6 +118,10 @@ async def create_checkpointer_async() -> Optional[AsyncPostgresSaver]:
 
 
 def create_checkpointer() -> Optional[Any]:
+    if _is_langgraph_api_runtime():
+        logger.info("LangGraph API 运行环境，跳过自定义 Checkpointer")
+        return None
+
     mode = settings.CHECKPOINT_MODE.lower()
 
     if mode == "none" or mode == "":
@@ -174,35 +192,8 @@ def create_checkpointer_sync() -> Optional[AsyncPostgresSaver]:
         return asyncio.run(create_checkpointer_async())
 
 
-def _mask_password(uri: str) -> str:
-    """
-    隐藏连接字符串中的密码（用于日志输出）
-    
-    Args:
-        uri: 数据库连接字符串
-        
-    Returns:
-        隐藏密码后的连接字符串
-    """
-    try:
-        # postgresql://user:password@host:port/database
-        if "://" in uri and "@" in uri:
-            protocol, rest = uri.split("://", 1)
-            if "@" in rest:
-                credentials, location = rest.split("@", 1)
-                if ":" in credentials:
-                    user, _ = credentials.split(":", 1)
-                    return f"{protocol}://{user}:****@{location}"
-        return uri
-    except Exception:
-        return "****"
-
-
 # 全局 Checkpointer 实例（单例模式）
 _global_checkpointer: Optional[Any] = None
-_checkpointer_lock = asyncio.Lock() if hasattr(asyncio, 'Lock') else None
-
-
 async def get_checkpointer_async() -> Optional[AsyncPostgresSaver]:
     """
     异步获取全局 Checkpointer 实例（单例模式）
@@ -240,6 +231,9 @@ def get_checkpointer() -> Optional[Any]:
     """
     global _global_checkpointer
     
+    if _is_langgraph_api_runtime():
+        return None
+
     if _global_checkpointer is None:
         try:
             _global_checkpointer = create_checkpointer()

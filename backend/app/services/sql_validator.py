@@ -129,32 +129,23 @@ class SQLValidator:
         return result
     
     def _check_basic_syntax(self, sql: str, result: SQLValidationResult):
-        """基础语法检查"""
+        """
+        基础语法检查 - 仅做最基本的格式验证
+        
+        注意：复杂的语法验证交给 LLM 处理，避免规则引擎误报
+        """
         sql_upper = sql.upper().strip()
         
-        # 检查是否以 SELECT 开头（只读模式）
+        # 检查是否以 SELECT 或 WITH 开头（只读模式）
         if not sql_upper.startswith('SELECT') and not sql_upper.startswith('WITH'):
             result.add_error(f"只支持 SELECT 查询，当前语句以 '{sql_upper.split()[0] if sql_upper else '空'}' 开头")
             return
         
-        # 检查括号匹配
+        # 仅检查明显的括号不匹配（差异 >= 2 才报错，避免误报）
         open_parens = sql.count('(')
         close_parens = sql.count(')')
-        if open_parens != close_parens:
-            result.add_error(f"括号不匹配：左括号 {open_parens} 个，右括号 {close_parens} 个")
-            return
-        
-        # 检查引号匹配（简单检查）
-        single_quotes = sql.count("'")
-        if single_quotes % 2 != 0:
-            result.add_error("单引号不匹配")
-            return
-        
-        # 检查是否有 FROM 子句（SELECT 语句必须有）
-        if sql_upper.startswith('SELECT') and ' FROM ' not in sql_upper:
-            # 允许 SELECT 1, SELECT NOW() 等不需要 FROM 的情况
-            if not re.search(r'SELECT\s+[\d\w\(\)]+\s*$', sql_upper):
-                result.add_warning("SELECT 语句缺少 FROM 子句")
+        if abs(open_parens - close_parens) >= 2:
+            result.add_warning(f"括号可能不匹配：左括号 {open_parens} 个，右括号 {close_parens} 个")
     
     def _check_security(self, sql: str, result: SQLValidationResult):
         """安全检查 - 禁止危险操作"""

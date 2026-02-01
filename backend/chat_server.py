@@ -30,7 +30,7 @@ def setup_environment():
     # Set environment variables
     os.environ.update({
         # Database and storage - 使用自定义 PostgreSQL checkpointer
-        # "POSTGRES_URI": "postgresql://postgres:postgres@localhost:5432/langgraph_checkpointer_db?sslmode=disable",
+        "POSTGRES_URI": "postgresql://langgraph:langgraph_password_2026@localhost:5433/langgraph_checkpoints",
         # "REDIS_URI": "redis://localhost:6379",
         "DATABASE_URI": ":memory:",
         "REDIS_URI": "fake",

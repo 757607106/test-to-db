@@ -1,8 +1,8 @@
 
 "use client";
 
-import React, { useState, useEffect } from 'react';
-import { Database, ChevronDown } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Database } from 'lucide-react';
 import {
   Select,
   SelectContent,
@@ -32,21 +32,7 @@ export function DatabaseConnectionSelector({
   const [error, setError] = useState<string | null>(null);
   const [autoSelected, setAutoSelected] = useState(false);
 
-  useEffect(() => {
-    fetchConnections();
-  }, []);
-
-  // 新增: 当只有一个数据库连接时自动选择
-  useEffect(() => {
-    if (!autoSelected && connections.length === 1 && !value) {
-      const singleConnection = connections[0];
-      onChange(singleConnection.id);
-      setAutoSelected(true);
-      console.log(`自动选择唯一的数据库连接: ${singleConnection.name} (ID: ${singleConnection.id})`);
-    }
-  }, [connections, value, onChange, autoSelected]);
-
-  const fetchConnections = async () => {
+  const fetchConnections = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -63,7 +49,21 @@ export function DatabaseConnectionSelector({
     } finally {
       setLoading(false);
     }
-  };
+  }, [onLoaded]);
+
+  useEffect(() => {
+    fetchConnections();
+  }, [fetchConnections]);
+
+  // 新增: 当只有一个数据库连接时自动选择
+  useEffect(() => {
+    if (!autoSelected && connections.length === 1 && !value) {
+      const singleConnection = connections[0];
+      onChange(singleConnection.id);
+      setAutoSelected(true);
+      console.log(`自动选择唯一的数据库连接: ${singleConnection.name} (ID: ${singleConnection.id})`);
+    }
+  }, [connections, value, onChange, autoSelected]);
 
   const handleValueChange = (stringValue: string) => {
     if (stringValue === "none") {

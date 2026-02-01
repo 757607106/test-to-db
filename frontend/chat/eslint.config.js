@@ -25,10 +25,7 @@ export default tseslint.config(
         "warn",
         { args: "none", argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
-      "react-refresh/only-export-components": [
-        "warn",
-        { allowConstantExport: true },
-      ],
+      "react-refresh/only-export-components": 0,
     },
   },
 );

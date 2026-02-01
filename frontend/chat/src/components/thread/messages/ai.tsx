@@ -11,7 +11,7 @@ import { BranchSwitcher, CommandBar } from "./shared";
 import { MarkdownText } from "../markdown-text";
 import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 import { cn } from "@/lib/utils";
-import { Fragment, useCallback, useMemo, useState, memo } from "react";
+import { Fragment, useCallback, useMemo, memo } from "react";
 import { isAgentInboxInterruptSchema } from "@/lib/agent-inbox-interrupt";
 import { DO_NOT_RENDER_ID_PREFIX } from "@/lib/ensure-tool-responses";
 import { ThreadView } from "../agent-inbox";
@@ -22,6 +22,8 @@ import {
   extractClarificationData 
 } from "./clarification-interrupt";
 import { useArtifact } from "../artifact";
+import { ToolCall } from "@langchain/core/messages/tool";
+import { ToolCallTable } from "../agent-inbox/components/tool-call-table";
 import { DataChartDisplay } from "./DataChartDisplay";
 import { InsightDisplay } from "./InsightDisplay";
 import {
@@ -98,6 +100,81 @@ export function StageMessageBubble({
             <pre className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words">
               {message}
             </pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function getToolContentString(content: Message["content"]): string {
+  if (typeof content === "string") return content;
+  if (!content || !Array.isArray(content)) return "";
+  return content
+    .map((c) => {
+      if (typeof c === "string") return c;
+      if (c && typeof c === "object" && "type" in c) {
+        const candidate = c as { type?: string; text?: string };
+        if (candidate.type === "text" && typeof candidate.text === "string") {
+          return candidate.text;
+        }
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join(" ");
+}
+
+function ToolMessageBubble({ message }: { message: Message }) {
+  const toolName = (message as { name?: string }).name ?? "tool";
+  const toolCallId = (message as { tool_call_id?: string }).tool_call_id;
+  const rawContent = getToolContentString(message.content);
+  let formattedContent = rawContent;
+  let status: string | undefined;
+  let summary: string | undefined;
+
+  if (rawContent) {
+    try {
+      const parsed = JSON.parse(rawContent) as Record<string, unknown>;
+      formattedContent = JSON.stringify(parsed, null, 2);
+      if (typeof parsed?.status === "string") {
+        status = parsed.status;
+      }
+      if (typeof parsed?.message === "string") {
+        summary = parsed.message;
+      } else if (typeof parsed?.error === "string") {
+        summary = parsed.error;
+      }
+    } catch {
+      formattedContent = rawContent;
+    }
+  }
+
+  return (
+    <div className="group mr-auto flex w-full items-start gap-2">
+      <div className="flex w-full flex-col gap-2">
+        <div className="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900 overflow-hidden shadow-sm">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40">
+            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              {toolCallId ? `${toolName} #${toolCallId.slice(0, 8)}` : toolName}
+            </span>
+            {status && (
+              <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                {status}
+              </span>
+            )}
+          </div>
+          <div className="px-3 py-2 space-y-2">
+            {summary && (
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                {summary}
+              </div>
+            )}
+            {formattedContent && (
+              <pre className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words">
+                {formattedContent}
+              </pre>
+            )}
           </div>
         </div>
       </div>
@@ -198,7 +275,7 @@ export function AssistantMessage({
       }
     }
     return undefined;
-  }, [thread.messages.length, thread.messages[thread.messages.length - 1]?.id]); // 只依赖长度和最后一条消息
+  }, [thread.messages]);
   
   const isLastMessage = lastRenderableMessageId === message?.id;
   const hasNoAIOrToolMessages = !thread.messages.find(
@@ -209,40 +286,11 @@ export function AssistantMessage({
 
   const parentCheckpoint = meta?.firstSeenState?.parent_checkpoint;
   const isToolResult = message?.type === "tool";
+  const toolCalls =
+    message && "tool_calls" in message && Array.isArray(message.tool_calls)
+      ? (message.tool_calls as ToolCall[])
+      : [];
 
-  // 数据可视化相关
-  // 检查当前消息是否关联了 queryContext 数据
-  // 逻辑优化：
-  // 1. 如果是最后一条消息，直接使用当前的 queryContext
-  // 2. 如果是历史消息，我们需要一种机制来关联数据。目前最简单的方式是假设只有最后一条消息持有当前的 queryContext。
-  //    为了支持历史记录回看，我们需要确认 queryContext 是否包含了历史数据或者消息本身是否携带了这些数据。
-  //    在此项目中，StreamProvider 似乎只维护了"当前"的 queryContext。
-  //    为了让历史消息也能显示图表，我们暂时放宽限制：如果 thread.queryContext 存在且对应的消息 ID 匹配（如果有这个字段）
-  //    或者，我们简单地只在最后一条消息显示，但用户反馈"看不到了"，说明可能在流式传输结束后，isLastMessage 状态变化或者 queryContext 被清空了？
-  //    通常 queryContext 会保留直到下一次查询。
-  //    用户的问题可能是：当生成结束后，虽然还是最后一条消息，但某些状态可能变了。
-  //    或者用户进行了新的对话，旧的消息就不显示图表了。
-  //    为了解决这个问题，我们需要查看 artifact 或其他持久化存储。
-  //    但在现有架构下，最稳妥的修复是：确保只要是最后一条消息，或者该消息触发了查询（需要后端配合将 ID 写入），就显示。
-  //    
-  //    根据现有代码，thread.queryContext 是全局单例的。这意味着只有最后一次查询的结果被保存在 Context 中。
-  //    因此，历史消息确实无法显示旧的图表/推荐问题，除非这些数据被持久化到了 message.content 或 artifact 中。
-  //    
-  //    现在的临时修复（针对用户反馈"看不到了"）：
-  //    用户可能是在流式生成过程中能看到，生成完（或者状态切换）后消失了。
-  //    或者用户指的历史记录里没有。
-  //    
-  //    如果在历史记录中也需要，我们需要检查 message 中是否包含 tool_call 结果，并从中提取数据。
-  //    但这里的 DataChartDisplay 依赖于 `dataQuery` 对象。
-  //    
-  //    让我们先确保在"当前会话"中，只要数据存在就显示，稍微放宽 isLastMessage 的判断，
-  //    或者确认一下是否因为 key 变化导致重渲染丢失。
-  
-  // 修正：移除 isLastMessage 限制，只要 queryContext 存在且属于当前上下文周期即可。
-  // 但这样会导致所有 AI 消息都显示同一个图表。
-  // 正确的做法是：图表应该只关联到触发它的那条消息。
-  // 假设当前场景用户是在进行单轮或多轮对话，期望最新的结果常驻。
-  
   const hasQueryData = thread.queryContext?.dataQuery;
   const hasChartConfig = hasQueryData && thread.queryContext?.dataQuery?.chart_config;
   const hasSimilarQuestions = thread.queryContext?.similarQuestions?.questions && 
@@ -294,7 +342,7 @@ export function AssistantMessage({
     }, 50);
   }, []);
 
-  if (isToolResult) return null;
+  if (isToolResult && message) return <ToolMessageBubble message={message} />;
 
   return (
     <div className="group mr-auto flex w-full items-start gap-2">
@@ -327,6 +375,17 @@ export function AssistantMessage({
               questions={thread.queryContext.similarQuestions.questions}
               onSelectQuestion={handleSelectQuestion}
             />
+          )}
+
+          {toolCalls.length > 0 && (
+            <div className="flex w-full flex-col items-start gap-2">
+              {toolCalls.map((toolCall, idx) => (
+                <ToolCallTable
+                  key={`${toolCall.id || "tool-call"}-${idx}`}
+                  toolCall={toolCall}
+                />
+              ))}
+            </div>
           )}
 
           {/* 自定义组件 */}

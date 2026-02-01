@@ -12,8 +12,6 @@
 from typing import Dict, Any, List, Optional
 import logging
 
-from langchain_core.runnables import RunnableConfig
-from langchain_core.messages import RemoveMessage
 from langgraph_supervisor import create_supervisor
 from langgraph.types import interrupt
 
@@ -168,6 +166,16 @@ class SupervisorAgent:
             output_mode="last_message",  # 优化：只返回最后一条消息，减少 token
             pre_model_hook=trim_messages_hook,  # 消息历史裁剪
         )
+
+        try:
+            from app.core.checkpointer import get_checkpointer
+            checkpointer = get_checkpointer()
+        except Exception as e:
+            logger.warning(f"获取 Checkpointer 失败，使用无状态模式: {e}")
+            checkpointer = None
+
+        if checkpointer is not None:
+            return supervisor.compile(checkpointer=checkpointer)
 
         return supervisor.compile()
 
@@ -350,7 +358,7 @@ class SupervisorAgent:
             logger.error(f"澄清检测失败: {e}")
             return None
 
-    async def supervise(self, state: SQLMessageState) -> Dict[str, Any]:
+    async def supervise(self, state: SQLMessageState, thread_id: Optional[str] = None) -> Dict[str, Any]:
         """监督整个流程"""
         try:
             # 1. 检查是否需要澄清
@@ -402,7 +410,11 @@ class SupervisorAgent:
                     logger.info(f"查询已增强: {state['enriched_query'][:100]}...")
             
             # 2. 执行 supervisor 流程
-            result = await self.supervisor.ainvoke(state)
+            config = {"configurable": {"thread_id": thread_id}} if thread_id else None
+            if config is not None:
+                result = await self.supervisor.ainvoke(state, config=config)
+            else:
+                result = await self.supervisor.ainvoke(state)
             return {
                 "success": True,
                 "result": result,

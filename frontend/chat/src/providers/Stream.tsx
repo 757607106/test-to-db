@@ -43,7 +43,6 @@ import {
 // 从拆分模块导入类型和辅助函数
 import {
   type StateType,
-  type BagType,
   type ExtendedStreamContextType,
 } from "./stream/types";
 import {
@@ -127,16 +126,6 @@ const StreamSession = ({
       console.warn("Failed to load queryContext from localStorage:", e);
     }
     return null;
-  }, []);
-  
-  // 清除 localStorage 中的 queryContext
-  const clearQueryContextFromStorage = useCallback((tid: string | null) => {
-    if (!tid) return;
-    try {
-      localStorage.removeItem(getStorageKey(tid));
-    } catch (e) {
-      console.warn("Failed to clear queryContext from localStorage:", e);
-    }
   }, []);
   
   // 重置查询上下文

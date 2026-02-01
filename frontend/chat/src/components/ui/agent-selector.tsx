@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
-import { Bot, ChevronDown } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Bot } from 'lucide-react';
 import {
   Select,
   SelectContent,
@@ -31,21 +31,7 @@ export function AgentSelector({
   const [error, setError] = useState<string | null>(null);
   const [autoSelected, setAutoSelected] = useState(false);
 
-  useEffect(() => {
-    fetchAgents();
-  }, []);
-
-  // 新增: 当只有一个自定义智能体时自动选择
-  useEffect(() => {
-    if (!autoSelected && agents.length === 1 && !value) {
-      const singleAgent = agents[0];
-      onChange(singleAgent.id);
-      setAutoSelected(true);
-      console.log(`自动选择唯一的智能体: ${singleAgent.name} (ID: ${singleAgent.id})`);
-    }
-  }, [agents, value, onChange, autoSelected]);
-
-  const fetchAgents = async () => {
+  const fetchAgents = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -66,7 +52,21 @@ export function AgentSelector({
     } finally {
       setLoading(false);
     }
-  };
+  }, [onLoaded]);
+
+  useEffect(() => {
+    fetchAgents();
+  }, [fetchAgents]);
+
+  // 新增: 当只有一个自定义智能体时自动选择
+  useEffect(() => {
+    if (!autoSelected && agents.length === 1 && !value) {
+      const singleAgent = agents[0];
+      onChange(singleAgent.id);
+      setAutoSelected(true);
+      console.log(`自动选择唯一的智能体: ${singleAgent.name} (ID: ${singleAgent.id})`);
+    }
+  }, [agents, value, onChange, autoSelected]);
 
   const handleValueChange = (stringValue: string) => {
     if (stringValue === "none") {

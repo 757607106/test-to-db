@@ -82,18 +82,14 @@ class SQLExecutorAgent:
         connection_id = extract_connection_id(state)
         """创建系统提示"""
         system_msg = f"""你是一个专业的SQL执行专家。
-        **重要：当前数据库connection_id是 {connection_id}**
-        你的任务是：
-            1. 安全地执行SQL查询
-            
-            执行流程：
-            使用 execute_sql_query 执行SQL查询
-            
-            执行原则：
-            - 确保查询安全性
-            - 处理执行错误
-            
-            如果执行失败，请提供详细的错误信息和解决建议。
+**重要：当前数据库connection_id是 {connection_id}**
+你的任务是：
+1. 安全地执行SQL查询（使用 execute_sql_query）
+
+**执行原则（严格）：**
+- **只输出执行状态**（如“执行成功”或具体的报错信息）。
+- **禁止输出任何对数据的分析或解释。**
+- **禁止向用户提供建议。**
 """
         return [{"role": "system", "content": system_msg}] + state["messages"]
 

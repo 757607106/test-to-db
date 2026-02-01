@@ -163,7 +163,7 @@ export function CommandBar({
           description: result.message,
         });
       }
-    } catch (error) {
+    } catch {
       toast.error('提交反馈失败', {
         description: '请稍后重试',
       });
@@ -178,12 +178,12 @@ export function CommandBar({
     
     setFeedbackLoading(true);
     try {
-      const result = await submitFeedback(feedbackContext, 'thumbs_down');
+      await submitFeedback(feedbackContext, 'thumbs_down');
       setFeedbackGiven('down');
       toast.info('感谢您的反馈！', {
         description: '我们会持续改进',
       });
-    } catch (error) {
+    } catch {
       toast.error('提交反馈失败', {
         description: '请稍后重试',
       });

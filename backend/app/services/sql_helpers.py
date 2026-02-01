@@ -10,6 +10,7 @@ Phase 1 优化:
 - 添加 Schema 格式验证工具函数
 """
 from typing import Any
+import re
 
 
 def get_sql_syntax_guide(db_type: str) -> str:
@@ -466,7 +467,7 @@ def validate_sql_syntax(sql: str) -> Tuple[bool, str]:
         return False, "单引号不匹配"
     
     # 检查是否有 FROM 子句（除非是简单的 SELECT 1 类型）
-    if "FROM" not in sql_upper and "SELECT 1" not in sql_upper and "SELECT '" not in sql_upper:
+    if not re.search(r'\bFROM\b', sql_upper) and not re.search(r'SELECT\s+[\d\w\(\)]+\s*$', sql_upper):
         return False, "缺少 FROM 子句"
     
     # 检查常见语法错误
