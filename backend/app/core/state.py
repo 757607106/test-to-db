@@ -47,6 +47,9 @@ class SQLMessageState(AgentState):
 
     # 执行结果
     execution_result: Optional[SQLExecutionResult] = None
+    
+    # 查询结果数据（原始数据记录）
+    query_results: Optional[List[Dict[str, Any]]] = None
 
     # 样本检索结果
     sample_retrieval_result: Optional[Dict[str, Any]] = None
@@ -71,6 +74,19 @@ class SQLMessageState(AgentState):
 
     # 错误历史
     error_history: List[Dict[str, Any]] = field(default_factory=list)
+    
+    # ===== 防护机制相关字段 =====
+    # Supervisor 调用轮次计数
+    supervisor_turn_count: int = 0
+    
+    # 上一个调用的 Agent
+    last_agent_called: Optional[str] = None
+    
+    # Agent 调用历史（用于循环检测）
+    agent_call_history: List[str] = field(default_factory=list)
+    
+    # 已完成的阶段列表
+    completed_stages: List[str] = field(default_factory=list)
 
 def extract_connection_id(state: SQLMessageState) -> int:
     """从状态中提取数据库连接ID"""

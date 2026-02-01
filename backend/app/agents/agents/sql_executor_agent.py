@@ -2,64 +2,92 @@
 SQL执行代理
 负责安全地执行SQL查询并处理结果
 """
-from typing import Dict, Any
+from typing import Dict, Any, Annotated
 
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import tool
-from langchain_core.messages import AIMessage, AnyMessage
-from langgraph.prebuilt import create_react_agent
+from langchain_core.tools import tool, InjectedToolCallId
+from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
+from langgraph.prebuilt import create_react_agent, InjectedState
+from langgraph.types import Command
 
 from app.core.state import SQLMessageState, SQLExecutionResult, extract_connection_id
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 
 
 @tool
-def execute_sql_query(sql_query: str, connection_id, timeout: int = 30) -> Dict[str, Any]:
+def execute_sql_query(
+    sql_query: str, 
+    state: Annotated[dict, InjectedState],
+    tool_call_id: Annotated[str, InjectedToolCallId]
+) -> Command:
     """
-    执行SQL查询
+    执行SQL查询并更新状态
 
     Args:
         sql_query: SQL查询语句
-        connection_id: 数据库连接ID
-        timeout: 超时时间（秒）
 
     Returns:
-        查询执行结果
+        Command: 更新父图 query_results 状态的命令
     """
     try:
+        # 从状态获取 connection_id
+        connection_id = state.get("connection_id") or extract_connection_id(state)
+        if not connection_id:
+            return Command(
+                graph=Command.PARENT,
+                update={
+                    "messages": [ToolMessage(
+                        content="错误：未指定数据库连接",
+                        tool_call_id=tool_call_id
+                    )]
+                }
+            )
+        
         # 根据connection_id获取数据库连接并执行查询
         from app.services.db_service import get_db_connection_by_id, execute_query_with_connection
 
         # 获取数据库连接
         connection = get_db_connection_by_id(connection_id)
         if not connection:
-            return {
-                "success": False,
-                "error": f"找不到连接ID为 {connection_id} 的数据库连接"
-            }
+            return Command(
+                graph=Command.PARENT,
+                update={
+                    "messages": [ToolMessage(
+                        content=f"找不到连接ID为 {connection_id} 的数据库连接",
+                        tool_call_id=tool_call_id
+                    )]
+                }
+            )
 
         # 执行查询
         result_data = execute_query_with_connection(connection, sql_query)
-
-        return {
-            "success": True,
-            "data": {
-                "columns": list(result_data[0].keys()) if result_data else [],
-                "data": [list(row.values()) for row in result_data],
-                "row_count": len(result_data),
-                "column_count": len(result_data[0].keys()) if result_data else 0
-            },
-            "error": None,
-            "execution_time": 0,
-            "rows_affected": len(result_data)
-        }
+        
+        row_count = len(result_data) if result_data else 0
+        
+        # 返回 Command 更新父图状态（关键：graph=Command.PARENT）
+        return Command(
+            graph=Command.PARENT,
+            update={
+                "query_results": result_data,
+                "current_stage": "data_analysis",
+                "messages": [ToolMessage(
+                    content=f"SQL执行成功，返回 {row_count} 条记录",
+                    tool_call_id=tool_call_id
+                )]
+            }
+        )
 
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "execution_time": 0
-        }
+        return Command(
+            graph=Command.PARENT,
+            update={
+                "current_stage": "error_recovery",
+                "messages": [ToolMessage(
+                    content=f"SQL执行失败: {str(e)}",
+                    tool_call_id=tool_call_id
+                )]
+            }
+        )
 
 
 class SQLExecutorAgent:

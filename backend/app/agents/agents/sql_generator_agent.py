@@ -16,14 +16,14 @@ Skill 模式支持：
 - 使用 interrupt() 暂停等待用户确认
 - 只问业务问题，不问技术问题（表名、字段名）
 """
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Annotated
 import re
 import logging
-from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, AIMessage
-from langgraph.prebuilt import create_react_agent
+from langchain_core.tools import tool, InjectedToolCallId
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langgraph.prebuilt import create_react_agent, InjectedState
 from langgraph.config import get_stream_writer
-from langgraph.types import interrupt
+from langgraph.types import interrupt, Command
 from langgraph.errors import GraphInterrupt
 
 from app.core.state import SQLMessageState
@@ -42,56 +42,51 @@ logger = logging.getLogger(__name__)
 @tool
 def generate_sql_query(
     user_query: str,
-    schema_info: Dict[str, Any],
-    value_mappings: Dict[str, Any] = None,
-    db_type: str = "mysql",
-    sample_qa_pairs: List[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+    state: Annotated[dict, InjectedState],
+    tool_call_id: Annotated[str, InjectedToolCallId]
+) -> Command:
     """
-    根据用户查询和模式信息生成SQL语句
+    根据用户查询和模式信息生成SQL语句，并更新状态
 
     Args:
         user_query: 用户的自然语言查询
-        schema_info: 数据库模式信息
-        value_mappings: 值映射信息
-        db_type: 数据库类型
-        sample_qa_pairs: 相关的SQL问答对样本
 
     Returns:
-        生成的SQL语句和相关信息
+        Command: 更新 generated_sql 状态的命令
     """
     try:
+        # 从状态获取信息
+        schema_info = state.get("schema_info", {})
+        value_mappings = schema_info.get("value_mappings", {})
+        db_type = state.get("db_type", "mysql")
+        sample_retrieval_result = state.get("sample_retrieval_result", {})
+        sample_qa_pairs = sample_retrieval_result.get("qa_pairs", [])
+        
         # 获取数据库语法指南
         syntax_guide = get_syntax_guide_for_prompt(db_type)
-        dialect = get_dialect(db_type)
         
-        # 构建详细的上下文信息
+        # 构建上下文
         context = f"""
 数据库类型: {db_type}
 
 {syntax_guide}
 
 可用的表和字段信息:
-{schema_info}
+{schema_info.get('schema_context', {})}
 """
         
         if value_mappings:
-            context += f"""
-值映射信息:
-{value_mappings}
-"""
+            context += f"\n值映射信息:\n{value_mappings}\n"
 
         # 添加样本参考信息
         sample_context = ""
         if sample_qa_pairs:
             sample_context = "\n参考样本:\n"
-            for i, sample in enumerate(sample_qa_pairs[:3], 1):  # 最多使用3个样本
+            for i, sample in enumerate(sample_qa_pairs[:3], 1):
                 sample_context += f"""
 样本{i}:
 问题: {sample.get('question', '')}
 SQL: {sample.get('sql', '')}
-查询类型: {sample.get('query_type', '')}
-成功率: {sample.get('success_rate', 0):.2f}
 """
 
         # 构建SQL生成提示词
@@ -101,44 +96,53 @@ SQL: {sample.get('sql', '')}
 用户查询: {user_query}
 
 {context}
-
 {sample_context}
 
 请生成一个准确、高效的SQL查询语句。要求：
 1. 只返回SQL语句，不要其他解释
-2. 【重要】严格遵循上述数据库语法规则
+2. 严格遵循数据库语法规则
 3. 使用适当的连接和过滤条件
 4. 限制结果数量（除非用户明确要求全部数据）
-5. 使用正确的值映射
-6. 参考样本的SQL结构和模式，但要适应当前查询的具体需求
-7. 优先参考高成功率的样本
 """
         
-        # 使用 LLMWrapper 统一处理重试和超时
+        # 使用 LLM 生成 SQL
         llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR, use_wrapper=True)
         response = llm.invoke([HumanMessage(content=prompt)])
         
-        # 提取SQL语句
+        # 提取并清理SQL语句
         sql_query = response.content.strip()
-        
-        # 简单的SQL清理
         if sql_query.startswith("```sql"):
             sql_query = sql_query[6:]
+        if sql_query.startswith("```"):
+            sql_query = sql_query[3:]
         if sql_query.endswith("```"):
             sql_query = sql_query[:-3]
         sql_query = sql_query.strip()
         
-        return {
-            "success": True,
-            "sql_query": sql_query,
-            "context_used": context
-        }
+        # 返回 Command 更新父图状态（关键：graph=Command.PARENT）
+        return Command(
+            graph=Command.PARENT,
+            update={
+                "generated_sql": sql_query,
+                "current_stage": "sql_validation",
+                "messages": [ToolMessage(
+                    content=f"SQL 已生成:\n```sql\n{sql_query}\n```",
+                    tool_call_id=tool_call_id
+                )]
+            }
+        )
         
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return Command(
+            graph=Command.PARENT,
+            update={
+                "current_stage": "error_recovery",
+                "messages": [ToolMessage(
+                    content=f"SQL生成失败: {str(e)}",
+                    tool_call_id=tool_call_id
+                )]
+            }
+        )
 
 
 
@@ -269,7 +273,8 @@ class SQLGeneratorAgent:
         self.name = "sql_generator_agent"
         # 获取原生 LLM（create_react_agent 需要原生 LLM）
         self._raw_llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
-        self.tools = [generate_sql_query, generate_sql_with_samples]
+        # 只使用 generate_sql_query（已经自动处理样本）
+        self.tools = [generate_sql_query]
         
         # 创建ReAct代理（使用自定义 state_schema 以支持 connection_id 等字段）
         self.agent = create_react_agent(
@@ -284,25 +289,14 @@ class SQLGeneratorAgent:
         """创建系统提示"""
         return """你是一个专业的SQL生成专家。你的任务是：
 
-1. 根据用户查询和模式信息生成准确的SQL语句
-2. 智能判断是否需要优化SQL查询
-
-**严禁做决策：**
-- **严禁擅自替用户对模糊的概念做决策**。如果用户提到"最近"但没有具体天数，且上游没有提供澄清后的具体范围，你应该生成一个通用的 SQL 或者在无法生成时反馈，而不是盲目猜测（如"默认30天"）。
-- 如果必须设定范围才能生成 SQL，优先检查 `clarification_responses` 或 `enriched_query` 中的信息。
+根据用户查询生成准确的SQL语句。
 
 SQL生成原则：
-- **禁止输出任何解释性文本**：只输出 SQL 语句，不要解释为什么这么写，也不要预测结果。
+- **只输出 SQL 语句**，不要解释
 - 确保语法正确性
 - 限制结果集大小（除非明确要求）
-- 使用正确的值映射
 
-智能工作流程：
-1. 检查是否有样本检索结果
-2. 如果有样本，优先使用 generate_sql_with_samples 工具
-3. 如果没有样本，使用 generate_sql_query 工具生成基础SQL
-
-记住：只给 SQL，不给解释，严禁盲目猜测业务口径。"""
+使用 generate_sql_query 工具生成SQL。"""
 
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
         """处理SQL生成任务"""

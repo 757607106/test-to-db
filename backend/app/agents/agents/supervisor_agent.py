@@ -3,59 +3,128 @@
 
 核心职责：
 - 协调各个专门代理的工作流程
-- 由 LLM 决策调度，不依赖硬编码逻辑
-- 管理标准流程：Schema → Clarification → SQL 生成 → 执行 → 分析
+- 由 LLM 动态决策调度，不依赖硬编码流程
+- 通过 Agent 能力描述和边界约束实现智能且可控的调度
 
 设计原则：
-- 让 LLM 决策，不写复杂的 if-else
+- LLM 根据当前状态自主选择下一个 Agent
 - 每个 Agent 职责边界清晰
-- 流程简洁，易于维护
+- 防护机制确保系统稳定
 """
 from typing import Dict, Any, List, Optional
 import logging
 
 from langgraph_supervisor import create_supervisor
 from langgraph.errors import GraphInterrupt
-from langchain_core.messages import trim_messages as langchain_trim_messages
+from langchain_core.messages import trim_messages as langchain_trim_messages, AIMessage
+from langchain_core.messages.utils import count_tokens_approximately
 
 from app.core.state import SQLMessageState
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SUPERVISOR
+from app.agents.utils.supervisor_guards import (
+    run_all_guards,
+    update_guard_state,
+    get_stage_for_agent,
+    MAX_SUPERVISOR_TURNS,
+)
 
 logger = logging.getLogger(__name__)
 
 # ===== 消息裁剪配置 =====
-MAX_MESSAGES_FOR_LLM = 30
+MAX_TOKENS_FOR_LLM = 4000  # Token 限制（根据模型上下文窗口调整）
 
 
 def trim_messages_hook(state: Dict[str, Any]) -> Dict[str, Any]:
     """
-    消息历史裁剪钩子 - 使用官方 trim_messages 确保 tool_call/tool 消息配对完整
+    消息历史裁剪钩子 - 使用官方推荐方式
     
-    官方依据: https://python.langchain.com/docs/how_to/trim_messages
-    关键参数:
-    - start_on="human": 确保消息从 human 开始
-    - end_on=("human", "tool"): 确保消息以 human 或 tool 结束
-    - include_system=True: 保留系统消息
+    使用 llm_input_messages 键（官方推荐）:
+    - 不修改原始消息历史
+    - 只为 LLM 提供裁剪后的输入
+    - 避免 RemoveMessage 被发送到前端
+    
+    官方依据: https://langchain-ai.github.io/langgraph/reference/agents
     """
     messages = state.get("messages", [])
     
-    if len(messages) <= MAX_MESSAGES_FOR_LLM:
-        return {"llm_input_messages": messages}
+    if not messages:
+        return {}
     
     # 使用官方 trim_messages，自动处理 tool_call 和 tool 消息的配对关系
     trimmed = langchain_trim_messages(
         messages,
         strategy="last",
-        token_counter=len,  # 按消息数量计算
-        max_tokens=MAX_MESSAGES_FOR_LLM,
-        start_on="human",  # 确保从 human 消息开始（避免孤立的 tool 消息）
-        end_on=("human", "tool"),  # 确保以 human 或 tool 结束
+        token_counter=count_tokens_approximately,
+        max_tokens=MAX_TOKENS_FOR_LLM,
+        start_on="human",  # 确保从 human 消息开始
         include_system=True,  # 保留系统消息
         allow_partial=False,  # 不允许部分消息
     )
     
-    logger.debug(f"消息裁剪: {len(messages)} -> {len(trimmed)}")
+    # 如果没有裁剪，不需要更新
+    if len(trimmed) == len(messages):
+        return {}
+    
+    logger.info(f"消息裁剪: {len(messages)} -> {len(trimmed)} 条")
+    
+    # 官方推荐：使用 llm_input_messages 键，不修改原始历史
     return {"llm_input_messages": trimmed}
+
+
+def guard_check_hook(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    防护检查钩子 - 在每次 LLM 调用前检查防护条件
+    
+    检查项：
+    - 最大轮次限制
+    - Agent 循环检测
+    """
+    # 运行防护检查
+    guard_result = run_all_guards(state)
+    
+    if guard_result.get("should_stop"):
+        reason = guard_result.get("reason", "达到系统限制")
+        logger.warning(f"防护机制触发: {reason}")
+        
+        # 添加一条消息通知 Supervisor 应该停止
+        stop_message = AIMessage(
+            content=f"[系统提示] {reason}。请直接向用户回复当前状态并结束对话。",
+            name="system_guard"
+        )
+        
+        return {
+            "messages": state.get("messages", []) + [stop_message],
+            "should_stop": True,
+        }
+    
+    # 更新轮次计数
+    turn_count = state.get("supervisor_turn_count", 0)
+    
+    return {
+        "supervisor_turn_count": turn_count + 1,
+    }
+
+
+def combined_pre_model_hook(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    组合的 pre_model_hook - 同时处理消息裁剪和防护检查
+    """
+    updates = {}
+    
+    # 1. 防护检查
+    guard_updates = guard_check_hook(state)
+    updates.update(guard_updates)
+    
+    # 如果防护触发停止，直接返回
+    if guard_updates.get("should_stop"):
+        return updates
+    
+    # 2. 消息裁剪 - 返回 llm_input_messages（不修改原始历史）
+    trim_updates = trim_messages_hook(state)
+    if trim_updates:
+        updates.update(trim_updates)
+    
+    return updates
 
 
 class SupervisorAgent:
@@ -140,10 +209,10 @@ class SupervisorAgent:
             model=self.llm,
             agents=self.worker_agents,
             prompt=self._get_supervisor_prompt(),
-            add_handoff_back_messages=False,
+            add_handoff_back_messages=True,  # 让 Supervisor 看到 Agent 返回结果，支持动态决策
             output_mode="last_message",
-            pre_model_hook=trim_messages_hook,
-            state_schema=SQLMessageState,  # 使用自定义 state，包含 connection_id
+            pre_model_hook=combined_pre_model_hook,  # 组合 hook：防护检查 + 消息裁剪
+            state_schema=SQLMessageState,
         )
 
         try:
@@ -159,70 +228,92 @@ class SupervisorAgent:
         return supervisor.compile()
 
     def _get_supervisor_prompt(self) -> str:
-        """获取监督代理提示词"""
+        """
+        获取监督代理提示词
         
-        # 根据是否启用澄清，生成不同的流程
+        设计原则：
+        - 只描述每个 Agent 的能力和使用场景
+        - 不规定固定的执行顺序
+        - 让 LLM 根据当前状态自主决策
+        """
+        
+        # 构建 Agent 能力描述
+        clarification_desc = ""
         if self.enable_clarification:
-            standard_flow = "用户查询 → schema_agent → clarification_agent → sql_generator_agent → sql_validator_agent → sql_executor_agent → data_analyst_agent → [可选] chart_generator_agent → 完成"
-            clarification_section = """
-**clarification_agent**: 检测查询模糊性，必要时请求用户澄清
-   - 在 schema_agent 之后执行
-   - 基于 Schema 信息检测模糊性（如"最近"、"大客户"）
-   - 如果需要澄清，会暂停流程等待用户确认
-   - 如果不需要澄清，直接传递给下一个 Agent
+            clarification_desc = """
+**clarification_agent** - 澄清用户意图
+  - 能力：检测查询中的模糊性，生成澄清问题
+  - 使用场景：用户查询存在模糊性时（如"最近"、"大客户"、"主要产品"）
+  - 前提：需要已有 Schema 信息
+  - 输出：澄清问题或确认可以继续
 """
-        else:
-            standard_flow = "用户查询 → schema_agent → sql_generator_agent → sql_validator_agent → sql_executor_agent → data_analyst_agent → [可选] chart_generator_agent → 完成"
-            clarification_section = ""
         
-        return f"""你是一个智能的 SQL Agent 系统监督者。
+        return f"""你是一个智能的 SQL 查询助手，负责协调多个专业代理完成用户的数据查询需求。
 
-**你管理的代理**：
+## 可用的专业代理
 
-**schema_agent**: 分析用户查询，获取相关数据库表结构
-   - 这是第一步，必须首先执行
-   - 输出表结构信息供后续 Agent 使用
-{clarification_section}
-**sql_generator_agent**: 根据 Schema 信息生成 SQL 语句
-   - 自动适配目标数据库语法
-   - 严禁擅自对模糊条件设定默认值
+**schema_agent** - 获取数据库结构
+  - 能力：分析用户查询，获取相关表和字段信息
+  - 使用场景：需要了解数据库结构时（通常是第一步）
+  - 输出：相关表结构、字段信息、关系
+{clarification_desc}
+**sql_generator_agent** - 生成 SQL 语句
+  - 能力：根据用户查询和 Schema 信息生成 SQL
+  - 使用场景：需要生成查询语句时
+  - 前提：必须已有 Schema 信息
+  - 输出：SQL 语句
 
-**sql_validator_agent**: 验证 SQL 语法和安全性
+**sql_validator_agent** - 验证 SQL 语法
+  - 能力：检查 SQL 语法正确性和安全性
+  - 使用场景：SQL 生成后，执行前
+  - 输出：验证结果
 
-**sql_executor_agent**: 执行 SQL 并返回结果
-   - 只负责执行，不做数据分析
+**sql_executor_agent** - 执行 SQL 查询
+  - 能力：执行 SQL 并返回结果
+  - 使用场景：SQL 验证通过后
+  - 前提：必须有已生成的 SQL
+  - 输出：查询结果数据
 
-**data_analyst_agent**: 分析查询结果，生成数据洞察
-   - SQL 执行成功后必须调用
+**data_analyst_agent** - 分析数据结果
+  - 能力：分析查询结果，生成洞察和建议
+  - 使用场景：查询成功后，需要解读数据时
+  - 前提：必须有查询结果
+  - 输出：数据洞察、趋势分析、业务建议
 
-**chart_generator_agent**: 生成数据可视化图表
-   - 可选，当用户需要图表时调用
+**chart_generator_agent** - 生成可视化图表
+  - 能力：根据数据生成图表配置
+  - 使用场景：用户需要可视化时（可选）
+  - 前提：必须有查询结果
+  - 输出：图表配置
 
-**error_recovery_agent**: 处理错误并提供修复方案
+**error_recovery_agent** - 错误恢复
+  - 能力：诊断错误原因，尝试修复
+  - 使用场景：任何阶段出错时
+  - 输出：修复方案或错误说明
 
----
+## 决策原则
 
-**标准流程**：
-{standard_flow}
+1. **根据状态决策**：查看当前已有的信息，选择最合适的下一步
+2. **前提条件检查**：调用 Agent 前确保其前提条件已满足
+3. **一次一个**：每次只调用一个 Agent
+4. **观察反馈**：根据 Agent 返回结果决定下一步
+5. **及时完成**：任务完成后及时结束
 
----
+## 重要约束
 
-**核心原则**：
+- **严禁替用户做业务决策**：如果查询中有"最近"、"大"、"主要"等模糊词且没有具体定义，必须先澄清
+- **严禁跳过必要步骤**：生成 SQL 前必须有 Schema，执行前必须有 SQL
+- **错误时求助**：遇到错误调用 error_recovery_agent
 
-1. **路由前必须说明**：在调用任何代理之前，必须先向用户说明即将执行的动作，例如"现在我将获取相关数据库表结构"或"接下来生成SQL查询语句"
-2. **严格按顺序执行**：必须先 schema_agent，再后续步骤
-3. **一次调用一个代理**：不要并行调用
-4. **严禁擅自决策**：如果用户说"最近"但没有具体范围，不要默认30天，必须通过 clarification_agent 询问用户
-5. **错误时调用 error_recovery_agent**：任何阶段出错都交给它处理
+## 工作方式
 
----
+1. 理解用户的查询意图
+2. 评估当前状态（已有哪些信息）
+3. 选择最合适的下一个 Agent
+4. 执行并观察结果
+5. 重复直到任务完成
 
-**职责边界**：
-- sql_executor_agent 只执行 SQL，不分析数据
-- 数据分析必须由 data_analyst_agent 完成
-- clarification_agent 只负责检测模糊性和请求用户确认
-
-请根据当前状态选择最合适的代理。"""
+请根据当前对话状态，选择最合适的代理来推进任务。"""
 
     async def supervise(self, state: SQLMessageState, thread_id: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -231,14 +322,16 @@ class SupervisorAgent:
         设计：让 Supervisor LLM 自然调度所有 Agent，不做硬编码控制
         """
         try:
-            config = {"configurable": {"thread_id": thread_id}} if thread_id else None
+            # 如果没有提供 thread_id 但 Checkpointer 存在，生成一个默认的
+            if not thread_id:
+                from uuid import uuid4
+                thread_id = str(uuid4())
+                logger.info(f"自动生成 thread_id: {thread_id}")
+            
+            config = {"configurable": {"thread_id": thread_id}}
             
             logger.info("开始 Supervisor 流程调度")
-            
-            if config is not None:
-                result = await self.supervisor.ainvoke(state, config=config)
-            else:
-                result = await self.supervisor.ainvoke(state)
+            result = await self.supervisor.ainvoke(state, config=config)
             
             return {
                 "success": True,

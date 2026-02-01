@@ -9,10 +9,11 @@ Skill 模式支持：
 from typing import Dict, Any, Optional
 
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, AIMessage, AnyMessage
+from langchain_core.tools import tool, InjectedToolCallId
+from langchain_core.messages import HumanMessage, AIMessage, AnyMessage, ToolMessage
 from langgraph.prebuilt import create_react_agent, InjectedState
 from langgraph.config import get_stream_writer
+from langgraph.types import Command
 from typing_extensions import Annotated
 
 from app.core.state import SQLMessageState, extract_connection_id
@@ -49,23 +50,33 @@ def analyze_user_query(query: str) -> Dict[str, Any]:
 @tool
 def retrieve_database_schema(
     query: str, 
-    state: Annotated[dict, InjectedState]
-) -> Dict[str, Any]:
+    state: Annotated[dict, InjectedState],
+    tool_call_id: Annotated[str, InjectedToolCallId]
+) -> Command:
     """
     根据查询分析结果获取相关的数据库表结构信息
     
     Args:
         query: 用户查询
+    
+    Returns:
+        Command: 更新父图状态的命令
     """
     # 优先从 state 直接获取，如果没有则从 messages 中提取
     connection_id = state.get("connection_id")
     if not connection_id:
         connection_id = extract_connection_id(state)
     if not connection_id:
-        return {
-            "success": False,
-            "error": "未指定数据库连接，请先在界面中选择一个数据库"
-        }
+        return Command(
+            graph=Command.PARENT,
+            update={
+                "messages": [ToolMessage(
+                    content="错误：未指定数据库连接，请先在界面中选择一个数据库",
+                    tool_call_id=tool_call_id
+                )]
+            }
+        )
+    
     print("开始分析用户查询...", connection_id)
     try:
         db = SessionLocal()
@@ -80,18 +91,36 @@ def retrieve_database_schema(
             # 获取值映射
             value_mappings = get_value_mappings(db, schema_context)
             
-            return {
-                "success": True,
-                "schema_context": schema_context,
-                "value_mappings": value_mappings
-            }
+            table_count = len(schema_context) if schema_context else 0
+            
+            # 返回 Command 更新父图状态（关键：graph=Command.PARENT）
+            return Command(
+                graph=Command.PARENT,
+                update={
+                    "schema_info": {
+                        "schema_context": schema_context,
+                        "value_mappings": value_mappings,
+                        "source": "full_schema_retrieval"
+                    },
+                    "current_stage": "sql_generation",
+                    "messages": [ToolMessage(
+                        content=f"已获取 {table_count} 个相关表的结构信息，可以继续生成 SQL",
+                        tool_call_id=tool_call_id
+                    )]
+                }
+            )
         finally:
             db.close()
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return Command(
+            graph=Command.PARENT,
+            update={
+                "messages": [ToolMessage(
+                    content=f"获取数据库结构失败: {str(e)}",
+                    tool_call_id=tool_call_id
+                )]
+            }
+        )
 
 
 @tool

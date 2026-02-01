@@ -310,8 +310,8 @@ export function AssistantMessage({
             />
           )}
 
-          {/* 思考中指示器 - 在整个执行过程中显示，直到加载完成 */}
-          {isLastMessage && isLoading && (
+          {/* 思考中指示器 - 当 agent 正在执行工具时显示 */}
+          {isLastMessage && isLoading && contentString.length > 0 && (
             <ThinkingIndicator />
           )}
 
