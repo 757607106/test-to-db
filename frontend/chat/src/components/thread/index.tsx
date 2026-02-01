@@ -270,7 +270,8 @@ export function Thread() {
   const stageMessages = stream.queryContext?.stageMessages ?? [];
   const filteredMessages = messages.filter(
     (m) =>
-      !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX),
+      !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX) &&
+      m.type !== "tool",
   );
   let lastAssistantIndex = -1;
   for (let i = filteredMessages.length - 1; i >= 0; i -= 1) {

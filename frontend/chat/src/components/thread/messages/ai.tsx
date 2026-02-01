@@ -22,14 +22,25 @@ import {
   extractClarificationData 
 } from "./clarification-interrupt";
 import { useArtifact } from "../artifact";
-import { ToolCall } from "@langchain/core/messages/tool";
-import { ToolCallTable } from "../agent-inbox/components/tool-call-table";
 import { DataChartDisplay } from "./DataChartDisplay";
 import { InsightDisplay } from "./InsightDisplay";
 import {
   Sparkles,
+  Loader2,
 } from "lucide-react";
 import { SQL_STEP_LABELS } from "@/types/stream-events";
+
+/**
+ * 思考中指示器 - 当 agent 正在执行工具时显示
+ */
+const ThinkingIndicator = memo(function ThinkingIndicator() {
+  return (
+    <div className="flex items-center gap-2 py-2 text-slate-500">
+      <Loader2 className="h-4 w-4 animate-spin" />
+      <span className="text-sm">正在思考中...</span>
+    </div>
+  );
+});
 
 /**
  * 推荐问题组件 - 使用 memo 优化
@@ -100,81 +111,6 @@ export function StageMessageBubble({
             <pre className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words">
               {message}
             </pre>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function getToolContentString(content: Message["content"]): string {
-  if (typeof content === "string") return content;
-  if (!content || !Array.isArray(content)) return "";
-  return content
-    .map((c) => {
-      if (typeof c === "string") return c;
-      if (c && typeof c === "object" && "type" in c) {
-        const candidate = c as { type?: string; text?: string };
-        if (candidate.type === "text" && typeof candidate.text === "string") {
-          return candidate.text;
-        }
-      }
-      return "";
-    })
-    .filter(Boolean)
-    .join(" ");
-}
-
-function ToolMessageBubble({ message }: { message: Message }) {
-  const toolName = (message as { name?: string }).name ?? "tool";
-  const toolCallId = (message as { tool_call_id?: string }).tool_call_id;
-  const rawContent = getToolContentString(message.content);
-  let formattedContent = rawContent;
-  let status: string | undefined;
-  let summary: string | undefined;
-
-  if (rawContent) {
-    try {
-      const parsed = JSON.parse(rawContent) as Record<string, unknown>;
-      formattedContent = JSON.stringify(parsed, null, 2);
-      if (typeof parsed?.status === "string") {
-        status = parsed.status;
-      }
-      if (typeof parsed?.message === "string") {
-        summary = parsed.message;
-      } else if (typeof parsed?.error === "string") {
-        summary = parsed.error;
-      }
-    } catch {
-      formattedContent = rawContent;
-    }
-  }
-
-  return (
-    <div className="group mr-auto flex w-full items-start gap-2">
-      <div className="flex w-full flex-col gap-2">
-        <div className="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900 overflow-hidden shadow-sm">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40">
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-              {toolCallId ? `${toolName} #${toolCallId.slice(0, 8)}` : toolName}
-            </span>
-            {status && (
-              <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                {status}
-              </span>
-            )}
-          </div>
-          <div className="px-3 py-2 space-y-2">
-            {summary && (
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                {summary}
-              </div>
-            )}
-            {formattedContent && (
-              <pre className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words">
-                {formattedContent}
-              </pre>
-            )}
           </div>
         </div>
       </div>
@@ -286,10 +222,6 @@ export function AssistantMessage({
 
   const parentCheckpoint = meta?.firstSeenState?.parent_checkpoint;
   const isToolResult = message?.type === "tool";
-  const toolCalls =
-    message && "tool_calls" in message && Array.isArray(message.tool_calls)
-      ? (message.tool_calls as ToolCall[])
-      : [];
 
   const hasQueryData = thread.queryContext?.dataQuery;
   const hasChartConfig = hasQueryData && thread.queryContext?.dataQuery?.chart_config;
@@ -342,7 +274,8 @@ export function AssistantMessage({
     }, 50);
   }, []);
 
-  if (isToolResult && message) return <ToolMessageBubble message={message} />;
+  // 隐藏工具结果消息
+  if (isToolResult) return null;
 
   return (
     <div className="group mr-auto flex w-full items-start gap-2">
@@ -377,15 +310,9 @@ export function AssistantMessage({
             />
           )}
 
-          {toolCalls.length > 0 && (
-            <div className="flex w-full flex-col items-start gap-2">
-              {toolCalls.map((toolCall, idx) => (
-                <ToolCallTable
-                  key={`${toolCall.id || "tool-call"}-${idx}`}
-                  toolCall={toolCall}
-                />
-              ))}
-            </div>
+          {/* 思考中指示器 - 在整个执行过程中显示，直到加载完成 */}
+          {isLastMessage && isLoading && (
+            <ThinkingIndicator />
           )}
 
           {/* 自定义组件 */}
