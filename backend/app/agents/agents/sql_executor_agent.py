@@ -70,12 +70,13 @@ class SQLExecutorAgent:
         self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
         self.tools = [execute_sql_query]
         
-        # 创建ReAct代理
+        # 创建ReAct代理（使用自定义 state_schema 以支持 connection_id 等字段）
         self.agent = create_react_agent(
             self.llm,
             self.tools,
             prompt=self._create_system_prompt,
-            name=self.name
+            name=self.name,
+            state_schema=SQLMessageState,
         )
     
     def _create_system_prompt(self, state: SQLMessageState, config: RunnableConfig) -> list[AnyMessage]:
@@ -106,7 +107,9 @@ class SQLExecutorAgent:
             if validation_result and not validation_result.is_valid:
                 raise ValueError("SQL验证未通过，无法执行")
             
-            connection_id = extract_connection_id(state) or state.get("connection_id") or 15
+            connection_id = extract_connection_id(state) or state.get("connection_id")
+            if not connection_id:
+                raise ValueError("未指定数据库连接，请先在界面中选择一个数据库")
             raw_result = await execute_sql_query.ainvoke({
                 "sql_query": sql_query,
                 "connection_id": connection_id,

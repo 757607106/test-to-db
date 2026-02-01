@@ -274,12 +274,13 @@ class ChartGeneratorAgent:
         if CHART_TOOLS:
             self.tools.extend(CHART_TOOLS)
         
-        # 创建ReAct代理
+        # 创建ReAct代理（使用自定义 state_schema 以支持 connection_id 等字段）
         self.agent = create_react_agent(
             self.llm,
             self.tools,
             prompt=self._create_system_prompt(),
-            name=self.name
+            name=self.name,
+            state_schema=SQLMessageState,
         )
     
     def _create_system_prompt(self) -> str:

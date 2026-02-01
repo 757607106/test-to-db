@@ -30,8 +30,8 @@ class SQLValidationResult:
 
 class SQLMessageState(AgentState):
     """增强的SQL消息状态，支持多代理协作"""
-    # 数据库连接信息
-    connection_id: int = 15
+    # 数据库连接信息（必须由前端传入，不设默认值）
+    connection_id: Optional[int] = None
 
     # 查询分析结果
     query_analysis: Optional[Dict[str, Any]] = None

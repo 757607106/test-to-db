@@ -155,13 +155,13 @@ class DataAnalystAgent:
         
         self.tools = [analyze_query_results]
         
-        # 创建 LangGraph ReAct Agent（用于 supervisor 集成）
-        # 注意：create_react_agent 需要原生 LLM
+        # 创建 LangGraph ReAct Agent（使用自定义 state_schema 以支持 connection_id 等字段）
         self.agent = create_react_agent(
             model=self._raw_llm,
             tools=self.tools,
             prompt=self._get_agent_prompt(),
-            name="data_analyst_agent"
+            name="data_analyst_agent",
+            state_schema=SQLMessageState,
         )
 
     def _get_agent_prompt(self) -> str:

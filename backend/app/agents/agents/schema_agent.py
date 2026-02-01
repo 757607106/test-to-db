@@ -57,7 +57,15 @@ def retrieve_database_schema(
     Args:
         query: 用户查询
     """
-    connection_id = state.get("connection_id", 15)
+    # 优先从 state 直接获取，如果没有则从 messages 中提取
+    connection_id = state.get("connection_id")
+    if not connection_id:
+        connection_id = extract_connection_id(state)
+    if not connection_id:
+        return {
+            "success": False,
+            "error": "未指定数据库连接，请先在界面中选择一个数据库"
+        }
     print("开始分析用户查询...", connection_id)
     try:
         db = SessionLocal()
@@ -136,12 +144,13 @@ class SchemaAnalysisAgent:
         self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
         self.tools = [analyze_user_query, retrieve_database_schema]
 
-        # 创建ReAct代理
+        # 创建ReAct代理（使用自定义 state_schema 以支持 connection_id 等字段）
         self.agent = create_react_agent(
             self.llm,
             self.tools,
             prompt=self._create_system_prompt,  # 动态提示词
             name=self.name,
+            state_schema=SQLMessageState,  # 官方推荐：让子 agent 使用相同的 state schema
         )
     
     def _create_system_prompt(self, state: SQLMessageState, config: RunnableConfig) -> list[AnyMessage]:
@@ -182,8 +191,13 @@ class SchemaAnalysisAgent:
             if isinstance(user_query, list):
                 user_query = user_query[0]["text"]
             
-            # 获取 connection_id
-            connection_id = state.get("connection_id", 15)
+            # 获取 connection_id：优先从 state 直接获取，如果没有则从 messages 中提取
+            connection_id = state.get("connection_id") or extract_connection_id(state)
+            if not connection_id:
+                return {
+                    "messages": [AIMessage(content="请先选择一个数据库连接")],
+                    "current_stage": "error_recovery"
+                }
             
             # 检查 Skill 模式
             skill_context = state.get("skill_context", {})

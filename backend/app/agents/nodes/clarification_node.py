@@ -21,7 +21,7 @@ import logging
 
 from langgraph.types import interrupt
 
-from app.core.state import SQLMessageState
+from app.core.state import SQLMessageState, extract_connection_id
 from app.agents.agents.clarification_agent import (
     _quick_clarification_check_impl as quick_clarification_check,
     _enrich_query_with_clarification_impl as enrich_query_with_clarification,
@@ -185,7 +185,7 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
         return base_result
     
     # 4. LLM检测是否需要澄清
-    connection_id = state.get("connection_id")
+    connection_id = state.get("connection_id") or extract_connection_id(state)
     
     # ✅ 获取 schema_info，用于生成动态澄清选项
     schema_info = state.get("schema_info")

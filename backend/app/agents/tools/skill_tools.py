@@ -17,6 +17,8 @@ import logging
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
+from app.core.state import extract_connection_id
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +40,7 @@ async def list_skills(
     from app.services.skill_service import skill_service
     
     try:
-        connection_id = state.get("connection_id")
+        connection_id = state.get("connection_id") or extract_connection_id(state)
         if not connection_id:
             return json.dumps({
                 "success": False,
@@ -114,7 +116,7 @@ async def load_skill(
     from app.services.skill_service import skill_service
     
     try:
-        connection_id = state.get("connection_id")
+        connection_id = state.get("connection_id") or extract_connection_id(state)
         if not connection_id:
             return json.dumps({
                 "success": False,

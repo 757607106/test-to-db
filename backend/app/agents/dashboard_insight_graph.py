@@ -80,7 +80,7 @@ def _adapt_for_sql_generator(state: DashboardInsightState) -> Dict[str, Any]:
     return {
         "messages": [HumanMessage(content=state.get("user_intent", "自动发现关键业务指标和趋势"))],
         "schema_info": {"tables": state.get("enriched_schema", {})},
-        "connection_id": state.get("connection_id", 1),
+        "connection_id": state.get("connection_id"),  # 必须由调用方传入
         "skip_sample_retrieval": False,
         "error_recovery_context": None,
     }
@@ -93,7 +93,7 @@ def _adapt_for_error_recovery(state: DashboardInsightState) -> Dict[str, Any]:
     return {
         "messages": [HumanMessage(content=state.get("user_intent", ""))],
         "generated_sql": state.get("generated_sql"),
-        "connection_id": state.get("connection_id", 1),
+        "connection_id": state.get("connection_id"),  # 必须由调用方传入
         "error_history": state.get("error_history", []),
         "retry_count": state.get("retry_count", 0),
         "max_retries": state.get("max_retries", 2),
@@ -115,7 +115,13 @@ async def schema_enricher_node(state: DashboardInsightState) -> Dict[str, Any]:
         from app import crud
         from app.models.db_connection import DBConnection
         
-        connection_id = state.get("connection_id") or state.get("aggregated_data", {}).get("connection_id", 1)
+        connection_id = state.get("connection_id") or state.get("aggregated_data", {}).get("connection_id")
+        if not connection_id:
+            return {
+                "enriched_schema": {},
+                "current_stage": "schema_enriched",
+                "error": "未指定数据库连接"
+            }
         
         with get_db_session() as db:
             connection = db.query(DBConnection).filter(DBConnection.id == connection_id).first()
@@ -200,7 +206,10 @@ async def data_sampler_node(state: DashboardInsightState) -> Dict[str, Any]:
     try:
         from app.services.db_service import get_db_connection_by_id, execute_query
         
-        connection_id = state.get("connection_id", 1)
+        connection_id = state.get("connection_id")
+        if not connection_id:
+            logger.warning("未指定数据库连接，跳过采样")
+            return {"sample_data": {}, "current_stage": "sample_done"}
         connection = get_db_connection_by_id(connection_id)
         
         if not connection:
@@ -258,7 +267,9 @@ async def relationship_analyzer_node(state: DashboardInsightState) -> Dict[str, 
         if not table_names:
             return {"relationship_context": None, "current_stage": "relationship_done"}
         
-        connection_id = state.get("connection_id", 1)
+        connection_id = state.get("connection_id")
+        if not connection_id:
+            return {"relationship_context": None, "current_stage": "relationship_done"}
         relationship_context = graph_relationship_service.query_table_relationships(
             connection_id, table_names
         )
@@ -376,7 +387,12 @@ async def sql_executor_node(state: DashboardInsightState) -> Dict[str, Any]:
         from app.agents.agents.sql_executor_agent import execute_sql_query
         import json
         
-        connection_id = state.get("connection_id", 1)
+        connection_id = state.get("connection_id")
+        if not connection_id:
+            return {
+                "execution_result": {"success": False, "error": "未指定数据库连接"},
+                "current_stage": "execution_done"
+            }
         sql = state.get("generated_sql", "")
         
         if not sql:
@@ -884,8 +900,13 @@ async def analyze_dashboard(
 ) -> Dict[str, Any]:
     """分析 Dashboard 的便捷函数"""
     
-    # 动态获取数据库类型
-    actual_connection_id = connection_id or aggregated_data.get("connection_id", 1)
+    # 动态获取数据库类型（connection_id 必须由调用方传入）
+    actual_connection_id = connection_id or aggregated_data.get("connection_id")
+    if not actual_connection_id:
+        return {
+            "success": False,
+            "error": "未指定数据库连接，请确保传入 connection_id"
+        }
     db_type = "mysql"  # 默认值
     try:
         from app.services.db_service import get_db_connection_by_id

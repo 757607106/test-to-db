@@ -31,6 +31,7 @@ from langgraph.prebuilt import create_react_agent
 from app.core.llms import get_default_model
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR, CORE_AGENT_ROUTER
 from app.core.llm_wrapper import LLMWrapper
+from app.core.state import SQLMessageState
 
 logger = logging.getLogger(__name__)
 
@@ -309,7 +310,8 @@ class IntentDetectionAgent:
             model=self._raw_llm,
             tools=self.tools,
             prompt=system_prompt,
-            name="intent_detection_agent"
+            name="intent_detection_agent",
+            state_schema=SQLMessageState,  # 使用自定义 state_schema 以支持 connection_id 等字段
         )
     
     async def detect(self, query: str) -> IntentResult:

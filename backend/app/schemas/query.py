@@ -92,7 +92,7 @@ class ResumeQueryRequest(BaseModel):
     """恢复被interrupt暂停的查询 - LangGraph Command模式"""
     thread_id: str = Field(..., description="会话线程ID")
     user_response: Any = Field(..., description="用户对interrupt请求的回复")
-    connection_id: int = Field(default=15, description="数据库连接ID")
+    connection_id: Optional[int] = Field(default=None, description="数据库连接ID（必须由前端传入）")
 
 
 class ResumeQueryResponse(BaseModel):

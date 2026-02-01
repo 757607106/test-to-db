@@ -80,12 +80,13 @@ class SQLValidatorAgent:
         self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
         self.tools = [validate_sql_syntax]
         
-        # 创建 ReAct agent（保持接口兼容）
+        # 创建 ReAct agent（使用自定义 state_schema 以支持 connection_id 等字段）
         self.agent = create_react_agent(
             self.llm,
             self.tools,
             prompt=self._create_system_prompt(),
-            name=self.name
+            name=self.name,
+            state_schema=SQLMessageState,
         )
     
     def _create_system_prompt(self) -> str:

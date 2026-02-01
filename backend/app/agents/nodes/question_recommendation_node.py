@@ -19,7 +19,7 @@ from typing import Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage
 from langgraph.types import StreamWriter
 
-from app.core.state import SQLMessageState
+from app.core.state import SQLMessageState, extract_connection_id
 from app.core.llm_wrapper import get_llm_wrapper
 from app.schemas.stream_events import create_similar_questions_event
 
@@ -54,7 +54,7 @@ async def question_recommendation_node(
     try:
         # 提取必要信息
         user_query = _extract_user_query(state)
-        connection_id = state.get("connection_id")
+        connection_id = state.get("connection_id") or extract_connection_id(state)
         schema_info = state.get("schema_info")
         generated_sql = state.get("generated_sql", "")
         

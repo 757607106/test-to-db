@@ -129,9 +129,9 @@ async def retrieve_qa_samples(
         return {"qa_pairs": [], "enabled": True, "error": str(e)}
 
 
-def extract_connection_id_from_messages(messages) -> int:
-    """从消息中提取连接ID"""
-    connection_id = 15  # 默认值
+def extract_connection_id_from_messages(messages) -> Optional[int]:
+    """从消息中提取连接ID（不设默认值，由前端传入）"""
+    connection_id = None
 
     # 查找最新的人类消息中的连接ID
     for message in reversed(messages):
@@ -231,7 +231,7 @@ class IntelligentSQLGraph:
     async def process_query(
         self, 
         query: str, 
-        connection_id: int = 15,
+        connection_id: Optional[int] = None,
         messages: Optional[List[BaseMessage]] = None,
         agent_id: Optional[int] = None,
         thread_id: Optional[str] = None,
@@ -242,7 +242,7 @@ class IntelligentSQLGraph:
         
         Args:
             query: 用户查询
-            connection_id: 数据库连接ID
+            connection_id: 数据库连接ID（必须由调用方传入）
             messages: 消息历史（用于多轮对话上下文改写）
             agent_id: 自定义数据分析 Agent ID（可选，覆盖实例配置）
             
@@ -285,7 +285,15 @@ class IntelligentSQLGraph:
             if intent.route == "general_chat":
                 return await self._handle_general_chat(enriched_query, intent)
             
-            elif intent.route == "dashboard_insight":
+            # SQL 相关路由需要 connection_id
+            if not connection_id:
+                return {
+                    "success": False,
+                    "error": "请先选择一个数据库连接",
+                    "final_stage": "error"
+                }
+            
+            if intent.route == "dashboard_insight":
                 return await self._handle_dashboard_insight(enriched_query, connection_id, intent)
             
             else:  # sql_supervisor
@@ -496,7 +504,7 @@ def create_intelligent_sql_graph(
 
 async def process_sql_query(
     query: str, 
-    connection_id: int = 15,
+    connection_id: Optional[int] = None,
     enable_clarification: bool = True,
     agent_id: Optional[int] = None
 ) -> Dict[str, Any]:
@@ -505,7 +513,7 @@ async def process_sql_query(
     
     Args:
         query: 用户查询
-        connection_id: 数据库连接ID
+        connection_id: 数据库连接ID（必须由调用方传入）
         enable_clarification: 是否启用澄清机制
         agent_id: 自定义数据分析 Agent ID（可选）
     """

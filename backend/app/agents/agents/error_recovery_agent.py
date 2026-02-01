@@ -258,12 +258,13 @@ class ErrorRecoveryAgent:
         self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
         self.tools = [analyze_error_pattern, generate_recovery_strategy, auto_fix_sql_error]
         
-        # 创建ReAct代理
+        # 创建ReAct代理（使用自定义 state_schema 以支持 connection_id 等字段）
         self.agent = create_react_agent(
             self.llm,
             self.tools,
             prompt=self._create_system_prompt(),
-            name=self.name
+            name=self.name,
+            state_schema=SQLMessageState,
         )
     
     def _create_system_prompt(self) -> str:

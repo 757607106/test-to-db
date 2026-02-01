@@ -16,6 +16,7 @@ import logging
 
 from langgraph_supervisor import create_supervisor
 from langgraph.errors import GraphInterrupt
+from langchain_core.messages import trim_messages as langchain_trim_messages
 
 from app.core.state import SQLMessageState
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SUPERVISOR
@@ -27,21 +28,33 @@ MAX_MESSAGES_FOR_LLM = 30
 
 
 def trim_messages_hook(state: Dict[str, Any]) -> Dict[str, Any]:
-    """消息历史裁剪钩子"""
+    """
+    消息历史裁剪钩子 - 使用官方 trim_messages 确保 tool_call/tool 消息配对完整
+    
+    官方依据: https://python.langchain.com/docs/how_to/trim_messages
+    关键参数:
+    - start_on="human": 确保消息从 human 开始
+    - end_on=("human", "tool"): 确保消息以 human 或 tool 结束
+    - include_system=True: 保留系统消息
+    """
     messages = state.get("messages", [])
     
     if len(messages) <= MAX_MESSAGES_FOR_LLM:
         return {"llm_input_messages": messages}
     
-    trimmed = []
-    if messages:
-        first_msg = messages[0]
-        if hasattr(first_msg, 'type') and first_msg.type == 'system':
-            trimmed.append(first_msg)
+    # 使用官方 trim_messages，自动处理 tool_call 和 tool 消息的配对关系
+    trimmed = langchain_trim_messages(
+        messages,
+        strategy="last",
+        token_counter=len,  # 按消息数量计算
+        max_tokens=MAX_MESSAGES_FOR_LLM,
+        start_on="human",  # 确保从 human 消息开始（避免孤立的 tool 消息）
+        end_on=("human", "tool"),  # 确保以 human 或 tool 结束
+        include_system=True,  # 保留系统消息
+        allow_partial=False,  # 不允许部分消息
+    )
     
-    recent_count = MAX_MESSAGES_FOR_LLM - len(trimmed)
-    trimmed.extend(messages[-recent_count:])
-    
+    logger.debug(f"消息裁剪: {len(messages)} -> {len(trimmed)}")
     return {"llm_input_messages": trimmed}
 
 
@@ -130,6 +143,7 @@ class SupervisorAgent:
             add_handoff_back_messages=False,
             output_mode="last_message",
             pre_model_hook=trim_messages_hook,
+            state_schema=SQLMessageState,  # 使用自定义 state，包含 connection_id
         )
 
         try:

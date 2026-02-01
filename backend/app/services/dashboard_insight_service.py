@@ -1453,9 +1453,9 @@ SQL 语法注意事项（{db_type}）：
                         default_connection_id = w.connection_id
                         break
         
-        # 最后降级到1（保持向后兼容）
+        # 如果仍然没有找到 connection_id，记录警告（不再使用硬编码默认值）
         if default_connection_id is None:
-            default_connection_id = 1
+            logger.warning(f"Dashboard {dashboard_id} 没有找到有效的 connection_id，洞察分析可能无法正常工作")
         
         # P0: 将溯源信息合并到 query_config
         query_config = {

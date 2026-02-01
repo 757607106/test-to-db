@@ -256,7 +256,8 @@ class ClarificationAgent:
             model=self.llm,
             tools=self.tools,
             prompt=system_prompt,
-            name="clarification_agent"
+            name="clarification_agent",
+            state_schema=SQLMessageState,  # 使用自定义 state_schema 以支持 connection_id 等字段
         )
     
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
