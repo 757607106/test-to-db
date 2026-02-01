@@ -36,130 +36,8 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# 业务澄清检测（模块级别，供工具调用）
+# SQL 生成工具
 # ============================================================================
-
-# 业务层面模糊性检测规则（只问业务问题，不问技术问题）
-_AMBIGUITY_PATTERNS = [
-    {
-        "pattern": r"(最近|近期|近段时间|这段时间)",
-        "type": "time_range",
-        "question": "您说的时间范围是？",
-        "options": ["最近7天", "最近30天", "最近3个月", "今年"],
-        "default": "最近30天"
-    },
-    {
-        "pattern": r"(上个月|上月)",
-        "type": "time_range",
-        "question": "您指的是哪个月份？",
-        "options": ["上个自然月", "过去30天"],
-        "default": "上个自然月"
-    },
-    {
-        "pattern": r"(前几|前\d*名|排名前|TOP\s*\d*|top\s*\d*)",
-        "type": "limit",
-        "question": "您想查看多少条记录？",
-        "options": ["前5条", "前10条", "前20条", "前50条"],
-        "default": "前10条"
-    },
-    {
-        "pattern": r"(大客户|重要客户|核心客户|VIP)",
-        "type": "business_concept",
-        "question": "您对'大客户'的定义是？",
-        "options": ["年消费超过10万", "年消费超过50万", "年消费超过100万", "按系统默认分类"],
-        "default": "按系统默认分类"
-    },
-    {
-        "pattern": r"(热销|畅销|爆款)",
-        "type": "business_concept",
-        "question": "您对'热销产品'的定义是？",
-        "options": ["月销量前10%", "月销量超过100", "月销量超过500", "按系统默认分类"],
-        "default": "按系统默认分类"
-    },
-]
-
-
-def _check_and_clarify_query(query: str) -> str:
-    """
-    检测业务层面的模糊性，如需澄清则使用 interrupt() 暂停等待用户确认
-    
-    特点：
-    - 只问业务问题（时间范围、数量等），不问技术问题（表名、字段名）
-    - 用户不操作，图会一直暂停
-    - 澄清失败时使用原始查询继续（稳定性保障）
-    
-    Args:
-        query: 用户查询
-        
-    Returns:
-        增强后的查询（如果有澄清），或原始查询
-    """
-    try:
-        # 检测业务层面的模糊性
-        for pattern_info in _AMBIGUITY_PATTERNS:
-            if re.search(pattern_info["pattern"], query, re.IGNORECASE):
-                # 检查是否已经有明确的限定
-                explicit_patterns = [
-                    r"最近\d+天", r"最近\d+个月", r"前\d+条", r"前\d+名",
-                    r"\d{4}年", r"\d+月", r"top\s*\d+", r"TOP\s*\d+"
-                ]
-                has_explicit = any(re.search(p, query, re.IGNORECASE) for p in explicit_patterns)
-                
-                if has_explicit:
-                    continue  # 已经明确，跳过
-                
-                matched_text = re.search(pattern_info["pattern"], query, re.IGNORECASE).group()
-                logger.info(f"检测到业务模糊性: {pattern_info['type']} - '{matched_text}'")
-                
-                # 使用 interrupt() 暂停执行，等待用户确认
-                # 图会一直暂停，直到用户通过 Command(resume=...) 回复
-                user_response = interrupt({
-                    "type": "clarification_request",
-                    "questions": [{
-                        "id": f"q_{pattern_info['type']}",
-                        "question": pattern_info["question"],
-                        "type": "choice",
-                        "options": pattern_info["options"],
-                    }],
-                    "reason": f"检测到模糊表述: '{matched_text}'",
-                    "original_query": query,
-                    "default_value": pattern_info["default"]
-                })
-                
-                logger.info(f"收到用户澄清回复: {user_response}")
-                
-                # 处理用户回复
-                if isinstance(user_response, dict):
-                    if user_response.get("skipped"):
-                        answer = pattern_info["default"]
-                        logger.info(f"用户跳过澄清，使用默认值: {answer}")
-                    else:
-                        answers = user_response.get("answers", [])
-                        if answers:
-                            answer = answers[0].get("answer", pattern_info["default"])
-                        else:
-                            answer = pattern_info["default"]
-                elif isinstance(user_response, str):
-                    answer = user_response
-                else:
-                    answer = pattern_info["default"]
-                
-                # 替换模糊表述为明确表述
-                enriched = query.replace(matched_text, answer)
-                logger.info(f"查询已增强: '{query}' -> '{enriched}'")
-                return enriched
-        
-        # 没有检测到模糊性
-        return query
-        
-    except GraphInterrupt:
-        # interrupt() 抛出的异常必须传播出去，让图暂停
-        raise
-    except Exception as e:
-        # 其他异常：记录日志，使用原始查询继续（稳定性保障）
-        logger.warning(f"澄清处理失败: {e}，继续使用原始查询")
-        return query
-
 
 @tool
 def generate_sql_query(
@@ -183,9 +61,6 @@ def generate_sql_query(
         生成的SQL语句和相关信息
     """
     try:
-        # ✅ 业务澄清：检测模糊性，如需澄清则 interrupt() 等待用户确认
-        enriched_query = _check_and_clarify_query(user_query)
-        
         # 获取数据库语法指南
         syntax_guide = get_syntax_guide_for_prompt(db_type)
         dialect = get_dialect(db_type)
@@ -219,11 +94,11 @@ SQL: {sample.get('sql', '')}
 成功率: {sample.get('success_rate', 0):.2f}
 """
 
-        # 构建SQL生成提示（使用增强后的查询）
+        # 构建SQL生成提示词
         prompt = f"""
 基于以下信息生成SQL查询：
 
-用户查询: {enriched_query}
+用户查询: {user_query}
 
 {context}
 
@@ -259,14 +134,12 @@ SQL: {sample.get('sql', '')}
             "context_used": context
         }
         
-    except GraphInterrupt:
-        # ✅ 关键：interrupt() 抛出的异常必须传播出去，让图暂停
-        raise
     except Exception as e:
         return {
             "success": False,
             "error": str(e)
         }
+
 
 
 @tool
@@ -392,45 +265,6 @@ def generate_sql_with_samples(
 class SQLGeneratorAgent:
     """SQL生成代理"""
 
-    # 业务层面模糊性检测规则（只问业务问题，不问技术问题）
-    AMBIGUITY_PATTERNS = [
-        {
-            "pattern": r"(最近|近期|近段时间|这段时间)",
-            "type": "time_range",
-            "question": "您说的时间范围是？",
-            "options": ["最近7天", "最近30天", "最近3个月", "今年"],
-            "default": "最近30天"
-        },
-        {
-            "pattern": r"(上个月|上月)",
-            "type": "time_range",
-            "question": "您指的是哪个月份？",
-            "options": ["上个自然月", "过去30天"],
-            "default": "上个自然月"
-        },
-        {
-            "pattern": r"(前几|前\d*名|排名前|TOP\s*\d*|top\s*\d*)",
-            "type": "limit",
-            "question": "您想查看多少条记录？",
-            "options": ["前5条", "前10条", "前20条", "前50条"],
-            "default": "前10条"
-        },
-        {
-            "pattern": r"(大客户|重要客户|核心客户|VIP)",
-            "type": "business_concept",
-            "question": "您对'大客户'的定义是？",
-            "options": ["年消费超过10万", "年消费超过50万", "年消费超过100万", "按系统默认分类"],
-            "default": "按系统默认分类"
-        },
-        {
-            "pattern": r"(热销|畅销|爆款)",
-            "type": "business_concept",
-            "question": "您对'热销产品'的定义是？",
-            "options": ["月销量前10%", "月销量超过100", "月销量超过500", "按系统默认分类"],
-            "default": "按系统默认分类"
-        },
-    ]
-
     def __init__(self):
         self.name = "sql_generator_agent"
         # 获取原生 LLM（create_react_agent 需要原生 LLM）
@@ -449,170 +283,25 @@ class SQLGeneratorAgent:
         """创建系统提示"""
         return """你是一个专业的SQL生成专家。你的任务是：
 
-1. 根据用户查询和数据库模式信息生成准确的SQL语句
+1. 根据用户查询和模式信息生成准确的SQL语句
 2. 智能判断是否需要优化SQL查询
-3. 仅在必要时进行SQL优化
+
+**严禁做决策：**
+- **严禁擅自替用户对模糊的概念做决策**。如果用户提到"最近"但没有具体天数，且上游没有提供澄清后的具体范围，你应该生成一个通用的 SQL 或者在无法生成时反馈，而不是盲目猜测（如"默认30天"）。
+- 如果必须设定范围才能生成 SQL，优先检查 `clarification_responses` 或 `enriched_query` 中的信息。
+
+SQL生成原则：
+- **禁止输出任何解释性文本**：只输出 SQL 语句，不要解释为什么这么写，也不要预测结果。
+- 确保语法正确性
+- 限制结果集大小（除非明确要求）
+- 使用正确的值映射
 
 智能工作流程：
 1. 检查是否有样本检索结果
 2. 如果有样本，优先使用 generate_sql_with_samples 工具
 3. 如果没有样本，使用 generate_sql_query 工具生成基础SQL
 
-SQL生成原则：
-- **禁止输出任何解释性文本**：只输出 SQL 语句，不要解释为什么这么写，也不要预测结果。
-- 确保语法正确性
-- 使用适当的连接方式
-- 应用正确的过滤条件
-- 生成时就考虑基本性能优化
-- 限制结果集大小（除非明确要求）
-- 使用正确的值映射
-- 充分利用样本提供的最佳实践
-
-样本利用策略：
-- 优先参考高相关性和高成功率的样本
-- 学习样本的SQL结构和模式
-- 适应当前查询的具体需求
-- 保持SQL的正确性和效率
-
-请始终生成高质量、可执行的SQL语句，并充分利用样本的指导作用。记住：只给 SQL，不给解释。"""
-
-    def _detect_business_ambiguity(self, query: str) -> Optional[Dict[str, Any]]:
-        """
-        检测业务层面的模糊性（只检测业务问题，不涉及技术问题）
-        
-        Args:
-            query: 用户查询
-            
-        Returns:
-            检测到的第一个模糊性信息，或 None
-        """
-        query_lower = query.lower()
-        
-        for pattern_info in self.AMBIGUITY_PATTERNS:
-            if re.search(pattern_info["pattern"], query, re.IGNORECASE):
-                # 检查是否已经有明确的限定
-                # 例如 "最近7天" 已经明确，不需要再问
-                explicit_patterns = [
-                    r"最近\d+天", r"最近\d+个月", r"前\d+条", r"前\d+名",
-                    r"\d{4}年", r"\d+月", r"top\s*\d+", r"TOP\s*\d+"
-                ]
-                has_explicit = any(re.search(p, query, re.IGNORECASE) for p in explicit_patterns)
-                
-                if not has_explicit:
-                    return {
-                        "type": pattern_info["type"],
-                        "question": pattern_info["question"],
-                        "options": pattern_info["options"],
-                        "default": pattern_info["default"],
-                        "matched_text": re.search(pattern_info["pattern"], query, re.IGNORECASE).group()
-                    }
-        
-        return None
-
-    def _enrich_query_with_clarification(
-        self, 
-        original_query: str, 
-        ambiguity: Dict[str, Any], 
-        user_response: Any
-    ) -> str:
-        """
-        根据用户的澄清回复增强查询
-        
-        Args:
-            original_query: 原始查询
-            ambiguity: 检测到的模糊性信息
-            user_response: 用户回复
-            
-        Returns:
-            增强后的查询
-        """
-        # 处理用户回复
-        if isinstance(user_response, dict):
-            if user_response.get("skipped"):
-                # 用户跳过，使用默认值
-                answer = ambiguity["default"]
-                logger.info(f"用户跳过澄清，使用默认值: {answer}")
-            else:
-                # 从 answers 中提取
-                answers = user_response.get("answers", [])
-                if answers:
-                    answer = answers[0].get("answer", ambiguity["default"])
-                else:
-                    answer = ambiguity["default"]
-        elif isinstance(user_response, str):
-            answer = user_response
-        else:
-            answer = ambiguity["default"]
-        
-        # 将答案整合到查询中
-        matched_text = ambiguity.get("matched_text", "")
-        if matched_text:
-            # 替换模糊表述为明确表述
-            enriched = original_query.replace(matched_text, answer)
-        else:
-            # 追加到查询末尾
-            enriched = f"{original_query}（{answer}）"
-        
-        logger.info(f"查询已增强: '{original_query}' -> '{enriched}'")
-        return enriched
-
-    async def _handle_clarification(self, query: str, state: SQLMessageState) -> str:
-        """
-        处理业务澄清流程
-        
-        使用 interrupt() 暂停执行，等待用户确认。
-        如果用户不操作，图会一直暂停。
-        
-        Args:
-            query: 用户查询
-            state: 当前状态
-            
-        Returns:
-            增强后的查询（如果有澄清），或原始查询
-        """
-        # 如果已经确认过澄清，跳过
-        if state.get("clarification_confirmed"):
-            return query
-        
-        try:
-            # 检测业务层面的模糊性
-            ambiguity = self._detect_business_ambiguity(query)
-            
-            if not ambiguity:
-                logger.debug("查询明确，无需澄清")
-                return query
-            
-            logger.info(f"检测到业务模糊性: {ambiguity['type']} - {ambiguity['question']}")
-            
-            # 使用 interrupt() 暂停执行，等待用户确认
-            # 图会一直暂停，直到用户通过 Command(resume=...) 回复
-            user_response = interrupt({
-                "type": "clarification_request",
-                "questions": [{
-                    "id": f"q_{ambiguity['type']}",
-                    "question": ambiguity["question"],
-                    "type": "choice",
-                    "options": ambiguity["options"],
-                }],
-                "reason": f"检测到模糊表述: '{ambiguity['matched_text']}'",
-                "original_query": query,
-                "default_value": ambiguity["default"]
-            })
-            
-            logger.info(f"收到用户澄清回复: {user_response}")
-            
-            # 增强查询
-            enriched_query = self._enrich_query_with_clarification(query, ambiguity, user_response)
-            
-            return enriched_query
-            
-        except GraphInterrupt:
-            # interrupt() 抛出的异常必须传播出去，让图暂停
-            raise
-        except Exception as e:
-            # 其他异常：记录日志，使用原始查询继续（稳定性保障）
-            logger.warning(f"澄清处理失败: {e}，继续使用原始查询")
-            return query
+记住：只给 SQL，不给解释，严禁盲目猜测业务口径。"""
 
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
         """处理SQL生成任务"""
@@ -621,11 +310,6 @@ SQL生成原则：
             user_query = state["messages"][0].content
             if isinstance(user_query, list):
                 user_query = user_query[0]["text"]
-            
-            # ✅ 业务澄清：检测模糊性，如需澄清则 interrupt() 等待用户确认
-            # 只问业务问题（时间范围、数量等），不问技术问题（表名、字段名）
-            # 如果用户不操作，图会一直暂停
-            user_query = await self._handle_clarification(user_query, state)
             
             # 标记澄清已处理（避免重复澄清）
             state["clarification_confirmed"] = True
@@ -716,6 +400,7 @@ SQL生成原则：
                 "generated_sql": generated_sql,
                 "current_stage": "sql_validation"
             }
+
             
         except Exception as e:
             # 记录错误

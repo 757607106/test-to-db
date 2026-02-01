@@ -234,6 +234,13 @@ def clarification_node(state: SQLMessageState) -> Dict[str, Any]:
     # 5. 格式化澄清问题
     formatted_questions = format_clarification_questions(questions)
     
+    # 添加调试日志：检查 options 是否存在
+    for i, q in enumerate(formatted_questions):
+        options = q.get("options", [])
+        logger.info(f"问题 {i+1}: {q.get('question', '')} | 类型: {q.get('type', '')} | 选项数: {len(options)}")
+        if options:
+            logger.debug(f"  选项: {options}")
+    
     logger.info(f"需要澄清，生成 {len(formatted_questions)} 个问题，使用interrupt()暂停执行")
     
     # ✅ 6. 使用interrupt()暂停执行，等待用户确认 (LangGraph标准模式)

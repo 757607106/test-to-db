@@ -13,6 +13,7 @@ import logging
 
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.errors import GraphInterrupt
 from langchain_core.messages import HumanMessage, BaseMessage
 
 from app.core.state import SQLMessageState
@@ -301,6 +302,9 @@ class IntelligentSQLGraph:
                 result["query_rewritten"] = query_rewritten
                 return result
                 
+        except GraphInterrupt:
+            # 关键：interrupt() 抛出的异常必须传播出去，让图暂停
+            raise
         except Exception as e:
             logger.error(f"处理查询失败: {e}")
             return {

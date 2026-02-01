@@ -136,12 +136,26 @@ async def chat_query(
         
         # ✅ 使用新的process_query方法，传递thread_id
         # 这将启用状态持久化和多轮对话支持
-        result = await graph.process_query(
-            query=query_text,
-            connection_id=chat_request.connection_id,
-            thread_id=thread_id,  # ✅ 传递thread_id
-            tenant_id=current_user.tenant_id,
-        )
+        try:
+            result = await graph.process_query(
+                query=query_text,
+                connection_id=chat_request.connection_id,
+                thread_id=thread_id,  # ✅ 传递thread_id
+                tenant_id=current_user.tenant_id,
+            )
+        except Exception as e:
+            # 特殊处理 LangGraph 中断，虽然目前主要走 supervisor 的手动返回模式
+            if "interrupt" in str(type(e).__name__).lower():
+                logger.info(f"Graph interrupted for clarification: {thread_id}")
+                # 尝试从状态中获取信息（如果需要）
+                # 这里简单处理，因为 supervisor_agent 已经通过常规 return 处理了大部分澄清
+                return schemas.ChatQueryResponse(
+                    conversation_id=thread_id,
+                    needs_clarification=True,
+                    stage="clarification",
+                    message="需要进一步澄清您的查询意图"
+                )
+            raise e
         
         # 构建响应
         response = schemas.ChatQueryResponse(

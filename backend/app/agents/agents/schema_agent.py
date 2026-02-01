@@ -11,8 +11,9 @@ from typing import Dict, Any, Optional
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage, AnyMessage
-from langgraph.prebuilt import create_react_agent
+from langgraph.prebuilt import create_react_agent, InjectedState
 from langgraph.config import get_stream_writer
+from typing_extensions import Annotated
 
 from app.core.state import SQLMessageState, extract_connection_id
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
@@ -46,18 +47,17 @@ def analyze_user_query(query: str) -> Dict[str, Any]:
 
 
 @tool
-def retrieve_database_schema(query: str, connection_id: int) -> Dict[str, Any]:
+def retrieve_database_schema(
+    query: str, 
+    state: Annotated[dict, InjectedState]
+) -> Dict[str, Any]:
     """
     根据查询分析结果获取相关的数据库表结构信息
-
+    
     Args:
         query: 用户查询
-        connection_id: 数据库连接ID
-
-    Returns:
-        相关的表结构和值映射信息
     """
-
+    connection_id = state.get("connection_id", 15)
     print("开始分析用户查询...", connection_id)
     try:
         db = SessionLocal()
@@ -145,27 +145,25 @@ class SchemaAnalysisAgent:
         )
     
     def _create_system_prompt(self, state: SQLMessageState, config: RunnableConfig) -> list[AnyMessage]:
-        connection_id = extract_connection_id(state)
-
         """创建系统提示"""
         system_msg = f"""你是一个专业的数据库模式分析专家。
-        **重要：当前数据库connection_id是 {connection_id}**
-你的任务是：
-1. 分析用户的自然语言查询，理解其意图和涉及的实体
-2. 获取与查询相关的数据库表结构信息
-3. 验证获取的模式信息是否足够完整
+
+你的唯一任务是：获取与用户查询相关的数据库表结构信息。
 
 工作流程：
-1. 首先使用 analyze_user_query 工具分析用户查询
-2. 然后使用 retrieve_database_schema 工具获取相关表结构
+1. 使用 analyze_user_query 工具分析用户查询
+2. 使用 retrieve_database_schema 工具获取相关表结构
 
-请确保：
-- 准确理解用户查询意图
-- 获取所有相关的表和字段信息
-- 包含必要的值映射信息
-- 验证信息的完整性
+**严格限制（必须遵守）：**
+- **只输出表结构信息**，不要给任何建议、解释或"查询逻辑"。
+- **严禁问用户问题**。澄清由系统其他模块处理，你不需要关心。
+- **严禁设定默认值**。如果用户说"最近"，你只需获取相关的日期字段，不要猜测范围。
+- **严禁输出"建议的查询逻辑"**。你的职责仅限于获取 schema，不负责规划查询。
 
-如果发现信息不完整，请提供具体的建议。"""
+输出格式：
+- 只需简洁列出找到的相关表和字段
+- 不要解释如何使用这些字段
+- 不要给出任何建议"""
 
         return [{"role": "system", "content": system_msg}] + state["messages"]
 
@@ -295,11 +293,9 @@ class SchemaAnalysisAgent:
         """
         全库模式：使用 ReAct Agent 检索相关表结构
         """
-        # 准备输入消息，包含 connection_id 信息
+        # 准备输入消息
         messages = [
-            HumanMessage(content=f"""请分析以下用户查询并获取相关的数据库模式信息：{user_query}
-
-重要：当前数据库连接ID是 {connection_id}，在调用 retrieve_database_schema 工具时，必须传递 connection_id={connection_id} 参数。""")
+            HumanMessage(content=f"请分析以下用户查询并获取相关的数据库模式信息：{user_query}")
         ]
 
         # 调用代理
