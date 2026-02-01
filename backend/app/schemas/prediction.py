@@ -5,7 +5,7 @@
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class PredictionMethod(str, Enum):
@@ -24,15 +24,36 @@ class AnalysisType(str, Enum):
 
 class PredictionRequest(BaseModel):
     """预测请求"""
-    widget_id: int = Field(..., description="数据来源Widget ID")
-    date_column: str = Field(..., description="时间列名")
-    value_column: str = Field(..., description="预测目标列名")
+    widget_id: int = Field(..., description="数据来源Widget ID", alias='widgetId')
+    date_column: Optional[str] = Field(None, description="时间列名", alias='dateColumn')
+    time_column: Optional[str] = Field(None, description="时间列名（兼容字段）", alias='timeColumn')
+    value_column: Optional[str] = Field(None, description="预测目标列名", alias='valueColumn')
+    target_column: Optional[str] = Field(None, description="预测目标列名（兼容字段）", alias='targetColumn')
     periods: int = Field(7, ge=1, le=365, description="预测周期数")
     method: PredictionMethod = Field(
         PredictionMethod.AUTO,
         description="预测方法: auto/linear/moving_average/exponential_smoothing"
     )
-    confidence_level: float = Field(0.95, ge=0.5, le=0.99, description="置信水平")
+    confidence_level: float = Field(0.95, ge=0.5, le=0.99, description="置信水平", alias='confidenceLevel')
+    
+    model_config = {"populate_by_name": True}  # Pydantic v2: 允许同时使用字段名和alias
+    
+    @model_validator(mode='after')
+    def validate_columns(self):
+        """验证至少提供一个时间列和一个数值列"""
+        if not (self.date_column or self.time_column):
+            raise ValueError("必须提供 date_column 或 time_column")
+        if not (self.value_column or self.target_column):
+            raise ValueError("必须提供 value_column 或 target_column")
+        return self
+    
+    def get_date_column(self) -> str:
+        """获取时间列名（兼容两种命名）"""
+        return self.date_column or self.time_column or ""
+    
+    def get_value_column(self) -> str:
+        """获取数值列名（兼容两种命名）"""
+        return self.value_column or self.target_column or ""
 
 
 class PredictionDataPoint(BaseModel):

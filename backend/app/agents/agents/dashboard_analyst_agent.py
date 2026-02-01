@@ -128,7 +128,8 @@ class DashboardAnalystAgent:
         schema_info: Optional[Dict[str, Any]] = None,
         relationship_context: Optional[Dict[str, Any]] = None,
         sample_data: Optional[Dict[str, List]] = None,
-        user_intent: Optional[str] = None
+        user_intent: Optional[str] = None,
+        enable_explainability: bool = True  # 新增：是否启用可解释性
     ) -> Dict[str, Any]:
         """
         分析 Dashboard 数据并生成洞察
@@ -139,15 +140,49 @@ class DashboardAnalystAgent:
             relationship_context: 图谱关系上下文
             sample_data: 采样数据
             user_intent: 用户分析意图
+            enable_explainability: 是否启用可解释性（生成详细的分析过程说明）
             
         Returns:
-            结构化的洞察结果
+            结构化的洞察结果（包含可解释性信息）
         """
         start_time = time.time()
         
+        # ✨ 初始化分析过程追踪
+        analysis_process = {
+            "steps": [],
+            "start_time": start_time,
+            "data_quality_check": {},
+            "analysis_method": "llm",
+            "confidence_factors": []
+        } if enable_explainability else None
+        
         try:
+            # ✨ 步骤1：数据质量检查
+            if analysis_process:
+                quality_check = self._check_data_quality(data)
+                analysis_process["data_quality_check"] = quality_check
+                analysis_process["steps"].append({
+                    "step": 1,
+                    "name": "数据质量检查",
+                    "description": f"检查了 {len(data)} 条记录，数据质量评级: {quality_check['rating']}",
+                    "timestamp": time.time() - start_time
+                })
+            
             # 预计算统计信息
             statistics = self._precompute_statistics(data)
+            
+            # ✨ 步骤2：统计预计算
+            if analysis_process:
+                analysis_process["steps"].append({
+                    "step": 2,
+                    "name": "统计预计算",
+                    "description": f"识别了 {len(statistics['numeric_columns'])} 个数值列、{len(statistics['categorical_columns'])} 个分类列",
+                    "details": {
+                        "numeric_columns": statistics['numeric_columns'],
+                        "categorical_columns": statistics['categorical_columns']
+                    },
+                    "timestamp": time.time() - start_time
+                })
             
             # 构建分析 Prompt
             prompt = self._build_analysis_prompt(
@@ -157,6 +192,16 @@ class DashboardAnalystAgent:
                 relationship_context=relationship_context,
                 user_intent=user_intent
             )
+            
+            # ✨ 步骤3：LLM 分析
+            if analysis_process:
+                analysis_process["steps"].append({
+                    "step": 3,
+                    "name": "LLM智能分析",
+                    "description": "调用大语言模型进行多维度智能分析",
+                    "llm_model": getattr(self.llm, 'model_name', 'unknown'),
+                    "timestamp": time.time() - start_time
+                })
             
             # 调用 LLM 进行分析
             response = await self.llm.ainvoke([
@@ -169,6 +214,24 @@ class DashboardAnalystAgent:
             # 解析 JSON 响应
             insights = self._parse_llm_response(response_text, statistics)
             
+            # ✨ 步骤4：结果验证和增强
+            if analysis_process:
+                analysis_process["steps"].append({
+                    "step": 4,
+                    "name": "结果验证和增强",
+                    "description": f"验证了 {len(insights.get('recommendations', []))} 条建议、{len(insights.get('anomalies', []))} 个异常",
+                    "timestamp": time.time() - start_time
+                })
+                
+                # 计算置信度因素
+                confidence_factors = self._calculate_confidence_factors(insights, statistics, relationship_context)
+                analysis_process["confidence_factors"] = confidence_factors
+                
+                # 添加可解释性信息到洞察结果
+                insights["explainability"] = self._generate_explainability_report(
+                    analysis_process, insights, statistics
+                )
+            
             elapsed_ms = int((time.time() - start_time) * 1000)
             logger.info(f"[DashboardAnalyst] LLM 分析完成，耗时 {elapsed_ms}ms")
             
@@ -178,8 +241,25 @@ class DashboardAnalystAgent:
             elapsed_ms = int((time.time() - start_time) * 1000)
             logger.error(f"[DashboardAnalyst] LLM 分析失败: {e}，降级到规则分析")
             
+            # ✨ 记录失败并降级
+            if analysis_process:
+                analysis_process["steps"].append({
+                    "step": 5,
+                    "name": "降级处理",
+                    "description": f"LLM分析失败，启用规则引擎降级: {str(e)[:100]}",
+                    "timestamp": time.time() - start_time
+                })
+                analysis_process["analysis_method"] = "rule_based_fallback"
+            
             # 降级到规则分析
-            return self._fallback_analysis(data, relationship_context)
+            fallback_result = self._fallback_analysis(data, relationship_context)
+            
+            if analysis_process and enable_explainability:
+                fallback_result["explainability"] = self._generate_explainability_report(
+                    analysis_process, fallback_result, self._precompute_statistics(data)
+                )
+            
+            return fallback_result
     
     def _precompute_statistics(self, data: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -531,6 +611,337 @@ class DashboardAnalystAgent:
             "correlations": correlations,
             "recommendations": recommendations
         }
+    
+    def _check_data_quality(self, data: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        检查数据质量（可解释性增强）
+        
+        Returns:
+            数据质量评估报告
+        """
+        total_rows = len(data)
+        
+        if total_rows == 0:
+            return {
+                "rating": "no_data",
+                "score": 0,
+                "issues": ["数据为空"],
+                "strengths": []
+            }
+        
+        issues = []
+        strengths = []
+        score = 100
+        
+        # 检查1：数据量
+        if total_rows < 10:
+            issues.append(f"数据量较少（{total_rows}条），分析结果可能不够准确")
+            score -= 20
+        elif total_rows >= 100:
+            strengths.append(f"数据量充足（{total_rows}条），支持准确分析")
+        
+        # 检查2：数据完整性
+        if data:
+            total_fields = 0
+            null_fields = 0
+            for row in data:
+                if isinstance(row, dict):
+                    for value in row.values():
+                        total_fields += 1
+                        if value is None or value == "":
+                            null_fields += 1
+            
+            null_rate = null_fields / total_fields if total_fields > 0 else 0
+            
+            if null_rate > 0.3:
+                issues.append(f"数据缺失率较高（{null_rate*100:.1f}%）")
+                score -= 15
+            elif null_rate < 0.1:
+                strengths.append(f"数据完整性良好（缺失率 {null_rate*100:.1f}%）")
+        
+        # 检查3：数据多样性
+        if data and isinstance(data[0], dict):
+            field_count = len(data[0])
+            if field_count < 3:
+                issues.append(f"数据维度较少（{field_count}个字段）")
+                score -= 10
+            elif field_count >= 5:
+                strengths.append(f"数据维度丰富（{field_count}个字段）")
+        
+        # 评级
+        if score >= 80:
+            rating = "excellent"
+        elif score >= 60:
+            rating = "good"
+        elif score >= 40:
+            rating = "fair"
+        else:
+            rating = "poor"
+        
+        return {
+            "rating": rating,
+            "score": max(0, score),
+            "issues": issues,
+            "strengths": strengths,
+            "total_rows": total_rows
+        }
+    
+    def _calculate_confidence_factors(
+        self,
+        insights: Dict[str, Any],
+        statistics: Dict[str, Any],
+        relationship_context: Optional[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        计算置信度因素（可解释性增强）
+        
+        Returns:
+            影响置信度的因素列表
+        """
+        factors = []
+        
+        # 因素1：数据量
+        row_count = statistics.get("row_count", 0)
+        if row_count >= 100:
+            factors.append({
+                "factor": "数据量充足",
+                "impact": "positive",
+                "description": f"分析了 {row_count} 条记录，样本量足够支持准确分析",
+                "weight": 0.2
+            })
+        elif row_count < 10:
+            factors.append({
+                "factor": "数据量不足",
+                "impact": "negative",
+                "description": f"仅有 {row_count} 条记录，可能影响分析准确性",
+                "weight": -0.3
+            })
+        
+        # 因素2：数值列数量
+        numeric_cols = len(statistics.get("numeric_columns", []))
+        if numeric_cols >= 3:
+            factors.append({
+                "factor": "数值指标丰富",
+                "impact": "positive",
+                "description": f"包含 {numeric_cols} 个数值列，支持多维度量化分析",
+                "weight": 0.15
+            })
+        elif numeric_cols == 0:
+            factors.append({
+                "factor": "缺少数值指标",
+                "impact": "negative",
+                "description": "数据中无数值列，无法进行量化分析",
+                "weight": -0.4
+            })
+        
+        # 因素3：图谱关系
+        if relationship_context:
+            rel_count = len(relationship_context.get("direct_relationships", []))
+            if rel_count > 0:
+                factors.append({
+                    "factor": "图谱关系支持",
+                    "impact": "positive",
+                    "description": f"发现 {rel_count} 个表间关系，增强跨表分析能力",
+                    "weight": 0.15
+                })
+        
+        # 因素4：异常检测结果
+        anomalies = insights.get("anomalies", [])
+        if len(anomalies) > 0:
+            high_severity = sum(1 for a in anomalies if a.get("severity") == "high")
+            if high_severity > 0:
+                factors.append({
+                    "factor": "发现高危异常",
+                    "impact": "neutral",
+                    "description": f"检测到 {high_severity} 个高严重度异常，需要关注",
+                    "weight": 0.0
+                })
+        
+        # 因素5：建议数量
+        recommendations = insights.get("recommendations", [])
+        if len(recommendations) >= 3:
+            factors.append({
+                "factor": "建议充足",
+                "impact": "positive",
+                "description": f"生成了 {len(recommendations)} 条可操作建议",
+                "weight": 0.1
+            })
+        
+        return factors
+    
+    def _generate_explainability_report(
+        self,
+        analysis_process: Dict[str, Any],
+        insights: Dict[str, Any],
+        statistics: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        生成可解释性报告（阶段4核心功能）
+        
+        Returns:
+            详细的分析过程说明和可解释性信息
+        """
+        # 1. 分析流程总结
+        steps_summary = []
+        for step in analysis_process.get("steps", []):
+            steps_summary.append({
+                "step": step["step"],
+                "name": step["name"],
+                "description": step["description"],
+                "time_elapsed_ms": int(step["timestamp"] * 1000)
+            })
+        
+        # 2. 数据质量评估
+        quality = analysis_process.get("data_quality_check", {})
+        
+        # 3. 置信度评分
+        confidence_factors = analysis_process.get("confidence_factors", [])
+        confidence_score = 0.7  # 基础分
+        for factor in confidence_factors:
+            confidence_score += factor.get("weight", 0)
+        confidence_score = max(0.0, min(1.0, confidence_score))
+        
+        # 4. 分析方法说明
+        method = analysis_process.get("analysis_method", "llm")
+        method_description = {
+            "llm": "使用大语言模型进行智能分析，结合多维度数据特征生成洞察",
+            "rule_based_fallback": "LLM分析失败，使用规则引擎降级分析（基于统计规则和阈值）"
+        }.get(method, "未知分析方法")
+        
+        # 5. 为什么给出这些洞察
+        why_insights = []
+        
+        # 趋势分析的理由
+        if insights.get("trends"):
+            trend_dir = insights["trends"].get("trend_direction", "未知")
+            if trend_dir in ["上升", "下降"]:
+                why_insights.append({
+                    "insight_type": "趋势分析",
+                    "reason": f"检测到数据整体呈现{trend_dir}趋势，基于时间序列数据的统计分析",
+                    "data_basis": f"分析了 {statistics.get('row_count', 0)} 条时序数据"
+                })
+        
+        # 异常检测的理由
+        anomalies = insights.get("anomalies", [])
+        if anomalies:
+            high_severity_count = sum(1 for a in anomalies if a.get("severity") == "high")
+            why_insights.append({
+                "insight_type": "异常检测",
+                "reason": f"发现 {len(anomalies)} 个异常数据点（其中 {high_severity_count} 个高危），基于统计离群检测算法",
+                "data_basis": "使用四分位距（IQR）和标准差方法进行异常识别"
+            })
+        
+        # 关联分析的理由
+        correlations = insights.get("correlations", [])
+        if correlations:
+            why_insights.append({
+                "insight_type": "关联分析",
+                "reason": f"识别出 {len(correlations)} 个跨表或跨维度的关联关系",
+                "data_basis": "基于知识图谱的表间关系和数据语义分析"
+            })
+        
+        # 建议的理由
+        recommendations = insights.get("recommendations", [])
+        high_priority = sum(1 for r in recommendations if r.get("priority") == "high")
+        if recommendations:
+            why_insights.append({
+                "insight_type": "业务建议",
+                "reason": f"生成了 {len(recommendations)} 条建议（{high_priority} 条高优先级）",
+                "data_basis": "基于数据趋势、异常模式和业务最佳实践"
+            })
+        
+        # 6. 下一步建议
+        next_actions = []
+        
+        if quality.get("rating") == "poor":
+            next_actions.append({
+                "action": "改善数据质量",
+                "reason": "当前数据质量较低，建议增加数据量或完善数据字段",
+                "priority": "high"
+            })
+        
+        if len(statistics.get("numeric_columns", [])) == 0:
+            next_actions.append({
+                "action": "添加量化指标",
+                "reason": "缺少数值型字段，建议添加可量化的业务指标",
+                "priority": "medium"
+            })
+        
+        if high_priority > 0:
+            next_actions.append({
+                "action": "处理高优先级建议",
+                "reason": f"发现 {high_priority} 条高优先级建议，建议优先处理",
+                "priority": "high"
+            })
+        
+        if len(anomalies) > 0:
+            high_severity = sum(1 for a in anomalies if a.get("severity") == "high")
+            if high_severity > 0:
+                next_actions.append({
+                    "action": "调查异常数据",
+                    "reason": f"发现 {high_severity} 个高危异常，建议深入调查根因",
+                    "priority": "high"
+                })
+        
+        # 7. 可视化建议
+        visualization_suggestions = []
+        
+        if insights.get("trends"):
+            visualization_suggestions.append({
+                "chart_type": "折线图",
+                "reason": "趋势数据适合使用折线图展示时间序列变化",
+                "recommended_fields": statistics.get("date_columns", [])[:2]
+            })
+        
+        if len(statistics.get("categorical_columns", [])) > 0 and len(statistics.get("numeric_columns", [])) > 0:
+            visualization_suggestions.append({
+                "chart_type": "柱状图",
+                "reason": "分类数据与数值数据结合，适合柱状图对比",
+                "recommended_fields": {
+                    "x": statistics.get("categorical_columns", [])[0],
+                    "y": statistics.get("numeric_columns", [])[0]
+                }
+            })
+        
+        return {
+            "analysis_flow": {
+                "steps": steps_summary,
+                "total_time_ms": int((time.time() - analysis_process["start_time"]) * 1000),
+                "method": method,
+                "method_description": method_description
+            },
+            "data_quality": {
+                "rating": quality.get("rating", "unknown"),
+                "score": quality.get("score", 0),
+                "issues": quality.get("issues", []),
+                "strengths": quality.get("strengths", [])
+            },
+            "confidence": {
+                "score": round(confidence_score, 2),
+                "factors": confidence_factors,
+                "interpretation": self._interpret_confidence(confidence_score)
+            },
+            "why_these_insights": why_insights,
+            "next_actions": next_actions,
+            "visualization_suggestions": visualization_suggestions,
+            "metadata": {
+                "analyzed_rows": statistics.get("row_count", 0),
+                "numeric_columns": len(statistics.get("numeric_columns", [])),
+                "categorical_columns": len(statistics.get("categorical_columns", [])),
+                "date_columns": len(statistics.get("date_columns", []))
+            }
+        }
+    
+    def _interpret_confidence(self, score: float) -> str:
+        """解释置信度分数"""
+        if score >= 0.85:
+            return "非常可信：分析基于充足的数据和多维度验证"
+        elif score >= 0.70:
+            return "可信：分析结果可靠，但建议结合业务经验判断"
+        elif score >= 0.50:
+            return "中等可信：数据或维度有限，结果仅供参考"
+        else:
+            return "低可信度：数据质量或数量不足，建议谨慎使用"
 
 
 # 创建全局实例

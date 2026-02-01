@@ -8,6 +8,7 @@
 """
 import logging
 import math
+import re  # 新增：用于日期格式检测
 from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime, timedelta
 try:
@@ -102,8 +103,10 @@ class PredictionService:
             )
         
         # 6. 生成预测日期
+        # 检测原始日期格式
+        original_date_format = self._detect_date_format(dates[0]) if dates else "%Y-%m-%d"
         prediction_dates = self._generate_future_dates_enhanced(
-            parsed_dates, periods, data_quality.date_interval
+            parsed_dates, periods, data_quality.date_interval, original_date_format
         )
         
         # 7. 构建历史数据点
@@ -172,7 +175,8 @@ class PredictionService:
         parsed_data = []
         date_formats = [
             "%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S",
-            "%d/%m/%Y", "%m/%d/%Y", "%Y%m%d"
+            "%d/%m/%Y", "%m/%d/%Y", "%Y%m%d",
+            "%Y-%m", "%Y/%m",  # 新增：支持年月格式（如 2026-01）
         ]
         
         for idx, row in enumerate(data):
@@ -204,7 +208,15 @@ class PredictionService:
             elif isinstance(date_val, str) and date_str.strip():
                 for fmt in date_formats:
                     try:
-                        parsed_date = datetime.strptime(date_str[:10], fmt)
+                        # 根据格式长度选择解析的字符数
+                        expected_length = len(fmt.replace("%Y", "YYYY").replace("%m", "MM").replace("%d", "DD").replace("%H", "HH").replace("%M", "MM").replace("%S", "SS"))
+                        date_to_parse = date_str.strip()
+                        # 如果是年月格式（如 2026-01），不要截断
+                        if fmt in ["%Y-%m", "%Y/%m"]:
+                            date_to_parse = date_str[:7].strip()
+                        else:
+                            date_to_parse = date_str[:expected_length].strip()
+                        parsed_date = datetime.strptime(date_to_parse, fmt)
                         break
                     except (ValueError, TypeError):
                         continue
@@ -776,11 +788,33 @@ class PredictionService:
     
     # ==================== 日期生成 ====================
     
+    def _detect_date_format(self, date_str: str) -> str:
+        """检测原始日期格式"""
+        if not date_str or not isinstance(date_str, str):
+            return "%Y-%m-%d"
+        
+        date_str = date_str.strip()
+        
+        # 年月格式（如 2026-01）
+        if re.match(r'^\d{4}-\d{2}$', date_str):
+            return "%Y-%m"
+        if re.match(r'^\d{4}/\d{2}$', date_str):
+            return "%Y/%m"
+        
+        # 年月日格式
+        if re.match(r'^\d{4}-\d{2}-\d{2}', date_str):
+            return "%Y-%m-%d"
+        if re.match(r'^\d{4}/\d{2}/\d{2}', date_str):
+            return "%Y/%m/%d"
+        
+        return "%Y-%m-%d"  # 默认
+    
     def _generate_future_dates_enhanced(
         self, 
         dates: List[datetime], 
         periods: int,
-        interval_type: str
+        interval_type: str,
+        date_format: str = "%Y-%m-%d"  # 新增：支持自定义格式
     ) -> List[str]:
         """增强版日期生成 - 支持不等间隔"""
         if not dates:
@@ -814,7 +848,7 @@ class PredictionService:
                 # 默认按天
                 future_date = last_date + timedelta(days=i)
             
-            future_dates.append(future_date.strftime("%Y-%m-%d"))
+            future_dates.append(future_date.strftime(date_format))
         
         return future_dates
     

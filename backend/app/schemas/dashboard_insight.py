@@ -150,6 +150,7 @@ class InsightResult(BaseModel):
     anomalies: Optional[List[InsightAnomaly]] = Field(default_factory=list)
     correlations: Optional[List[InsightCorrelation]] = Field(default_factory=list)
     recommendations: Optional[List[InsightRecommendation]] = Field(default_factory=list)
+    explainability: Optional[Dict[str, Any]] = Field(None, description="可解释性信息（阶段4）")
 
 
 # 洞察生成响应Schema

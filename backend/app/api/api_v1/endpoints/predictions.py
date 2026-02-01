@@ -36,6 +36,10 @@ async def create_prediction(
     基于Widget的历史数据进行时间序列预测
     """
     try:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[Predict] 收到请求: dashboard_id={dashboard_id}, request={request.dict() if hasattr(request, 'dict') else request}")
+        
         # 检查权限
         has_permission = crud.crud_dashboard.check_permission(
             db, dashboard_id=dashboard_id, user_id=current_user.id, required_level="viewer"
@@ -55,24 +59,38 @@ async def create_prediction(
         data_cache = widget.data_cache or {}
         data = data_cache.get("data", [])
         
+        logger.info(f"[Predict] Widget {request.widget_id} data_cache类型: {type(data_cache)}, data长度: {len(data)}")
+        if data and len(data) > 0:
+            logger.info(f"[Predict] 第一行数据: {data[0]}")
+        
         if not data:
             raise HTTPException(status_code=400, detail="Widget没有可用数据")
         
         if len(data) < 3:
-            raise HTTPException(status_code=400, detail="数据点数量不足，至少需要3个数据点")
+            logger.warning(f"[Predict] Widget {request.widget_id} 数据不足: {len(data)}条，需要至少3条")
+            raise HTTPException(status_code=400, detail=f"数据点数量不足，当前{len(data)}条，至少需要3条数据点")
+        
+        # 获取列名（兼容两种命名方式）
+        date_column = request.get_date_column()
+        value_column = request.get_value_column()
+        
+        if not date_column:
+            raise HTTPException(status_code=400, detail="必须提供时间列名（date_column 或 time_column）")
+        if not value_column:
+            raise HTTPException(status_code=400, detail="必须提供数值列名（value_column 或 target_column）")
         
         # 验证列存在
         first_row = data[0]
-        if request.date_column not in first_row:
-            raise HTTPException(status_code=400, detail=f"时间列 '{request.date_column}' 不存在")
-        if request.value_column not in first_row:
-            raise HTTPException(status_code=400, detail=f"数值列 '{request.value_column}' 不存在")
+        if date_column not in first_row:
+            raise HTTPException(status_code=400, detail=f"时间列 '{date_column}' 不存在")
+        if value_column not in first_row:
+            raise HTTPException(status_code=400, detail=f"数值列 '{value_column}' 不存在")
         
         # 执行预测
         result = await prediction_service.predict(
             data=data,
-            date_column=request.date_column,
-            value_column=request.value_column,
+            date_column=date_column,
+            value_column=value_column,
             periods=request.periods,
             method=request.method.value,
             confidence_level=request.confidence_level
@@ -83,10 +101,13 @@ async def create_prediction(
     except HTTPException:
         raise
     except ValueError as e:
+        logger.error(f"[Predict] ValueError: {str(e)}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         import traceback
-        traceback.print_exc()
+        error_trace = traceback.format_exc()
+        logger.error(f"[Predict] 预测分析失败: {str(e)}")
+        logger.error(f"[Predict] 错误堆栈:\n{error_trace}")
         raise HTTPException(status_code=500, detail=f"预测分析失败: {str(e)}")
 
 

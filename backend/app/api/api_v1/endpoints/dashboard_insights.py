@@ -21,7 +21,7 @@ async def generate_mining_suggestions(
     dashboard_id: int,
     request: schemas.MiningRequest,
 ) -> Any:
-    """生成智能挖掘建议"""
+    """生成智能挖掘建议（增强版：支持个性化上下文）"""
     try:
         from app import crud
         # 检查权限
@@ -31,7 +31,13 @@ async def generate_mining_suggestions(
         if not has_permission:
             raise HTTPException(status_code=403, detail="No permission to view this dashboard")
         
-        return await dashboard_insight_service.generate_mining_suggestions(db, request)
+        # ✨ 传递 dashboard_id 和 user_id 以支持个性化
+        return await dashboard_insight_service.generate_mining_suggestions(
+            db, 
+            request,
+            dashboard_id=dashboard_id,  # 新增：Dashboard上下文
+            user_id=current_user.id  # 新增：用户画像
+        )
     except Exception as e:
         logger.exception(f"生成挖掘建议失败: dashboard_id={dashboard_id}")
         raise HTTPException(status_code=500, detail=str(e))

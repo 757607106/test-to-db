@@ -167,12 +167,18 @@ class DashboardInsightService:
         
         return True, "", []
     
-    async def generate_mining_suggestions(self, db: Session, request: schemas.MiningRequest) -> schemas.MiningResponse:
-        """生成智能挖掘建议（优化版：防幻觉 + SQL 验证）"""
+    async def generate_mining_suggestions(
+        self, 
+        db: Session, 
+        request: schemas.MiningRequest,
+        dashboard_id: Optional[int] = None,  # 新增：Dashboard上下文
+        user_id: Optional[int] = None  # 新增：用户画像
+    ) -> schemas.MiningResponse:
+        """生成智能挖掘建议（优化版：上下文感知 + 个性化 + SQL验证）"""
         import logging
         logger = logging.getLogger(__name__)
         
-        logger.info(f"[Mining] 开始生成挖掘建议, connection_id={request.connection_id}, intent={request.intent}")
+        logger.info(f"[Mining] 开始生成挖掘建议, connection_id={request.connection_id}, dashboard_id={dashboard_id}, user_id={user_id}")
         
         # 0. 获取数据库连接信息
         from app.models.db_connection import DBConnection
@@ -180,25 +186,300 @@ class DashboardInsightService:
         db_type = connection.db_type.upper() if connection else "MYSQL"
         logger.info(f"[Mining] 数据库类型: {db_type}")
         
-        # 1. 获取上下文
-        if request.intent:
-            schema_context = retrieve_relevant_schema(db, request.connection_id, request.intent)
+        # ✨ 1. 构建增强的上下文（核心改进）
+        context_info = await self._build_mining_context(
+            db, request.connection_id, dashboard_id, user_id, request.intent
+        )
+        logger.info(f"[Mining] 上下文构建完成: {context_info.get('context_description', 'N/A')}")
+        
+        # 2. 获取 Schema（智能筛选）
+        if request.intent or context_info.get("suggested_tables"):
+            # 有意图或推荐表时，使用相关Schema
+            schema_context = await self._get_relevant_schema_enhanced(
+                db, request.connection_id, request.intent, context_info
+            )
         else:
-            tables = crud.schema_table.get_by_connection(db=db, connection_id=request.connection_id)
+            # 无意图时，使用全量Schema
+            schema_context = self._get_full_schema(db, request.connection_id)
+        
+        if not schema_context.get("tables"):
+            logger.warning("[Mining] schema_context 中无表")
+            return schemas.MiningResponse(suggestions=[])
+        
+        logger.info(f"[Mining] Schema 包含 {len(schema_context.get('tables', []))} 个表")
+        
+        # 3. 构建表/列白名单（防幻觉核心）
+        whitelist_str, valid_tables, valid_columns = self._build_table_column_whitelist(schema_context)
+        logger.info(f"[Mining] 白名单包含 {len(valid_tables)} 个表, 共 {sum(len(cols) for cols in valid_columns.values())} 个字段")
+        
+        # 4. 格式化 Schema
+        schema_str = format_schema_for_prompt(schema_context)
+        
+        # ✨ 5. 构建增强的 Prompt（包含上下文）
+        prompt = self._build_mining_prompt_enhanced(
+            db_type=db_type,
+            schema_str=schema_str,
+            whitelist_str=whitelist_str,
+            context_info=context_info,
+            request=request
+        )
+        try:
+            import json
+            from app.core.llm_wrapper import LLMWrapper, LLMWrapperConfig
+            from app.core.llms import get_default_model
+            from app.models.agent_profile import AgentProfile
+            from app.models.llm_config import LLMConfiguration
+            from app.core.config import settings
             
-            if not tables:
-                logger.warning(f"[Mining] 未找到表, connection_id={request.connection_id}")
-                return schemas.MiningResponse(suggestions=[])
+            # 获取 Agent 配置
+            profile = db.query(AgentProfile).filter(AgentProfile.name == CORE_AGENT_SQL_GENERATOR).first()
             
-            logger.info(f"[Mining] 找到 {len(tables)} 个表")
+            # 获取 LLM 配置
+            llm_config = None
+            if profile and profile.llm_config_id:
+                llm_config = db.query(LLMConfiguration).filter(
+                    LLMConfiguration.id == profile.llm_config_id,
+                    LLMConfiguration.is_active == True
+                ).first()
             
-            tables_list = []
-            columns_list = []
-            table_names = []
+            # 使用 LLMWrapper（统一重试策略，无超时限制）
+            llm = get_default_model(config_override=llm_config, caller="dashboard_mining")
+            wrapper_config = LLMWrapperConfig(
+                max_retries=3,
+                retry_base_delay=2.0,
+                enable_tracing=settings.LANGCHAIN_TRACING_V2,
+            )
+            wrapper = LLMWrapper(llm=llm, config=wrapper_config, name="dashboard_mining")
             
-            # 遍历所有表，不限制数量以确保 SQL 生成准确性
-            for table in tables:
-                table_names.append(table.table_name)
+            response = await wrapper.ainvoke([
+                SystemMessage(content="""你是一个专业的数据分析师。
+
+【极其重要的规则 - 违反将导致建议被拒绝】：
+1. 只返回 JSON 格式的响应
+2. SQL 必须是纯 SELECT 查询，绝对禁止 INSERT/UPDATE/DELETE/CREATE/DROP/ALTER
+3. 所有表名必须精确匹配白名单中的表名（区分大小写）
+4. 所有列名必须精确匹配白名单中的列名（区分大小写）
+5. 禁止在 SQL 中创建子查询表别名后使用不存在的列
+6. 禁止使用 CTE（WITH 子句）创建虚拟表
+7. 如果白名单中没有需要的表，请直接放弃该分析建议
+
+严格遵守：白名单是唯一可用的数据源，不能想象或推测任何表名/列名。"""),
+                HumanMessage(content=prompt)
+            ])
+            
+            # 解析 LLM 返回的 JSON
+            response_text = response.content if hasattr(response, 'content') else str(response)
+            # 清理可能的 markdown 代码块
+            response_text = response_text.strip()
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]
+            if response_text.startswith("```"):
+                response_text = response_text[3:]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
+            response_text = response_text.strip()
+            
+            parsed = json.loads(response_text)
+            raw_suggestions = parsed.get("suggestions", [])
+            logger.info(f"[Mining] LLM 返回 {len(raw_suggestions)} 个原始建议")
+            
+            # 5. 验证每个 SQL 并过滤无效的
+            validated_suggestions = []
+            invalid_count = 0
+            
+            for idx, s in enumerate(raw_suggestions):
+                sql = s.get("sql", "")
+                title = s.get("title", f"建议{idx+1}")
+                
+                if not sql:
+                    logger.warning(f"[Mining] 建议 '{title}' 无 SQL，跳过")
+                    invalid_count += 1
+                    continue
+                
+                # 验证 SQL
+                is_valid, error_msg, invalid_refs = self._validate_sql_against_whitelist(
+                    sql, valid_tables, valid_columns, db_type
+                )
+                
+                if not is_valid:
+                    logger.warning(f"[Mining] 建议 '{title}' SQL 验证失败: {error_msg}")
+                    for ref in invalid_refs[:3]:  # 最多显示3个无效引用
+                        logger.warning(f"[Mining]   - {ref}")
+                    invalid_count += 1
+                    # 直接跳过验证失败的建议，不保留
+                    continue
+                
+                validated_suggestions.append(
+                    schemas.MiningSuggestion(
+                        title=s.get("title", ""),
+                        description=s.get("description", ""),
+                        chart_type=s.get("chart_type", "bar"),
+                        sql=sql,
+                        analysis_intent=s.get("analysis_intent", s.get("title", "数据分析")),
+                        reasoning=s.get("reasoning", s.get("description", "")),
+                        mining_dimension=s.get("mining_dimension", "business"),
+                        confidence=float(s.get("confidence", 0.8)),
+                        source_tables=s.get("source_tables", []),
+                        key_fields=s.get("key_fields", []),
+                        business_value=s.get("business_value", ""),
+                        suggested_actions=s.get("suggested_actions", [])
+                    )
+                )
+            
+            # 按置信度排序，高置信度的排在前面
+            validated_suggestions.sort(key=lambda x: x.confidence, reverse=True)
+            
+            valid_count = len(validated_suggestions)
+            total_count = len(raw_suggestions)
+            success_rate = (valid_count / total_count * 100) if total_count > 0 else 0
+            
+            logger.info(f"[Mining] 最终返回 {valid_count}/{total_count} 个有效建议 ({success_rate:.1f}%), {invalid_count} 个因SQL验证失败被过滤")
+            
+            # 如果有效建议太少，记录警告
+            if success_rate < 50 and total_count > 0:
+                logger.warning(f"[Mining] SQL验证通过率较低 ({success_rate:.1f}%)，建议检查LLM是否正确理解白名单约束")
+            
+            return schemas.MiningResponse(suggestions=validated_suggestions)
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"[Mining] JSON 解析失败: {e}")
+            logger.error(f"[Mining] 原始响应: {response_text[:500]}...")
+            return schemas.MiningResponse(suggestions=[])
+        except Exception as e:
+            logger.error(f"[Mining] 建议生成失败: {e}", exc_info=True)
+            return schemas.MiningResponse(suggestions=[])
+    
+    async def _build_mining_context(
+        self,
+        db: Session,
+        connection_id: int,
+        dashboard_id: Optional[int],
+        user_id: Optional[int],
+        user_intent: Optional[str]
+    ) -> Dict[str, Any]:
+        """构建挖掘建议的上下文信息（个性化核心）"""
+        context = {
+            "user_intent": user_intent or "",
+            "dashboard_context": {},
+            "user_history": {},
+            "suggested_tables": [],
+            "suggested_dimensions": [],
+            "context_description": ""
+        }
+        
+        # 1. Dashboard上下文
+        if dashboard_id:
+            dashboard = crud.crud_dashboard.get(db, id=dashboard_id)
+            if dashboard:
+                existing_analysis = []
+                for widget in dashboard.widgets:
+                    if widget.query_config:
+                        intent = widget.query_config.get("query_intent", "")
+                        if intent and intent not in existing_analysis:
+                            existing_analysis.append(intent)
+                
+                context["dashboard_context"] = {
+                    "name": dashboard.name,
+                    "description": dashboard.description or "",
+                    "widget_count": len(dashboard.widgets),
+                    "existing_analysis": existing_analysis
+                }
+        
+        # 2. 用户历史（查询用户最近的查询意图）
+        if user_id:
+            from app.models.dashboard import Dashboard
+            recent_dashboards = db.query(Dashboard).filter(
+                Dashboard.owner_id == user_id  # 修复：使用 owner_id 而不是 created_by
+            ).order_by(Dashboard.created_at.desc()).limit(5).all()
+            
+            user_intents = []
+            user_tables = set()
+            for dash in recent_dashboards:
+                for widget in dash.widgets:
+                    if widget.query_config:
+                        intent = widget.query_config.get("query_intent")
+                        if intent and intent not in user_intents:
+                            user_intents.append(intent)
+                        
+                        if "source_tables" in widget.query_config:
+                            user_tables.update(widget.query_config["source_tables"])
+            
+            context["user_history"] = {
+                "recent_intents": user_intents[:10],
+                "frequently_used_tables": list(user_tables)
+            }
+            
+            context["suggested_tables"] = list(user_tables)[:5]
+        
+        # 3. 基于意图的维度建议
+        if user_intent:
+            intent_lower = user_intent.lower()
+            if any(kw in intent_lower for kw in ["趋势", "时间", "变化", "增长", "trend", "time"]):
+                context["suggested_dimensions"].append("trend")
+            if any(kw in intent_lower for kw in ["异常", "问题", "风险", "anomaly", "issue"]):
+                context["suggested_dimensions"].append("anomaly")
+            if any(kw in intent_lower for kw in ["业务", "指标", "KPI", "business", "metric"]):
+                context["suggested_dimensions"].extend(["business", "metric"])
+            if any(kw in intent_lower for kw in ["关联", "关系", "相关", "correlation", "relationship"]):
+                context["suggested_dimensions"].append("semantic")
+        
+        if not context["suggested_dimensions"]:
+            context["suggested_dimensions"] = ["business", "metric", "trend"]
+        
+        # 4. 生成上下文描述
+        desc_parts = []
+        if dashboard_id:
+            desc_parts.append(f"当前看板: {context['dashboard_context'].get('name', '未命名')}")
+            existing = context["dashboard_context"].get("existing_analysis", [])
+            if existing:
+                desc_parts.append(f"已有{len(existing)}个分析")
+        
+        if context["user_history"].get("recent_intents"):
+            desc_parts.append(f"用户偏好: {', '.join(context['user_history']['recent_intents'][:2])}")
+        
+        context["context_description"] = "; ".join(desc_parts) if desc_parts else "全新分析"
+        
+        return context
+    
+    async def _get_relevant_schema_enhanced(
+        self,
+        db: Session,
+        connection_id: int,
+        user_intent: Optional[str],
+        context_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """获取相关Schema（增强版：考虑上下文）"""
+        # 优先使用用户历史中的表
+        suggested_tables = context_info.get("suggested_tables", [])
+        
+        if user_intent:
+            # 使用原有的语义搜索
+            schema_context = retrieve_relevant_schema(db, connection_id, user_intent)
+        else:
+            # 使用推荐的表
+            schema_context = self._get_schema_for_tables(db, connection_id, suggested_tables)
+        
+        return schema_context
+    
+    def _get_schema_for_tables(
+        self,
+        db: Session,
+        connection_id: int,
+        table_names: List[str]
+    ) -> Dict[str, Any]:
+        """获取指定表的Schema"""
+        if not table_names:
+            return self._get_full_schema(db, connection_id)
+        
+        tables = crud.schema_table.get_by_connection(db=db, connection_id=connection_id)
+        
+        tables_list = []
+        columns_list = []
+        matched_table_names = []
+        
+        for table in tables:
+            if table.table_name in table_names:
+                matched_table_names.append(table.table_name)
                 tables_list.append({
                     "id": table.id,
                     "name": table.table_name,
@@ -217,13 +498,14 @@ class DashboardInsightService:
                         "table_id": table.id,
                         "table_name": table.table_name
                     })
-            
-            # 获取表之间的关系
-            relationships = []
+        
+        # 获取表之间的关系
+        relationships = []
+        if matched_table_names:
             try:
                 relationship_context = graph_relationship_service.query_table_relationships(
-                    connection_id=request.connection_id,
-                    table_names=table_names
+                    connection_id=connection_id,
+                    table_names=matched_table_names
                 )
                 if relationship_context.get("direct_relationships"):
                     for rel in relationship_context["direct_relationships"]:
@@ -234,29 +516,83 @@ class DashboardInsightService:
                             "target_column": rel.get("target_column"),
                             "relationship_type": rel.get("relationship_type", "references")
                         })
-                    logger.info(f"[Mining] 找到 {len(relationships)} 个表间关系")
-            except Exception as e:
-                logger.warning(f"[Mining] 获取表关系失败: {e}")
+            except Exception:
+                pass
+        
+        return {
+            "tables": tables_list,
+            "columns": columns_list,
+            "relationships": relationships
+        }
+    
+    def _get_full_schema(self, db: Session, connection_id: int) -> Dict[str, Any]:
+        """获取完整Schema"""
+        tables = crud.schema_table.get_by_connection(db=db, connection_id=connection_id)
+        
+        if not tables:
+            return {"tables": [], "columns": [], "relationships": []}
+        
+        tables_list = []
+        columns_list = []
+        table_names = []
+        
+        for table in tables:
+            table_names.append(table.table_name)
+            tables_list.append({
+                "id": table.id,
+                "name": table.table_name,
+                "description": table.description or ""
+            })
             
-            schema_context = {
-                "tables": tables_list,
-                "columns": columns_list,
-                "relationships": relationships
-            }
+            columns = crud.schema_column.get_by_table(db=db, table_id=table.id)
+            for col in columns:
+                columns_list.append({
+                    "id": col.id,
+                    "name": col.column_name,
+                    "type": col.data_type,
+                    "description": col.description or "",
+                    "is_primary_key": col.is_primary_key,
+                    "is_foreign_key": col.is_foreign_key,
+                    "table_id": table.id,
+                    "table_name": table.table_name
+                })
         
-        if not schema_context.get("tables"):
-            logger.warning("[Mining] schema_context 中无表")
-            return schemas.MiningResponse(suggestions=[])
+        # 获取表之间的关系
+        relationships = []
+        try:
+            relationship_context = graph_relationship_service.query_table_relationships(
+                connection_id=connection_id,
+                table_names=table_names
+            )
+            if relationship_context.get("direct_relationships"):
+                for rel in relationship_context["direct_relationships"]:
+                    relationships.append({
+                        "source_table": rel.get("source_table"),
+                        "source_column": rel.get("source_column"),
+                        "target_table": rel.get("target_table"),
+                        "target_column": rel.get("target_column"),
+                        "relationship_type": rel.get("relationship_type", "references")
+                    })
+        except Exception:
+            pass
         
-        # 2. 构建表/列白名单（防幻觉核心）
-        whitelist_str, valid_tables, valid_columns = self._build_table_column_whitelist(schema_context)
-        logger.info(f"[Mining] 白名单包含 {len(valid_tables)} 个表, 共 {sum(len(cols) for cols in valid_columns.values())} 个字段")
+        return {
+            "tables": tables_list,
+            "columns": columns_list,
+            "relationships": relationships
+        }
+    
+    def _build_mining_prompt_enhanced(
+        self,
+        db_type: str,
+        schema_str: str,
+        whitelist_str: str,
+        context_info: Dict[str, Any],
+        request: schemas.MiningRequest
+    ) -> str:
+        """构建增强的挖掘 Prompt（包含上下文）"""
         
-        # 3. 格式化 Schema
-        schema_str = format_schema_for_prompt(schema_context)
-        
-        # 3. 构建 Prompt（要求返回 JSON 格式）
-        # 根据数据库类型提供 SQL 语法指南
+        # SQL 语法指南
         sql_syntax_guides = {
             "MYSQL": """
 SQL 语法注意事项（MySQL）：
@@ -317,181 +653,131 @@ SQL 语法注意事项（ClickHouse）：
 - 专为 OLAP 优化，聚合查询性能优异""",
         }
         
-        db_type_upper = db_type.upper()
-        # 尝试匹配数据库类型，支持模糊匹配
-        sql_syntax_guide = ""
-        for key, guide in sql_syntax_guides.items():
-            if key in db_type_upper or db_type_upper in key:
-                sql_syntax_guide = guide
-                break
-        
-        # 如果没有匹配到，提供通用指南
-        if not sql_syntax_guide:
-            sql_syntax_guide = f"""
+        sql_syntax_guide = sql_syntax_guides.get(db_type, f"""
 SQL 语法注意事项（{db_type}）：
 - 请使用标准 ANSI SQL 语法
 - 避免使用数据库特定的扩展语法
 - 使用通用的聚合函数（SUM, COUNT, AVG, MAX, MIN）
 - 使用标准的 JOIN 语法（INNER JOIN, LEFT JOIN）
-- 日期函数请根据实际数据库调整"""
+- 日期函数请根据实际数据库调整""")
         
-        prompt = f"""你是一个智能数据分析师。请基于以下数据库结构，推荐 {request.limit} 个有价值的数据分析视角（图表）。
+        # ✨ 上下文描述
+        context_section = f"""
+【重要】上下文信息（请基于此生成个性化建议）：
+- 分析场景: {context_info.get("context_description", "通用分析")}
+- 用户意图: {request.intent or context_info.get("user_intent") or "自动发现关键指标"}
+"""
+        
+        # Dashboard 已有分析
+        existing_analysis = context_info.get("dashboard_context", {}).get("existing_analysis", [])
+        if existing_analysis:
+            context_section += f"- 已有分析: {', '.join(existing_analysis[:5])}\n"
+            context_section += "  【请避免推荐与已有分析重复的内容】\n"
+        
+        # 用户历史偏好
+        user_intents = context_info.get("user_history", {}).get("recent_intents", [])
+        if user_intents:
+            context_section += f"- 用户历史偏好: {', '.join(user_intents[:3])}\n"
+        
+        # 推荐维度
+        suggested_dims = context_info.get("suggested_dimensions", ["business", "metric", "trend"])
+        context_section += f"- 推荐维度: {', '.join(suggested_dims)}\n"
+        
+        prompt = f"""你是一个智能数据分析师。请基于以下信息，推荐 {request.limit} 个**个性化的**数据分析视角。
+
+{context_section}
 
 目标数据库类型：{db_type}
 {sql_syntax_guide}
 
-用户意图：{request.intent or "自动发现关键业务指标和趋势"}
-
+【❗极其重要 - 必须严格遵守❗】
 {whitelist_str}
+
+⚠️ 严重警告：
+1. 你只能使用上述白名单中明确列出的表名和字段名
+2. 禁止创建子查询中的临时表或 CTE（WITH 子句）使用不存在的表名
+3. 禁止使用任何 CREATE、DROP、ALTER、INSERT、UPDATE、DELETE 等操作
+4. 如果某个分析需要的表不在白名单中，请放弃该分析，不要尝试生成
+5. 表别名后必须使用白名单中的真实列名，不能自己创造列名
+
+✅ 正确示例（假设白名单有 orders 表，包含 order_id, amount, order_date 列）：
+```sql
+-- ✅ 正确：不使用 LIMIT，返回完整数据
+SELECT 
+    DATE_TRUNC('month', order_date) as month,
+    SUM(amount) as total_amount,
+    COUNT(order_id) as order_count
+FROM orders
+WHERE order_date >= '2024-01-01'
+GROUP BY DATE_TRUNC('month', order_date)
+ORDER BY month DESC
+-- 注意：不要添加 LIMIT，让前端根据需要显示
+```
+
+❌ 错误示例（使用了不存在的表/列）：
+```sql
+-- 错误1：使用了不在白名单的表 monthly_sales
+SELECT * FROM monthly_sales  -- ❌ monthly_sales 不在白名单
+
+-- 错误2：使用了不存在的列
+SELECT order_id, customer_name FROM orders  -- ❌ customer_name 不在白名单
+
+-- 错误3：子查询使用虚拟表
+WITH sales_summary AS (  -- ❌ 不要使用 CTE 创建虚拟表
+    SELECT * FROM imaginary_table
+)
+SELECT * FROM sales_summary
+
+-- 错误4：使用 UPDATE
+UPDATE orders SET amount = 100  -- ❌ 禁止 UPDATE
+```
 
 数据库结构详情：
 {schema_str}
 
-挖掘维度要求（请覆盖多个维度）：
+【核心要求 - 按优先级排序】：
+1. ⚠️【最高优先级】SQL 必须100%遵守白名单约束：
+   - 每个表名都必须在白名单的"可用表"列表中
+   - 每个列名都必须在白名单的"表.列"列表中
+   - 不能使用白名单之外的任何表名或列名
+   - 不能使用 INSERT/UPDATE/DELETE/CREATE/DROP/ALTER
+2. ⚠️【重要】SQL 不要添加 LIMIT 限制，返回完整数据集
+3. 分析建议必须结合上述上下文，体现个性化
+4. 避免推荐与"已有分析"重复的内容
+5. 优先覆盖"推荐维度"中的分析类型
+6. 每个推荐都要有明确的 reasoning（解释为什么推荐这个分析）
+7. business_value 要说明这个分析能帮助用户做什么决策
+
+挖掘维度说明：
 - business（业务数据）：核心业务指标、KPI
 - metric（指标分析）：关键数值的统计分布
 - trend（趋势分析）：时间序列变化
 - semantic（语义关联）：基于字段语义发现的关联分析
 
-【核心约束 - 必须严格遵守】：
-1. SQL 中的表名和列名必须严格匹配上述白名单，禁止使用任何白名单之外的表或字段
-2. JOIN 时必须使用白名单中指定的关联字段，不得自行推测
-3. 推荐的 SQL 必须是合法的 {db_type} SELECT 语句
-4. 图表类型从以下选择：bar, line, pie, scatter, table
-5. 每个推荐都要有明确的业务价值和推荐理由
-6. SQL 尽量包含聚合分析（SUM, COUNT, AVG, GROUP BY）
-7. 严格遵循 {db_type} 的 SQL 语法规范
-
-请以 JSON 格式返回，格式如下：
-{{{{
+请以 JSON 格式返回：
+{{
   "suggestions": [
-    {{{{
+    {{
       "title": "图表标题",
-      "description": "简短描述（一句话）",
-      "reasoning": "详细推荐理由：为什么这个分析对业务有价值，数据逻辑是什么",
+      "description": "简短描述",
+      "reasoning": "为什么推荐这个分析？结合上下文说明",
       "mining_dimension": "business|metric|trend|semantic",
       "confidence": 0.85,
       "chart_type": "bar|line|pie|scatter|table",
       "sql": "SELECT ...",
-      "source_tables": ["表名1", "表名2"],
-      "key_fields": ["关键字段1", "关键字段2"],
+      "source_tables": ["表名1"],
+      "key_fields": ["字段1"],
       "business_value": "这个分析能帮助业务做什么决策",
-      "suggested_actions": ["建议动作1", "建议动作2"],
-      "analysis_intent": "分析意图描述"
-    }}}}
+      "suggested_actions": ["建议动作1"],
+      "analysis_intent": "分析意图"
+    }}
   ]
-}}}}
+}}
 
 只返回 JSON，不要有其他文字。
 """
         
-        # 4. 调用 LLM（使用 LLMWrapper 统一处理重试和超时）
-        try:
-            import json
-            from app.core.llm_wrapper import LLMWrapper, LLMWrapperConfig
-            from app.core.llms import get_default_model
-            from app.models.agent_profile import AgentProfile
-            from app.models.llm_config import LLMConfiguration
-            from app.core.config import settings
-            
-            # 获取 Agent 配置
-            profile = db.query(AgentProfile).filter(AgentProfile.name == CORE_AGENT_SQL_GENERATOR).first()
-            
-            # 获取 LLM 配置
-            llm_config = None
-            if profile and profile.llm_config_id:
-                llm_config = db.query(LLMConfiguration).filter(
-                    LLMConfiguration.id == profile.llm_config_id,
-                    LLMConfiguration.is_active == True
-                ).first()
-            
-            # 使用 LLMWrapper（统一重试策略，无超时限制）
-            llm = get_default_model(config_override=llm_config, caller="dashboard_mining")
-            wrapper_config = LLMWrapperConfig(
-                max_retries=3,
-                retry_base_delay=2.0,
-                enable_tracing=settings.LANGCHAIN_TRACING_V2,
-            )
-            wrapper = LLMWrapper(llm=llm, config=wrapper_config, name="dashboard_mining")
-            
-            response = await wrapper.ainvoke([
-                SystemMessage(content="你是一个专业的数据分析师。只返回 JSON 格式的响应。"),
-                HumanMessage(content=prompt)
-            ])
-            
-            # 解析 LLM 返回的 JSON
-            response_text = response.content if hasattr(response, 'content') else str(response)
-            # 清理可能的 markdown 代码块
-            response_text = response_text.strip()
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.startswith("```"):
-                response_text = response_text[3:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-            response_text = response_text.strip()
-            
-            parsed = json.loads(response_text)
-            raw_suggestions = parsed.get("suggestions", [])
-            logger.info(f"[Mining] LLM 返回 {len(raw_suggestions)} 个原始建议")
-            
-            # 5. 验证每个 SQL 并过滤无效的
-            validated_suggestions = []
-            invalid_count = 0
-            
-            for idx, s in enumerate(raw_suggestions):
-                sql = s.get("sql", "")
-                title = s.get("title", f"建议{idx+1}")
-                
-                if not sql:
-                    logger.warning(f"[Mining] 建议 '{title}' 无 SQL，跳过")
-                    invalid_count += 1
-                    continue
-                
-                # 验证 SQL
-                is_valid, error_msg, invalid_refs = self._validate_sql_against_whitelist(
-                    sql, valid_tables, valid_columns, db_type
-                )
-                
-                if not is_valid:
-                    logger.warning(f"[Mining] 建议 '{title}' SQL 验证失败: {error_msg}")
-                    for ref in invalid_refs[:3]:  # 最多显示3个无效引用
-                        logger.warning(f"[Mining]   - {ref}")
-                    invalid_count += 1
-                    # 降低置信度但仍然保留（让用户决定）
-                    s["confidence"] = max(0.3, float(s.get("confidence", 0.8)) - 0.4)
-                    s["reasoning"] = f"【警告】{error_msg}\n\n" + s.get("reasoning", "")
-                
-                validated_suggestions.append(
-                    schemas.MiningSuggestion(
-                        title=s.get("title", ""),
-                        description=s.get("description", ""),
-                        chart_type=s.get("chart_type", "bar"),
-                        sql=sql,
-                        analysis_intent=s.get("analysis_intent", s.get("title", "数据分析")),
-                        reasoning=s.get("reasoning", s.get("description", "")),
-                        mining_dimension=s.get("mining_dimension", "business"),
-                        confidence=float(s.get("confidence", 0.8)),
-                        source_tables=s.get("source_tables", []),
-                        key_fields=s.get("key_fields", []),
-                        business_value=s.get("business_value", ""),
-                        suggested_actions=s.get("suggested_actions", [])
-                    )
-                )
-            
-            # 按置信度排序，高置信度的排在前面
-            validated_suggestions.sort(key=lambda x: x.confidence, reverse=True)
-            
-            logger.info(f"[Mining] 最终返回 {len(validated_suggestions)} 个建议, {invalid_count} 个 SQL 验证失败")
-            return schemas.MiningResponse(suggestions=validated_suggestions)
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"[Mining] JSON 解析失败: {e}")
-            logger.error(f"[Mining] 原始响应: {response_text[:500]}...")
-            return schemas.MiningResponse(suggestions=[])
-        except Exception as e:
-            logger.error(f"[Mining] 建议生成失败: {e}", exc_info=True)
-            return schemas.MiningResponse(suggestions=[])
+        return prompt
 
     def trigger_dashboard_insights(
         self,
@@ -604,127 +890,38 @@ SQL 语法注意事项（{db_type}）：
                 aggregated_data = self._aggregate_widget_data(data_widgets, request.conditions)
                 logger.info(f"📊 聚合数据完成: {aggregated_data['total_rows']} 行, {len(aggregated_data['table_names'])} 个表")
                 
-                # 3. 图谱查询（带重试）
-                relationship_context = None
-                relationship_count = 0
-                if request.use_graph_relationships and aggregated_data["table_names"]:
-                    try:
-                        connection_id = data_widgets[0].connection_id
-                        relationship_context = graph_relationship_service.query_table_relationships(
-                            connection_id,
-                            aggregated_data["table_names"]
-                        )
-                        relationship_count = relationship_context.get("relationship_count", 0)
-                        logger.info(f"🔗 图谱关系查询完成: {relationship_count} 个关系")
-                    except Exception as e:
-                        logger.warning(f"⚠️ 图谱关系查询失败: {e}")
-
-                # 4. 洞察分析（带重试机制）
-                insights = None
-                retry_count = 0
-                max_retries = 0  # 当前使用规则引擎，无需重试
-                while retry_count <= max_retries:
-                    try:
-                        analysis_method_parts = [
-                            "service_rule_based",
-                            "widget_grouped",
-                            "adaptive_time_filter",
-                            "time_sorted_trend",
-                            "iqr_anomaly",
-                            "coerced_dimension_filters",
-                        ]
-                        if request.use_graph_relationships:
-                            analysis_method_parts.append("graph_relationships")
-                        analysis_method = "+".join(analysis_method_parts)
-
-                        widget_groups = aggregated_data.get("by_widget") or []
-                        has_time_series = any(
-                            (g.get("date_columns") and g.get("numeric_columns") and (g.get("row_count") or 0) >= 2)
-                            for g in widget_groups
-                        )
-                        confidence = 0.8
-                        total_rows = int(aggregated_data.get("total_rows") or 0)
-                        if total_rows < 10:
-                            confidence = 0.5
-                        elif total_rows < 50:
-                            confidence = 0.65
-                        elif total_rows < 200:
-                            confidence = 0.75
-                        else:
-                            confidence = 0.82
-                        if widget_groups and len(widget_groups) > 1:
-                            confidence -= 0.02
-                        if not has_time_series:
-                            confidence -= 0.08
-                        if relationship_count > 0:
-                            confidence += 0.05
-                        confidence = max(0.3, min(0.95, round(confidence, 2)))
-
-                        insights = schemas.InsightResult(
-                            summary=schemas.InsightSummary(
-                                total_rows=aggregated_data["total_rows"],
-                                key_metrics=self._extract_key_metrics(aggregated_data),
-                                time_range="已分析"
-                            ),
-                            trends=self._analyze_trends(aggregated_data),
-                            anomalies=self._detect_anomalies(aggregated_data),
-                            correlations=self._find_correlations(aggregated_data, relationship_context),
-                            recommendations=[
-                                schemas.InsightRecommendation(
-                                    type="info",
-                                    content=f"已分析 {len(data_widgets)} 个数据组件，共 {aggregated_data['total_rows']} 条数据",
-                                    priority="medium"
-                                ),
-                                schemas.InsightRecommendation(
-                                    type="info",
-                                    content="趋势：按组件分别识别时间列并按时间排序，对数值列计算变化幅度后选最显著项",
-                                    priority="low"
-                                ),
-                                schemas.InsightRecommendation(
-                                    type="info",
-                                    content="异常：使用 IQR 方法检测离群值（下界=Q1-1.5×IQR，上界=Q3+1.5×IQR）",
-                                    priority="low"
-                                ),
-                            ]
-                        )
-
-                        trend_meta = aggregated_data.get("_trend_metadata") or {}
-                        if isinstance(trend_meta.get("values"), list) and len(trend_meta["values"]) >= 5:
-                            try:
-                                from app.services.prediction_service import prediction_service
-
-                                accuracy = prediction_service._calculate_accuracy_enhanced(
-                                    trend_meta["values"],
-                                    "linear",
-                                    {}
-                                )
-                                trend_meta["accuracy_mape"] = accuracy.mape
-                                trend_meta["accuracy_rmse"] = accuracy.rmse
-                                trend_meta["accuracy_mae"] = accuracy.mae
-                                trend_meta["accuracy_r_squared"] = accuracy.r_squared
-
-                                quality_conf = 1 - min(100.0, max(0.0, float(accuracy.mape))) / 100.0
-                                confidence = 0.6 * confidence + 0.4 * quality_conf
-                                confidence = max(0.3, min(0.95, round(confidence, 2)))
-
-                                if trend_meta.get("r_squared") is not None:
-                                    analysis_method = (
-                                        f"{analysis_method}"
-                                        f"+trend_r2={float(trend_meta['r_squared']):.2f}"
-                                        f"+mape={float(accuracy.mape):.1f}%"
-                                    )
-                            except Exception:
-                                pass
-                        break
-                    except Exception as e:
-                        retry_count += 1
-                        if retry_count > max_retries:
-                            logger.error(f"❌ 洞察分析失败，已重试 {max_retries} 次: {e}")
-                            raise
-                        logger.warning(f"⚠️ 洞察分析失败，第 {retry_count} 次重试: {e}")
-                        await asyncio.sleep(1)  # 重试前等待
+                # ✨ 3. 调用 LangGraph 工作流进行智能分析
+                from app.agents.dashboard_insight_graph import analyze_dashboard
                 
-                # 5. 更新 Widget 状态为完成
+                connection_id = data_widgets[0].connection_id
+                user_intent = self._extract_user_intent(dashboard, data_widgets)
+                
+                logger.info(f"🤖 调用 LangGraph 进行智能分析, intent: {user_intent[:50]}...")
+                
+                analysis_result = await analyze_dashboard(
+                    dashboard=dashboard,
+                    aggregated_data=aggregated_data,
+                    use_graph_relationships=request.use_graph_relationships,
+                    analysis_dimensions=request.analysis_dimensions,
+                    connection_id=connection_id,
+                    user_intent=user_intent
+                )
+                
+                # 4. 提取结果
+                insights = analysis_result.get("insights")
+                lineage = analysis_result.get("lineage") or {}
+                relationship_context = analysis_result.get("relationship_context")
+                relationship_count = relationship_context.get("relationship_count", 0) if relationship_context else 0
+                
+                logger.info(f"🎯 LangGraph 分析完成, relationship_count={relationship_count}")
+                
+                # 5. 计算置信度（基于溯源信息）
+                confidence = self._calculate_confidence_from_lineage(lineage, aggregated_data)
+                
+                # 6. 生成动态分析方法说明
+                analysis_method = self._generate_dynamic_analysis_method(lineage, insights, aggregated_data)
+                
+                # 7. 更新 Widget 状态为完成
                 self._update_insight_widget_result(
                     db, 
                     widget_id, 
@@ -735,7 +932,7 @@ SQL 语法注意事项（{db_type}）：
                     confidence_score=confidence,
                     relationship_count=relationship_count,
                     source_tables=aggregated_data.get("table_names"),
-                    extra_metrics=aggregated_data.get("_trend_metadata")
+                    extra_metrics=lineage
                 )
                 
                 logger.info(f"✅ 后台洞察分析完成 (Widget: {widget_id})")
@@ -748,6 +945,154 @@ SQL 语法注意事项（{db_type}）：
                     self._update_widget_status(db, widget_id, "failed", str(e))
                 except Exception as update_error:
                     logger.error(f"更新失败状态时出错: {update_error}")
+    
+    def _extract_user_intent(self, dashboard: Any, widgets: List[DashboardWidget]) -> str:
+        """从Dashboard和Widget上下文中提取用户意图"""
+        intent_parts = []
+        
+        # 1. Dashboard描述
+        if dashboard.description:
+            intent_parts.append(f"看板主题: {dashboard.description}")
+        
+        # 2. Widget类型分布
+        widget_types = {}
+        for w in widgets:
+            widget_types[w.widget_type] = widget_types.get(w.widget_type, 0) + 1
+        
+        if widget_types:
+            type_desc = ", ".join([f"{k}({v}个)" for k, v in widget_types.items()])
+            intent_parts.append(f"包含组件: {type_desc}")
+        
+        # 3. 表名和分析意图
+        table_names = set()
+        query_intents = []
+        for w in widgets:
+            if w.query_config:
+                # 提取查询意图
+                if "query_intent" in w.query_config:
+                    intent = w.query_config["query_intent"]
+                    if intent and intent not in query_intents:
+                        query_intents.append(intent)
+                
+                # 提取表名
+                if "source_tables" in w.query_config:
+                    table_names.update(w.query_config["source_tables"])
+        
+        if query_intents:
+            intent_parts.append(f"已有分析: {', '.join(query_intents[:3])}")
+        
+        if table_names:
+            intent_parts.append(f"数据来源: {', '.join(list(table_names)[:5])}")
+        
+        return "; ".join(intent_parts) if intent_parts else "自动发现关键业务指标和趋势"
+    
+    
+    def _calculate_confidence_from_lineage(self, lineage: Optional[Dict], aggregated_data: Dict) -> float:
+        """基于数据溯源信息计算置信度"""
+        base_confidence = 0.7
+        
+        if not lineage:
+            return base_confidence
+        
+        # 1. 数据量加分
+        total_rows = aggregated_data.get("total_rows", 0)
+        if total_rows >= 200:
+            base_confidence += 0.15
+        elif total_rows >= 50:
+            base_confidence += 0.1
+        elif total_rows < 10:
+            base_confidence -= 0.2
+        
+        # 2. 关系图谱加分
+        exec_meta = lineage.get("execution_metadata", {})
+        if isinstance(exec_meta, dict):
+            relationship_count = exec_meta.get("relationship_count", 0)
+            if relationship_count > 0:
+                base_confidence += 0.05
+        
+        # 3. LLM分析加分
+        insight_analysis = lineage.get("insight_analysis", {})
+        if isinstance(insight_analysis, dict):
+            analysis_method = insight_analysis.get("method", "rule_based")
+            if analysis_method == "llm":
+                base_confidence += 0.15  # LLM分析质量更高
+        
+        # 4. 预测准确度（如果有）
+        trend_meta = aggregated_data.get("_trend_metadata", {})
+        if isinstance(trend_meta, dict) and "accuracy_mape" in trend_meta:
+            mape = float(trend_meta["accuracy_mape"])
+            quality_boost = (1 - min(100.0, max(0.0, mape)) / 100.0) * 0.1
+            base_confidence += quality_boost
+        
+        return max(0.3, min(0.95, round(base_confidence, 2)))
+    
+    
+    def _generate_dynamic_analysis_method(
+        self, 
+        lineage: Optional[Dict], 
+        insights: Any,
+        aggregated_data: Dict
+    ) -> str:
+        """动态生成分析方法说明（可解释性）"""
+        method_parts = []
+        
+        if not lineage:
+            return "langgraph_workflow"
+        
+        # 1. 数据源描述
+        source_tables = lineage.get("source_tables", [])
+        if source_tables:
+            method_parts.append(f"sources={len(source_tables)}_tables")
+        
+        # 2. SQL生成方法
+        sql_gen = lineage.get("sql_generation_trace", {})
+        if isinstance(sql_gen, dict):
+            gen_method = sql_gen.get("generation_method", "standard")
+            if gen_method != "standard":
+                method_parts.append(f"sql={gen_method}")
+        
+        # 3. 分析方法（核心）
+        insight_analysis = lineage.get("insight_analysis", {})
+        if isinstance(insight_analysis, dict):
+            analysis_method = insight_analysis.get("method", "rule_based")
+            method_parts.append(f"analysis={analysis_method}")
+            
+            # 数据行数
+            data_rows = insight_analysis.get("data_rows_analyzed", 0)
+            if data_rows > 0:
+                method_parts.append(f"rows={data_rows}")
+        
+        # 4. 数据处理步骤
+        transformations = lineage.get("data_transformations", [])
+        if transformations and len(transformations) > 0:
+            method_parts.append(f"transforms={len(transformations)}")
+        
+        # 5. 特殊能力标记
+        exec_meta = lineage.get("execution_metadata", {})
+        if isinstance(exec_meta, dict):
+            if exec_meta.get("from_cache"):
+                method_parts.append("cached")
+            
+            # 关系图谱
+            rel_count = exec_meta.get("relationship_count", 0)
+            if rel_count > 0:
+                method_parts.append(f"graph_rels={rel_count}")
+        
+        # 6. 趋势分析质量指标
+        trend_meta = aggregated_data.get("_trend_metadata", {})
+        if isinstance(trend_meta, dict):
+            if trend_meta.get("r_squared"):
+                r2 = float(trend_meta["r_squared"])
+                method_parts.append(f"trend_r2={r2:.2f}")
+            if trend_meta.get("accuracy_mape"):
+                mape = float(trend_meta["accuracy_mape"])
+                method_parts.append(f"mape={mape:.1f}%")
+        
+        # 7. 异常检测方法
+        if insights and hasattr(insights, 'anomalies') and insights.anomalies:
+            method_parts.append(f"anomalies={len(insights.anomalies)}")
+        
+        return "+".join(method_parts) if method_parts else "langgraph_analysis"
     
     def _extract_key_metrics(self, aggregated_data: dict) -> dict:
         """从聚合数据中提取关键指标"""
