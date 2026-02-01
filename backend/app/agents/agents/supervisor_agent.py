@@ -242,10 +242,13 @@ class SupervisorAgent:
         if self.enable_clarification:
             clarification_desc = """
 **clarification_agent** - 澄清用户意图
-  - 能力：检测查询中的模糊性，生成澄清问题
-  - 使用场景：用户查询存在模糊性时（如"最近"、"大客户"、"主要产品"）
+  - 能力：检测查询中的模糊性，生成澄清问题；处理 SQL 执行错误的业务化澄清
+  - 使用场景：
+    1. 用户查询存在模糊性时（如"最近"、"大客户"、"主要产品"）
+    2. SQL 执行失败且需要用户确认时（查看 current_stage == "clarification" 或 clarification_context 存在）
   - 前提：需要已有 Schema 信息
   - 输出：澄清问题或确认可以继续
+  - **重要**：SQL 执行错误后必须调用此 Agent，用业务语言向用户说明问题
 """
         
         return f"""你是一个智能的 SQL 查询助手，负责协调多个专业代理完成用户的数据查询需求。
@@ -298,12 +301,14 @@ class SupervisorAgent:
 3. **一次一个**：每次只调用一个 Agent
 4. **观察反馈**：根据 Agent 返回结果决定下一步
 5. **及时完成**：任务完成后及时结束
+6. **SQL 错误必须澄清**：当 current_stage == "clarification" 或存在 clarification_context 时，必须调用 clarification_agent
 
 ## 重要约束
 
 - **严禁替用户做业务决策**：如果查询中有"最近"、"大"、"主要"等模糊词且没有具体定义，必须先澄清
 - **严禁跳过必要步骤**：生成 SQL 前必须有 Schema，执行前必须有 SQL
-- **错误时求助**：遇到错误调用 error_recovery_agent
+- **SQL 错误必须业务化澄清**：SQL 执行失败后不要直接调用 error_recovery_agent，而是先调用 clarification_agent 用业务语言向用户说明
+- **错误时求助**：只有在系统内部错误或多次失败后才调用 error_recovery_agent
 
 ## 工作方式
 

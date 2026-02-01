@@ -78,16 +78,69 @@ def execute_sql_query(
         )
 
     except Exception as e:
+        # 提取业务化的错误信息
+        error_msg = str(e)
+        business_error = _extract_business_error(error_msg, sql_query)
+        
+        # 设置澄清上下文，用于触发业务化澄清
+        clarification_context = {
+            "trigger": "sql_execution_error",
+            "error": business_error,  # 业务化的错误描述
+            "technical_error": error_msg,  # 技术错误（仅供日志）
+            "sql": sql_query,
+            "needs_user_confirmation": True
+        }
+        
         return Command(
             graph=Command.PARENT,
             update={
-                "current_stage": "error_recovery",
+                "current_stage": "clarification",  # 触发澄清流程
+                "clarification_context": clarification_context,
                 "messages": [ToolMessage(
-                    content=f"SQL执行失败: {str(e)}",
+                    content=f"执行遇到问题，需要您的确认",
                     tool_call_id=tool_call_id
                 )]
             }
         )
+
+
+def _extract_business_error(error_msg: str, sql: str) -> str:
+    """
+    将技术错误转换为业务化描述
+    
+    原则：
+    - 不暴露表名、字段名等技术细节
+    - 用业务语言描述问题
+    - 给用户可理解的提示
+    """
+    error_lower = error_msg.lower()
+    
+    # 字段不存在
+    if "unknown column" in error_lower or "column" in error_lower and "not found" in error_lower:
+        return "查询的数据维度可能不存在，需要调整查询内容"
+    
+    # 表不存在
+    if "table" in error_lower and ("doesn't exist" in error_lower or "not found" in error_lower):
+        return "查询的数据范围可能超出了可访问的范围"
+    
+    # 语法错误
+    if "syntax error" in error_lower or "sql syntax" in error_lower:
+        return "查询语句的结构需要调整"
+    
+    # 权限错误
+    if "permission" in error_lower or "denied" in error_lower or "access" in error_lower:
+        return "当前没有权限访问相关数据"
+    
+    # 超时
+    if "timeout" in error_lower or "time out" in error_lower:
+        return "查询数据量较大，建议缩小查询范围或添加时间限制"
+    
+    # 连接错误
+    if "connection" in error_lower:
+        return "数据库连接出现问题，请稍后重试"
+    
+    # 默认：通用业务化描述
+    return "执行查询时遇到了问题，可能需要调整查询条件或数据范围"
 
 
 class SQLExecutorAgent:

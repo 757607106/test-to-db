@@ -47,7 +47,9 @@ def check_clarification_need(
     """
     检测用户查询是否需要澄清。
     
-    基于 Schema 信息和用户查询，使用 LLM 判断是否存在模糊性。
+    支持两种场景：
+    1. 用户查询模糊（如"最近"、"大客户"）
+    2. SQL 执行错误需要业务化澄清
     
     Args:
         user_query: 用户的自然语言查询
@@ -60,15 +62,104 @@ def check_clarification_need(
         schema_context = build_schema_context(schema_info)
         clarification_context = state.get("clarification_context", {})
         
-        # 构建额外上下文
-        extra_context = ""
-        if clarification_context:
-            if clarification_context.get("error"):
-                extra_context = f"\n\n**错误信息**：{clarification_context['error']}"
-            if clarification_context.get("analysis_need"):
-                extra_context = f"\n\n**分析需求**：{clarification_context['analysis_need']}"
+        # 判断触发场景
+        trigger = clarification_context.get("trigger") if clarification_context else None
         
-        prompt = f"""你是一个专业的数据查询意图分析专家。请分析用户查询是否需要澄清。
+        # 场景 1: SQL 执行错误 - 业务化澄清
+        if trigger == "sql_execution_error":
+            return _handle_sql_error_clarification(llm, clarification_context, user_query, schema_context)
+        
+        # 场景 2: 用户查询模糊 - 传统澄清
+        return _handle_ambiguous_query_clarification(llm, user_query, schema_context, clarification_context)
+        
+    except Exception as e:
+        logger.error(f"澄清检测失败: {e}")
+        return json.dumps({
+            "needs_clarification": False,
+            "reason": f"检测失败: {str(e)}",
+            "questions": []
+        })
+
+
+def _handle_sql_error_clarification(
+    llm, 
+    clarification_context: Dict[str, Any], 
+    user_query: str,
+    schema_context: str
+) -> str:
+    """
+    处理 SQL 错误场景的业务化澄清
+    
+    原则：
+    - 完全基于业务语义表达
+    - 严禁暴露表名、字段名、SQL 语句等技术细节
+    - 给用户提供可理解的选项
+    """
+    business_error = clarification_context.get("error", "查询执行遇到问题")
+    
+    prompt = f"""你是一个专业的业务分析师，需要帮助用户解决查询问题。
+
+**用户的原始需求**：{user_query}
+
+**遇到的问题**：{business_error}
+
+**数据范围信息**（用于生成业务化选项）：
+{schema_context}
+
+**你的任务**：
+1. 用业务语言（而非技术术语）向用户说明问题
+2. 基于数据范围信息，提供 2-3 个可能的调整方案供用户选择
+3. **严格禁止**：不要提及表名、字段名、SQL、数据库等技术词汇
+
+**返回格式**（JSON）：
+{{
+    "needs_clarification": true,
+    "reason": "业务化的问题描述（不含技术细节）",
+    "questions": [
+        {{
+            "id": "q1",
+            "question": "请选择您想要的调整方式：",
+            "type": "choice",
+            "options": [
+                "重新尝试当前查询",
+                "调整查询的时间范围",
+                "更换其他数据维度"
+            ]
+        }}
+    ]
+}}
+
+**示例（正确）**：
+- ✅ "查询的数据维度可能不存在，建议调整查询内容"
+- ✅ "当前查询范围可能较大，建议缩小时间范围"
+
+**示例（错误）**：
+- ❌ "字段 order_date 不存在"
+- ❌ "表 orders 找不到"
+- ❌ "SQL语法错误"
+
+只返回 JSON，不要有其他说明。"""
+
+    response = llm.invoke([HumanMessage(content=prompt)])
+    return response.content
+
+
+def _handle_ambiguous_query_clarification(
+    llm,
+    user_query: str, 
+    schema_context: str,
+    clarification_context: Optional[Dict[str, Any]]
+) -> str:
+    """处理用户查询模糊的传统澄清场景"""
+    # 构建额外上下文
+    extra_context = ""
+    if clarification_context:
+        if clarification_context.get("error"):
+            extra_context = f"\n\n**错误信息**：{clarification_context['error']}"
+        if clarification_context.get("analysis_need"):
+            extra_context = f"\n\n**分析需求**：{clarification_context['analysis_need']}"
+    
+    prompt = f"""你是一个专业的数据查询意图分析专家。请分析用户查询是否需要澄清。
 
 **用户查询**: {user_query}
 
@@ -113,16 +204,8 @@ def check_clarification_need(
 
 只返回 JSON。"""
 
-        response = llm.invoke([HumanMessage(content=prompt)])
-        return response.content
-        
-    except Exception as e:
-        logger.error(f"澄清检测失败: {e}")
-        return json.dumps({
-            "needs_clarification": False,
-            "reason": f"检测失败: {str(e)}",
-            "questions": []
-        })
+    response = llm.invoke([HumanMessage(content=prompt)])
+    return response.content
 
 
 @tool

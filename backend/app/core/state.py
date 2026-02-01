@@ -87,6 +87,13 @@ class SQLMessageState(AgentState):
     
     # 已完成的阶段列表
     completed_stages: List[str] = field(default_factory=list)
+    
+    # ===== 澄清上下文 =====
+    # 用于在 SQL 错误等场景下触发澄清
+    clarification_context: Optional[Dict[str, Any]] = None
+    
+    # 增强后的查询（整合了澄清信息）
+    enriched_query: Optional[str] = None
 
 def extract_connection_id(state: SQLMessageState) -> int:
     """从状态中提取数据库连接ID"""
