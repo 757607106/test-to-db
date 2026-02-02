@@ -17,7 +17,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # ===== 防护配置 =====
-MAX_SUPERVISOR_TURNS = 15  # 最大调用轮次
+MAX_SUPERVISOR_TURNS = 30  # 最大调用轮次（提高到 30，支持复杂查询 + 图表生成）
 MAX_SAME_AGENT_CONSECUTIVE = 3  # 同一 Agent 最大连续调用次数
 REQUIRED_STAGES_FOR_SQL = ["schema_analysis"]  # 生成 SQL 前必须完成的阶段
 
@@ -40,6 +40,46 @@ def check_turn_limit(state: Dict[str, Any]) -> Dict[str, Any]:
         }
     
     return {}
+
+
+def should_reset_turn_count(state: Dict[str, Any]) -> bool:
+    """
+    判断是否应该重置轮次计数
+    
+    场景：当用户发送新消息（非 interrupt 恢复）时，应该重置轮次计数
+    这样每次用户请求都有完整的轮次配额
+    
+    Returns:
+        True 如果应该重置
+    """
+    messages = state.get("messages", [])
+    if not messages:
+        return True
+    
+    # 检查最后一条消息是否是 HumanMessage（用户新消息）
+    last_message = messages[-1]
+    if hasattr(last_message, 'type') and last_message.type == 'human':
+        # 如果最后是用户消息，且当前轮次 > 0，说明是新的用户请求
+        turn_count = state.get("supervisor_turn_count", 0)
+        if turn_count > 0:
+            logger.info(f"检测到新用户消息，重置轮次计数（之前: {turn_count}）")
+            return True
+    
+    return False
+
+
+def reset_guard_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    重置防护相关的状态字段（用于新用户请求）
+    
+    Returns:
+        需要重置的状态字段
+    """
+    return {
+        "supervisor_turn_count": 0,
+        "agent_call_history": [],
+        "last_agent_called": None,
+    }
 
 
 def check_agent_loop(state: Dict[str, Any], current_agent: str) -> Dict[str, Any]:

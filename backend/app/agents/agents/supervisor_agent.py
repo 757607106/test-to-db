@@ -26,6 +26,8 @@ from app.agents.utils.supervisor_guards import (
     update_guard_state,
     get_stage_for_agent,
     MAX_SUPERVISOR_TURNS,
+    should_reset_turn_count,
+    reset_guard_state,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,7 +80,14 @@ def guard_check_hook(state: Dict[str, Any]) -> Dict[str, Any]:
     检查项：
     - 最大轮次限制
     - Agent 循环检测
+    - 用户新消息时重置轮次（重要：确保每次用户请求有完整配额）
     """
+    # 检查是否需要重置轮次（用户发送新消息时）
+    if should_reset_turn_count(state):
+        reset_updates = reset_guard_state(state)
+        state.update(reset_updates)  # 立即更新状态
+        logger.info("轮次计数已重置，开始处理新用户请求")
+    
     # 运行防护检查
     guard_result = run_all_guards(state)
     
@@ -148,14 +157,15 @@ class SupervisorAgent:
 
     def _create_worker_agents(self) -> List[Any]:
         """创建工作代理列表"""
-        from app.agents.agents.schema_agent import schema_agent
-        from app.agents.agents.clarification_agent import clarification_agent
-        from app.agents.agents.sql_generator_agent import sql_generator_agent
-        from app.agents.agents.sql_validator_agent import sql_validator_agent
-        from app.agents.agents.sql_executor_agent import sql_executor_agent
-        from app.agents.agents.error_recovery_agent import error_recovery_agent
-        from app.agents.agents.chart_generator_agent import chart_generator_agent
-        from app.agents.agents.data_analyst_agent import data_analyst_agent
+        # 导入所有 Worker Agents（按执行顺序排列）
+        from app.agents.agents.schema_agent import schema_agent  # 1. 获取数据库结构
+        from app.agents.agents.clarification_agent import clarification_agent  # 2. 澄清用户意图（可选）
+        from app.agents.agents.sql_generator_agent import sql_generator_agent  # 3. 生成 SQL 语句
+        from app.agents.agents.sql_validator_agent import sql_validator_agent  # 4. 验证 SQL 语法
+        from app.agents.agents.sql_executor_agent import sql_executor_agent  # 5. 执行 SQL 查询
+        from app.agents.agents.error_recovery_agent import error_recovery_agent  # 6. 错误恢复（按需）
+        from app.agents.agents.chart_generator_agent import chart_generator_agent  # 7. 生成图表配置（可选）
+        from app.agents.agents.data_analyst_agent import data_analyst_agent  # 8. 数据分析
 
         analyst_agent = self._get_data_analyst_agent()
 
