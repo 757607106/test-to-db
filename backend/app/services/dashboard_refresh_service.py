@@ -139,6 +139,7 @@ class DashboardRefreshService:
                     success_count += 1
                 else:
                     failed_count += 1
+                    logger.error(f"刷新Widget {widget.id} ({widget.title}) 失败: {result.error}")
         
         total_duration_ms = int((time.time() - start_time) * 1000)
         logger.info(f"全局刷新完成: 成功={success_count}, 失败={failed_count}, 耗时={total_duration_ms}ms")
@@ -268,14 +269,35 @@ class DashboardRefreshService:
         Returns:
             查询结果字典
         """
-        from app.agents.agents.sql_executor_agent import execute_sql_query
+        from app.services.db_service import get_db_connection_by_id, execute_query
         
-        return execute_sql_query.invoke({
-            "sql_query": sql,
-            "connection_id": connection_id,
-            "timeout": 30,
-            "force_refresh": force
-        })
+        try:
+            # 获取数据库连接
+            connection = get_db_connection_by_id(connection_id)
+            if not connection:
+                return {
+                    "success": False,
+                    "error": f"找不到连接ID为 {connection_id} 的数据库连接"
+                }
+            
+            # 执行查询
+            result_data = execute_query(connection, sql, timeout_seconds=30)
+            
+            # 返回成功结果
+            columns = list(result_data[0].keys()) if result_data else []
+            return {
+                "success": True,
+                "data": {
+                    "columns": columns,
+                    "data": result_data
+                },
+                "from_cache": False
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
     
     def get_refresh_config(self, db: Session, dashboard_id: int) -> schemas.RefreshConfig:
         """
