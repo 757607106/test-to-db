@@ -59,6 +59,7 @@ import {
   SkillSuggestion,
 } from '../services/skillService';
 import { useGlobalConnection } from '../contexts/GlobalConnectionContext';
+import GlobalConnectionSelector from '../components/GlobalConnectionSelector';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -687,7 +688,7 @@ const SkillsPage: React.FC = () => {
             </Space>
           </Col>
           <Col>
-            {/* Connection Selector Removed - handled globally */}
+            <GlobalConnectionSelector />
           </Col>
         </Row>
 
