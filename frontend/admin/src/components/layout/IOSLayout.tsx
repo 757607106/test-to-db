@@ -25,12 +25,10 @@ const IOSLayout: React.FC<IOSLayoutProps> = ({ children }) => {
       // macOS Style: Tighter integration, usually flush or small gap.
       // We will make it flush with the sidebar for a "Split View" look, 
       // but keep the content area distinct.
-      marginLeft: 'var(--sidebar-width)', 
       background: 'var(--bg-card)',
       position: 'relative' as const,
       height: '100vh',
       transition: 'background-color var(--transition-speed) var(--transition-ease)',
-      boxShadow: '-1px 0 0 0 var(--glass-border)', // Divider line
     },
     contentArea: {
       flex: 1,

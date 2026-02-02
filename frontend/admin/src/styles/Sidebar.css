@@ -2,10 +2,7 @@
 
 .sidebar-container {
   width: var(--sidebar-width);
-  height: calc(100vh - 40px);
-  position: fixed;
-  left: 20px;
-  top: 20px;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   padding: 24px 16px;
@@ -16,9 +13,7 @@
   background: var(--glass-bg);
   backdrop-filter: blur(var(--glass-blur));
   -webkit-backdrop-filter: blur(var(--glass-blur));
-  border: 1px solid var(--glass-border-solid);
-  border-radius: var(--border-radius-lg);
-  box-shadow: var(--glass-shadow);
+  border-right: 1px solid var(--glass-border-solid);
   transition: all 0.3s ease;
 }
 
