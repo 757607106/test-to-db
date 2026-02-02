@@ -9,7 +9,7 @@ import React, { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 // 后端 API 地址
-const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || "http://192.168.13.163:8000/api";
 
 // 用 session code 交换 token
 async function exchangeCodeForToken(code: string): Promise<string | null> {
@@ -105,7 +105,7 @@ function TokenHandler({ children }: { children: React.ReactNode }) {
           <h1 className="text-xl font-bold text-gray-900 mb-2">需要登录</h1>
           <p className="text-gray-600 mb-6">{error}</p>
           <a
-            href="http://localhost:3001"
+            href="http://192.168.13.163:3001"
             className="inline-block px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
           >
             前往管理后台登录
