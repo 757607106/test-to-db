@@ -395,20 +395,49 @@ class IntelligentSQLGraph:
         tenant_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """处理 SQL 查询（使用 supervisor）"""
+        import asyncio
+        
         logger.info("处理 SQL 查询")
         
-        # 1. Skill 路由（零配置兼容）
-        skill_result = await perform_skill_routing(query, connection_id)
+        # 0. 获取数据库类型
+        from app.services.db_service import get_db_connection_by_id
+        connection = get_db_connection_by_id(connection_id)
+        db_type = connection.db_type.lower() if connection and connection.db_type else "mysql"
+        logger.info(f"数据库类型: {db_type}")
+        
+        # 1. 并行执行: Skill 路由 + QA 样本检索（优化：减少串行等待时间）
+        qa_config = get_qa_sample_config()
+        qa_enabled = qa_config.get("enabled", True)
+        
+        # 创建并行任务
+        skill_task = perform_skill_routing(query, connection_id)
+        
+        if qa_enabled:
+            # QA 样本检索（使用简化的 schema_context，不依赖 Skill 结果）
+            sample_task = retrieve_qa_samples(
+                query=query,
+                connection_id=connection_id,
+                schema_context={"tables": [], "user_query": query}
+            )
+            # 并行执行
+            skill_result, sample_result = await asyncio.gather(skill_task, sample_task)
+        else:
+            skill_result = await skill_task
+            sample_result = {"qa_pairs": [], "enabled": False}
         
         if skill_result.enabled:
             logger.info(f"Skill 路由: {skill_result.reasoning}")
         else:
             logger.info(f"Skill 路由: {skill_result.reasoning}，使用全库模式")
         
+        if sample_result.get("qa_pairs"):
+            logger.info(f"[QA样本] 注入 {len(sample_result['qa_pairs'])} 个样本到 SQL Generator")
+        
         # 2. 初始化状态
         initial_state = SQLMessageState(
             messages=[{"role": "user", "content": query}],
             connection_id=connection_id,
+            db_type=db_type,  # 注入数据库类型
             current_stage="schema_analysis",
             retry_count=0,
             max_retries=3,
@@ -441,28 +470,8 @@ class IntelligentSQLGraph:
             "prompt_context": format_skill_context_for_prompt(skill_result),
         }
         
-        # 5. QA 样本检索（可配置 - 从数据库读取配置）
-        qa_config = get_qa_sample_config()
-        if qa_config.get("enabled", True):
-            # 构建模式上下文（用于样本检索）
-            schema_context = {
-                "tables": skill_result.schema_info.get("tables", []) if skill_result.schema_info else [],
-                "user_query": query
-            }
-            
-            sample_result = await retrieve_qa_samples(
-                query=query,
-                connection_id=connection_id,
-                schema_context=schema_context
-            )
-            
-            # 将样本结果注入状态
-            initial_state["sample_retrieval_result"] = sample_result
-            
-            if sample_result.get("qa_pairs"):
-                logger.info(f"[QA样本] 注入 {len(sample_result['qa_pairs'])} 个样本到 SQL Generator")
-        else:
-            initial_state["sample_retrieval_result"] = {"qa_pairs": [], "enabled": False}
+        # 5. 注入 QA 样本结果
+        initial_state["sample_retrieval_result"] = sample_result
         
         # 6. 委托给 supervisor 处理
         result = await self.supervisor_agent.supervise(initial_state, thread_id=thread_id)

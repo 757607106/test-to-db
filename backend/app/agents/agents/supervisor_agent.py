@@ -223,6 +223,7 @@ class SupervisorAgent:
             output_mode="last_message",
             pre_model_hook=combined_pre_model_hook,  # 组合 hook：防护检查 + 消息裁剪
             state_schema=SQLMessageState,
+            parallel_tool_calls=True,  # 启用并行 Agent 调用（仅 OpenAI/Anthropic 支持，其他模型自动降级为串行）
         )
 
         try:
