@@ -1,54 +1,19 @@
-
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { Select, Spin } from 'antd';
 import { DatabaseOutlined } from '@ant-design/icons';
+import { useGlobalConnection } from '../contexts/GlobalConnectionContext';
 import '../styles/GlobalConnectionSelector.css';
 
 const { Option } = Select;
 
-interface Connection {
-  id: number;
-  name: string;
-  type: string;
-  database: string;
-}
-
 interface GlobalConnectionSelectorProps {
-  selectedConnectionId: number | null;
-  setSelectedConnectionId: (id: number | null) => void;
+  // Props kept for compatibility but will be ignored in favor of context
+  selectedConnectionId?: number | null;
+  setSelectedConnectionId?: (id: number | null) => void;
 }
 
-const GlobalConnectionSelector: React.FC<GlobalConnectionSelectorProps> = ({
-  selectedConnectionId,
-  setSelectedConnectionId
-}) => {
-  const [connections, setConnections] = useState<Connection[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-
-  // 获取连接列表
-  useEffect(() => {
-    const fetchConnections = async () => {
-      try {
-        // 这里应该调用实际的API
-        // 为了演示，我们使用setTimeout模拟API调用
-        setTimeout(() => {
-          // 模拟数据
-          const mockConnections = [
-            { id: 1, name: '测试连接1', type: 'MySQL', database: 'test_db' },
-            { id: 2, name: '生产数据库', type: 'PostgreSQL', database: 'prod_db' },
-            { id: 3, name: '开发环境', type: 'SQLite', database: 'dev_db' }
-          ];
-          setConnections(mockConnections);
-          setLoading(false);
-        }, 500);
-      } catch (error) {
-        console.error('获取连接失败:', error);
-        setLoading(false);
-      }
-    };
-
-    fetchConnections();
-  }, []);
+const GlobalConnectionSelector: React.FC<GlobalConnectionSelectorProps> = () => {
+  const { connections, selectedConnectionId, setSelectedConnectionId, loading } = useGlobalConnection();
 
   return (
     <div className="global-connection-selector">
@@ -64,7 +29,7 @@ const GlobalConnectionSelector: React.FC<GlobalConnectionSelectorProps> = ({
       >
         {connections.map(conn => (
           <Option key={conn.id} value={conn.id}>
-            {conn.name} ({conn.type})
+            {conn.name} {conn.type ? `(${conn.type})` : ''}
           </Option>
         ))}
       </Select>

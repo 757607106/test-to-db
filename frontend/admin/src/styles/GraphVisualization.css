@@ -1,4 +1,6 @@
 /* 炫酷节点样式 */
+@import './theme.css';
+
 .graph-node {
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   z-index: 5;
@@ -27,32 +29,62 @@
   transform: scale(1.08) translateY(-2px);
   box-shadow:
     0 12px 30px rgba(0, 0, 0, 0.2),
-    0 0 25px rgba(59, 130, 246, 0.4),
+    0 0 25px rgba(99, 102, 241, 0.4),
     inset 0 1px 0 rgba(255, 255, 255, 0.3) !important;
   z-index: 10;
 }
 
-.graph-node.selected {
+[data-theme='dark'] .graph-node:hover {
   box-shadow:
-    0 0 0 4px #3b82f6,
-    0 12px 30px rgba(59, 130, 246, 0.5),
-    0 0 40px rgba(59, 130, 246, 0.3) !important;
-  z-index: 10;
-  animation: pulse-glow 2s infinite;
+    0 12px 30px rgba(0, 0, 0, 0.4),
+    0 0 25px rgba(129, 140, 248, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
 }
 
-@keyframes pulse-glow {
+.graph-node.selected {
+  box-shadow:
+    0 0 0 4px var(--color-primary),
+    0 12px 30px rgba(99, 102, 241, 0.5),
+    0 0 40px rgba(99, 102, 241, 0.3) !important;
+  z-index: 10;
+  animation: pulse-glow-light 2s infinite;
+}
+
+[data-theme='dark'] .graph-node.selected {
+  box-shadow:
+    0 0 0 4px var(--color-primary),
+    0 12px 30px rgba(129, 140, 248, 0.5),
+    0 0 40px rgba(129, 140, 248, 0.3) !important;
+  animation: pulse-glow-dark 2s infinite;
+}
+
+@keyframes pulse-glow-light {
   0%, 100% {
     box-shadow:
-      0 0 0 3px #1890ff,
-      0 8px 25px rgba(24, 144, 255, 0.4),
-      0 0 30px rgba(24, 144, 255, 0.2);
+      0 0 0 3px var(--color-primary),
+      0 8px 25px rgba(99, 102, 241, 0.4),
+      0 0 30px rgba(99, 102, 241, 0.2);
   }
   50% {
     box-shadow:
-      0 0 0 3px #1890ff,
-      0 8px 25px rgba(24, 144, 255, 0.6),
-      0 0 40px rgba(24, 144, 255, 0.4);
+      0 0 0 3px var(--color-primary),
+      0 8px 25px rgba(99, 102, 241, 0.6),
+      0 0 40px rgba(99, 102, 241, 0.4);
+  }
+}
+
+@keyframes pulse-glow-dark {
+  0%, 100% {
+    box-shadow:
+      0 0 0 3px var(--color-primary),
+      0 8px 25px rgba(129, 140, 248, 0.4),
+      0 0 30px rgba(129, 140, 248, 0.2);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px var(--color-primary),
+      0 8px 25px rgba(129, 140, 248, 0.6),
+      0 0 40px rgba(129, 140, 248, 0.4);
   }
 }
 

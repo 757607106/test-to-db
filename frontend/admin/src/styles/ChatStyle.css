@@ -1,15 +1,18 @@
 /* Gemini 风格的聊天界面样式 */
+@import './theme.css';
 
 /* SQL内容区域样式 */
 .sql-content {
-  background-color: #f1f3f4;
+  background-color: var(--glass-bg-hover);
   border-radius: 8px;
   padding: 12px;
   overflow-x: auto;
   font-family: 'Roboto Mono', monospace;
   font-size: 0.9em;
   line-height: 1.5;
-  color: #333;
+  color: var(--color-text-main);
+  border: 1px solid var(--glass-border-solid);
+  backdrop-filter: blur(4px);
 }
 
 .sql-content pre {
@@ -24,18 +27,33 @@
 
 .chat-message {
   position: relative;
-  padding: 12px 16px;
+  padding: 16px 20px;
   margin-bottom: 16px;
-  border-radius: 12px;
-  background-color: #f8f9fa;
+  border-radius: 16px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
   max-width: 90%;
   width: fit-content;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-  animation: fadeIn 0.3s ease-in-out;
+  box-shadow: var(--glass-shadow);
+  animation: fadeIn 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+  border: 1px solid var(--glass-border-solid);
+  color: var(--color-text-main);
+  transition: all 0.3s ease;
+}
+
+.chat-message:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
+}
+
+[data-theme='dark'] .chat-message {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 .chat-message p {
   margin: 0.5em 0;
+  line-height: 1.6;
 }
 
 .chat-message p:first-child {
@@ -52,42 +70,68 @@
 }
 
 .chat-message pre {
-  background-color: #f1f3f4;
+  background-color: rgba(0, 0, 0, 0.03);
   border-radius: 8px;
   padding: 12px;
   overflow-x: auto;
-  margin: 0.5em 0;
+  margin: 0.8em 0;
+  border: 1px solid var(--glass-border-solid);
+}
+
+[data-theme='dark'] .chat-message pre {
+  background-color: rgba(255, 255, 255, 0.05);
 }
 
 .chat-message code {
   font-family: 'Roboto Mono', monospace;
   font-size: 0.9em;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+[data-theme='dark'] .chat-message code {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.chat-message pre code {
+  background: transparent;
+  padding: 0;
 }
 
 .chat-message table {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   width: 100%;
-  margin: 0.5em 0;
+  margin: 0.8em 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--glass-border-solid);
 }
 
 .chat-message th, .chat-message td {
-  border: 1px solid #e0e0e0;
-  padding: 8px 12px;
+  border: 1px solid var(--glass-border-solid);
+  padding: 10px 14px;
   text-align: left;
 }
 
 .chat-message th {
-  background-color: #f1f3f4;
+  background-color: rgba(0, 0, 0, 0.02);
+  font-weight: 600;
+}
+
+[data-theme='dark'] .chat-message th {
+  background-color: rgba(255, 255, 255, 0.05);
 }
 
 @keyframes fadeIn {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(20px) scale(0.98);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -104,8 +148,9 @@
   height: 8px;
   margin: 0 4px;
   border-radius: 50%;
-  background-color: #5f6368;
+  background-color: var(--color-primary);
   animation: dotPulse 1.5s infinite ease-in-out;
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.4);
 }
 
 .loading-dots .dot:nth-child(2) {
@@ -122,7 +167,7 @@
     opacity: 0.5;
   }
   50% {
-    transform: scale(1);
+    transform: scale(1.2);
     opacity: 1;
   }
 }

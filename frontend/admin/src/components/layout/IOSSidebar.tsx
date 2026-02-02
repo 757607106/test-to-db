@@ -15,9 +15,10 @@ import {
   AppstoreOutlined,
   LogoutOutlined,
 } from '@ant-design/icons';
-import { message, Dropdown, type MenuProps, Modal } from 'antd';
+import { message, Modal, type MenuProps } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import '../../styles/Sidebar.css';
 
 const IOSSidebar: React.FC = () => {
   const location = useLocation();
@@ -37,16 +38,6 @@ const IOSSidebar: React.FC = () => {
       }
     });
   };
-
-  const userMenu: MenuProps['items'] = [
-    {
-      key: 'logout',
-      label: '退出登录',
-      icon: <LogoutOutlined />,
-      danger: true,
-      onClick: handleLogout,
-    },
-  ];
 
   // Menu permission mapping
   const menuPermissionMap: Record<string, string> = {
@@ -101,69 +92,16 @@ const IOSSidebar: React.FC = () => {
     return hasMenuPermission(item.to);
   });
 
-  const styles = {
-    sidebar: {
-      width: 'var(--sidebar-width)',
-      height: '100vh',
-      background: 'var(--glass-bg)',
-      backdropFilter: 'blur(var(--blur-amount)) saturate(180%)',
-      WebkitBackdropFilter: 'blur(var(--blur-amount)) saturate(180%)',
-      borderRight: '1px solid var(--glass-border)',
-      display: 'flex',
-      flexDirection: 'column' as const,
-      padding: '0 8px', // Adjusted for macOS spacing
-      boxSizing: 'border-box' as const,
-      position: 'fixed' as const,
-      left: 0,
-      top: 0,
-      zIndex: 1000,
-      transition: 'all var(--transition-speed) var(--transition-ease)',
-    },
-    logoArea: {
-      height: '52px', // Compact toolbar height
-      display: 'flex',
-      alignItems: 'center',
-      paddingLeft: '12px',
-      marginTop: '0', // Flush to top traffic lights area (conceptually)
-      marginBottom: '10px',
-    },
-    logoText: {
-      fontSize: '15px', // Increased from 13px
-      fontWeight: 600,
-      color: 'var(--text-secondary)', // Sidebar titles are usually subtle in macOS
-      fontFamily: 'var(--font-stack)',
-      letterSpacing: '0.02em',
-      textTransform: 'uppercase' as const,
-      opacity: 0.9,
-      paddingLeft: '4px', // Align with new padding
-    },
-    menuList: {
-      listStyle: 'none',
-      padding: 0,
-      margin: 0,
-      flex: 1,
-      display: 'flex',
-      flexDirection: 'column' as const,
-    },
-    bottomSection: {
-      padding: '10px 0 16px 0',
-      borderTop: '1px solid var(--glass-border)',
-      display: 'flex',
-      flexDirection: 'column' as const,
-      gap: '2px',
-    },
-  };
-
   return (
-    <aside style={styles.sidebar} className="ios-layout-sidebar">
+    <aside className="sidebar-container">
       {/* Imitate Window Controls Area Space */}
-      <div style={{ height: '38px', WebkitAppRegion: 'drag' } as any} /> 
+      <div className="drag-region" /> 
       
-      <div style={styles.logoArea}>
-        <span style={styles.logoText}>慧眼数据</span>
+      <div className="logo-area" style={{ borderBottom: 'none', marginBottom: 0, paddingBottom: 0 }}>
+        <span className="logo-text" style={{ fontSize: '15px', textTransform: 'uppercase', letterSpacing: '0.02em', opacity: 0.9 }}>慧眼数据</span>
       </div>
 
-      <ul style={styles.menuList}>
+      <ul className="sidebar-menu">
         {menuItems.map((item) => {
           const isActive = location.pathname === item.to || 
             (item.to === '/dashboards' && location.pathname.startsWith('/dashboards'));
@@ -171,9 +109,10 @@ const IOSSidebar: React.FC = () => {
             <li key={item.key}>
               <Link
                 to={item.to}
-                className={`macos-sidebar-item ${isActive ? 'active' : ''}`}
+                className={`menu-item ${isActive ? 'active' : ''}`}
               >
-                <span className="sidebar-icon">{item.icon}</span>
+                {isActive && <div className="active-indicator" />}
+                <span className="sidebar-icon" style={{ fontSize: '16px' }}>{item.icon}</span>
                 {item.label}
               </Link>
             </li>
@@ -181,26 +120,21 @@ const IOSSidebar: React.FC = () => {
         })}
       </ul>
 
-      <div style={styles.bottomSection}>
-        <div className="macos-sidebar-item">
-          <div style={{ 
-            width: '24px', 
-            height: '24px', 
-            borderRadius: '50%', 
-            background: 'var(--bg-tertiary)', 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'center', 
-            marginRight: '12px',
-            color: 'var(--text-secondary)'
-          }}>
+      <div className="sidebar-footer">
+        <div className="menu-item user-profile">
+          <div className="user-avatar-small">
             <UserOutlined style={{ fontSize: '14px' }} />
           </div>
-          <span style={{ fontWeight: 500 }}>{user?.display_name || user?.username || '用户'}</span>
+          <span className="user-name">{user?.display_name || user?.username || '用户'}</span>
         </div>
-        <div className="macos-sidebar-item" style={{ cursor: 'pointer' }} onClick={handleLogout}>
-          <LogoutOutlined className="sidebar-icon" style={{ fontSize: '18px', color: 'var(--text-tertiary)' }} />
-          <span style={{ fontWeight: 500, color: 'var(--text-tertiary)' }}>退出登录</span>
+        
+        <div 
+          className="menu-item" 
+          onClick={handleLogout}
+          style={{ color: 'var(--color-error)', marginTop: '4px' }}
+        >
+          <span className="sidebar-icon"><LogoutOutlined /></span>
+          退出登录
         </div>
       </div>
     </aside>

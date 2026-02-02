@@ -10,7 +10,8 @@ const AppBackground: React.FC = () => {
       height: '100vh',
       zIndex: -1,
       overflow: 'hidden',
-      background: 'var(--color-bg-light)',
+      background: 'var(--color-bg-page)',
+      transition: 'background var(--transition-speed) var(--transition-ease)',
     },
     orb1: {
       position: 'absolute' as const,

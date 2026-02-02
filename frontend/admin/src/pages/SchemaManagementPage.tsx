@@ -453,7 +453,7 @@ const SchemaManagementPage = () => {
         newNodes.forEach((node) => {
           const nodeWithPosition = g.node(node.id);
           const columnsCount = node.data.columns ? node.data.columns.length : 0;
-          const height = 50 + (columnsCount * 32) + 20;
+          const height = 50 + columnsCount * 32 + 20;
           
           node.targetPosition = Position.Left;
           node.sourcePosition = Position.Right;
@@ -1751,11 +1751,11 @@ const SchemaManagementPage = () => {
   return (
     <div>
       <Card>
-        <div style={{ display: 'flex', height: 'calc(100vh - 150px)', minHeight: '700px' }}>
+        <div className="schema-page-container">
           {/* 左侧表列表 */}
-          <div style={{ width: '250px', marginRight: '16px', display: 'flex', flexDirection: 'column', border: '1px solid #d9d9d9', borderRadius: '4px' }}>
+          <div className="schema-sidebar">
             {/* 数据库连接选择 */}
-            <div style={{ padding: '12px', borderBottom: '1px solid #d9d9d9' }}>
+            <div className="schema-sidebar-section">
               <Select
                 placeholder="选择数据库连接"
                 style={{ width: '100%' }}
@@ -1769,14 +1769,14 @@ const SchemaManagementPage = () => {
             </div>
 
             {/* 可用表标题 */}
-            <div style={{ padding: '12px', borderBottom: '1px solid #d9d9d9', fontWeight: 'bold' }}>
+            <div className="schema-sidebar-header">
               可用表
             </div>
 
             {/* 可用表列表 */}
-            <div style={{ flex: 1, overflowY: 'auto' }}>
+            <div className="schema-sidebar-content">
               {loading ? (
-                <div style={{ padding: '20px', textAlign: 'center' }}>
+                <div className="schema-loading-state">
                   <Spin />
                 </div>
               ) : (
@@ -1785,18 +1785,11 @@ const SchemaManagementPage = () => {
                     availableTables.map(table => (
                       <div
                         key={table.id}
-                        style={{
-                          padding: '8px 12px',
-                          cursor: 'pointer',
-                          borderBottom: '1px solid #f0f0f0',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between'
-                        }}
+                        className="schema-list-item"
                         onClick={() => addTableToCanvas(table)}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center' }}>
-                          <TableOutlined style={{ marginRight: '8px' }} />
+                        <div className="schema-list-item-name">
+                          <TableOutlined className="schema-list-item-icon" />
                           <span>{table.table_name}</span>
                         </div>
                         <Tooltip title="添加到画布">
@@ -1813,7 +1806,7 @@ const SchemaManagementPage = () => {
                       </div>
                     ))
                   ) : (
-                    <div style={{ padding: '12px', color: '#999', textAlign: 'center' }}>
+                    <div className="schema-empty-state">
                       {selectedConnection ? '没有可用的表或所有表已添加到画布' : '请选择数据库连接'}
                     </div>
                   )}
@@ -1823,7 +1816,7 @@ const SchemaManagementPage = () => {
           </div>
 
           {/* 右侧画布 */}
-          <div style={{ flex: 1, border: '1px solid #d9d9d9', borderRadius: '4px', position: 'relative', background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 50%, #e2e8f0 100%)' }} ref={reactFlowWrapper}>
+          <div className="schema-canvas-container" ref={reactFlowWrapper}>
             <ReactFlow
               nodes={nodes}
               edges={edges}

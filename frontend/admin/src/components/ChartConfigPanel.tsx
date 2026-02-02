@@ -133,7 +133,7 @@ export const ChartConfigPanel: React.FC<ChartConfigPanelProps> = ({
         stack: config.series_config?.stack ?? false,
         show_label: config.series_config?.label ?? false,
         x_column: config.data_mapping?.x_column,
-        y_columns: config.data_mapping?.y_columns,
+        y_columns: config.data_mapping?.y_columns || [],
         category_column: config.data_mapping?.category_column,
       });
       setSelectedType(config.chart_type);
@@ -155,7 +155,7 @@ export const ChartConfigPanel: React.FC<ChartConfigPanelProps> = ({
           chart_type: recommended.chart_type,
           title: recommended.title,
           x_column: recommended.data_mapping?.x_column,
-          y_columns: recommended.data_mapping?.y_columns,
+          y_columns: recommended.data_mapping?.y_columns || [],
         });
         setSelectedType(recommended.chart_type);
         message.success('AI 已推荐最佳图表配置');

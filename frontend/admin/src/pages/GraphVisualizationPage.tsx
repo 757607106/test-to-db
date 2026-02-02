@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Select, Button, message, Typography, Space, Card } from 'antd';
 import { DatabaseOutlined, ReloadOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import ProfessionalKnowledgeGraph from '../components/ProfessionalKnowledgeGraph';
+import { useGlobalConnection } from '../contexts/GlobalConnectionContext';
 
 import * as api from '../services/api';
 
@@ -17,32 +18,23 @@ interface GraphData {
 // 知识图谱可视化组件
 const KnowledgeGraphVisualization = () => {
   // 状态管理
-  const [connections, setConnections] = useState<any[]>([]);
-  const [selectedConnection, setSelectedConnection] = useState<number | null>(null);
+  const { selectedConnectionId } = useGlobalConnection();
+  // Keep local connections state only if needed for other purposes, otherwise remove
+  // const [connections, setConnections] = useState<any[]>([]); 
   const [loading, setLoading] = useState<boolean>(false);
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] });
 
-  // 初始化加载连接
+  // 监听全局连接变化
   useEffect(() => {
-    fetchConnections();
-  }, []);
-
-  // 获取数据库连接列表
-  const fetchConnections = async () => {
-    try {
-      const response = await api.getConnections();
-      setConnections(response.data);
-    } catch (error) {
-      console.error('获取连接失败:', error);
-      message.error('获取数据库连接失败');
+    if (selectedConnectionId) {
+      fetchGraphData(selectedConnectionId);
+    } else {
+      setGraphData({ nodes: [], edges: [] });
     }
-  };
+  }, [selectedConnectionId]);
 
-  // 处理连接选择
-  const handleConnectionChange = (connectionId: number) => {
-    setSelectedConnection(connectionId);
-    fetchGraphData(connectionId);
-  };
+  /* Removed fetchConnections and handleConnectionChange as they are handled globally */
+
 
   // 获取图数据
   const fetchGraphData = async (connectionId: number) => {
@@ -112,21 +104,21 @@ const KnowledgeGraphVisualization = () => {
 
   // 刷新图数据
   const refreshGraph = () => {
-    if (selectedConnection) {
-      fetchGraphData(selectedConnection);
+    if (selectedConnectionId) {
+      fetchGraphData(selectedConnectionId);
     }
   };
 
   // 发现并同步数据
   const discoverAndSync = async () => {
-    if (!selectedConnection) return;
+    if (!selectedConnectionId) return;
     
     setLoading(true);
     try {
-      await api.discoverAndSyncSchema(selectedConnection);
+      await api.discoverAndSyncSchema(selectedConnectionId);
       message.success('架构发现和同步完成');
       // 重新获取图数据
-      fetchGraphData(selectedConnection);
+      fetchGraphData(selectedConnectionId);
     } catch (error) {
       console.error('同步失败:', error);
       message.error('架构同步失败');
@@ -164,6 +156,8 @@ const KnowledgeGraphVisualization = () => {
       <Card style={{ marginBottom: '16px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
           <Space size="large">
+            {/* Connection Selector Removed */}
+            {/*
             <Space>
               <DatabaseOutlined style={{ color: '#1890ff' }} />
               <Select
@@ -177,11 +171,12 @@ const KnowledgeGraphVisualization = () => {
                 ))}
               </Select>
             </Space>
+            */}
 
             <Button
               icon={<ReloadOutlined />}
               onClick={refreshGraph}
-              disabled={!selectedConnection}
+              disabled={!selectedConnectionId}
               loading={loading}
             >
               刷新数据
@@ -191,7 +186,7 @@ const KnowledgeGraphVisualization = () => {
               type="primary"
               icon={<ThunderboltOutlined />}
               onClick={discoverAndSync}
-              disabled={!selectedConnection}
+              disabled={!selectedConnectionId}
               loading={loading}
             >
               发现并同步

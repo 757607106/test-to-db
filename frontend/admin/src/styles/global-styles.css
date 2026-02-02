@@ -1,4 +1,6 @@
 /* 全局样式 */
+@import './theme.css';
+
 html, body, #root {
   height: 100%;
   margin: 0;
@@ -6,17 +8,13 @@ html, body, #root {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  color: #1f2937;
-  background-color: #f9fafb;
+  color: var(--color-text-main);
+  background-color: var(--color-bg-page);
+  transition: background-color var(--transition-speed), color var(--transition-speed);
 }
 
-/* 暗色模式 */
-@media (prefers-color-scheme: dark) {
-  body {
-    color: #e5e7eb;
-    background-color: #111827;
-  }
-}
+/* 移除硬编码的暗色模式查询，完全依赖 data-theme 属性和 theme.css 变量 */
+

@@ -222,6 +222,7 @@ const LLMConfigPage: React.FC = () => {
     setEditingId(record.id);
     form.setFieldsValue({
       ...record,
+      provider: record.provider ? [record.provider] : [], // Adapt for Select mode="tags"
       api_key: undefined, // 编辑时不显示原有 API Key，除非用户想重置
     });
     setModalVisible(true);
@@ -413,7 +414,7 @@ const LLMConfigPage: React.FC = () => {
               form.setFieldsValue({ 
                 model_type: 'chat', 
                 is_active: true,
-                provider: 'OpenAI'
+                provider: ['OpenAI']
               });
               setModalVisible(true);
             }}

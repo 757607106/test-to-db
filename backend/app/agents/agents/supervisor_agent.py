@@ -36,43 +36,6 @@ logger = logging.getLogger(__name__)
 MAX_TOKENS_FOR_LLM = 4000  # Token 限制（根据模型上下文窗口调整）
 
 
-def trim_messages_hook(state: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    消息历史裁剪钩子 - 使用官方推荐方式
-    
-    使用 llm_input_messages 键（官方推荐）:
-    - 不修改原始消息历史
-    - 只为 LLM 提供裁剪后的输入
-    - 避免 RemoveMessage 被发送到前端
-    
-    官方依据: https://langchain-ai.github.io/langgraph/reference/agents
-    """
-    messages = state.get("messages", [])
-    
-    if not messages:
-        return {}
-    
-    # 使用官方 trim_messages，自动处理 tool_call 和 tool 消息的配对关系
-    trimmed = langchain_trim_messages(
-        messages,
-        strategy="last",
-        token_counter=count_tokens_approximately,
-        max_tokens=MAX_TOKENS_FOR_LLM,
-        start_on="human",  # 确保从 human 消息开始
-        include_system=True,  # 保留系统消息
-        allow_partial=False,  # 不允许部分消息
-    )
-    
-    # 如果没有裁剪，不需要更新
-    if len(trimmed) == len(messages):
-        return {}
-    
-    logger.info(f"消息裁剪: {len(messages)} -> {len(trimmed)} 条")
-    
-    # 官方推荐：使用 llm_input_messages 键，不修改原始历史
-    return {"llm_input_messages": trimmed}
-
-
 def guard_check_hook(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     防护检查钩子 - 在每次 LLM 调用前检查防护条件
@@ -81,11 +44,19 @@ def guard_check_hook(state: Dict[str, Any]) -> Dict[str, Any]:
     - 最大轮次限制
     - Agent 循环检测
     - 用户新消息时重置轮次（重要：确保每次用户请求有完整配额）
+    
+    返回值规范（官方文档）：
+    - 必须返回 state update 字典
+    - 可以包含任意状态键用于传播
+    - 注意：llm_input_messages 由 combined_pre_model_hook 统一处理
     """
+    updates = {}
+    
     # 检查是否需要重置轮次（用户发送新消息时）
     if should_reset_turn_count(state):
         reset_updates = reset_guard_state(state)
         state.update(reset_updates)  # 立即更新状态
+        updates.update(reset_updates)  # 传播到返回值
         logger.info("轮次计数已重置，开始处理新用户请求")
     
     # 运行防护检查
@@ -101,37 +72,66 @@ def guard_check_hook(state: Dict[str, Any]) -> Dict[str, Any]:
             name="system_guard"
         )
         
-        return {
-            "messages": state.get("messages", []) + [stop_message],
-            "should_stop": True,
-        }
+        # 标记防护触发，让 combined_pre_model_hook 处理消息
+        updates["_guard_triggered"] = True
+        updates["_guard_stop_message"] = stop_message
+        return updates
     
     # 更新轮次计数
     turn_count = state.get("supervisor_turn_count", 0)
+    updates["supervisor_turn_count"] = turn_count + 1
     
-    return {
-        "supervisor_turn_count": turn_count + 1,
-    }
+    return updates
 
 
 def combined_pre_model_hook(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     组合的 pre_model_hook - 同时处理消息裁剪和防护检查
+    
+    官方规范（https://reference.langchain.com/python/langgraph/supervisor/）：
+    - pre_model_hook 必须返回包含 `messages` 或 `llm_input_messages` 之一的字典
+    - `llm_input_messages`: 只作为 LLM 输入，不修改原始历史（推荐）
+    - `messages`: 会更新状态中的消息历史
+    
+    本实现使用 `llm_input_messages` 确保不修改原始消息历史。
     """
     updates = {}
+    messages = state.get("messages", [])
     
-    # 1. 防护检查
+    # 1. 防护检查（获取状态更新，不处理消息）
     guard_updates = guard_check_hook(state)
-    updates.update(guard_updates)
     
-    # 如果防护触发停止，直接返回
-    if guard_updates.get("should_stop"):
+    # 提取防护状态键（排除内部标记）
+    for key, value in guard_updates.items():
+        if not key.startswith("_"):
+            updates[key] = value
+    
+    # 2. 处理防护触发情况
+    if guard_updates.get("_guard_triggered"):
+        stop_message = guard_updates.get("_guard_stop_message")
+        if stop_message:
+            # 官方规范：使用 llm_input_messages 传递给 LLM，不修改原始历史
+            updates["llm_input_messages"] = messages + [stop_message]
+        else:
+            updates["llm_input_messages"] = messages
         return updates
     
-    # 2. 消息裁剪 - 返回 llm_input_messages（不修改原始历史）
-    trim_updates = trim_messages_hook(state)
-    if trim_updates:
-        updates.update(trim_updates)
+    # 3. 消息裁剪 - 使用官方 trim_messages
+    trimmed = langchain_trim_messages(
+        messages,
+        strategy="last",
+        token_counter=count_tokens_approximately,
+        max_tokens=MAX_TOKENS_FOR_LLM,
+        start_on="human",
+        include_system=True,
+        allow_partial=False,
+    )
+    
+    if len(trimmed) != len(messages):
+        logger.info(f"消息裁剪: {len(messages)} -> {len(trimmed)} 条")
+    
+    # 官方规范：必须返回 llm_input_messages（确保符合 API 要求）
+    updates["llm_input_messages"] = trimmed
     
     return updates
 

@@ -1,10 +1,14 @@
 import React from 'react';
 import { useLocation } from 'react-router-dom';
-import { SearchOutlined, BellOutlined } from '@ant-design/icons';
+import { SearchOutlined, BellOutlined, BulbOutlined, BulbFilled } from '@ant-design/icons';
+import { Tooltip } from 'antd';
 import GlobalConnectionSelector from '../GlobalConnectionSelector';
+import { useTheme } from '../../contexts/ThemeContext';
+import '../../styles/TopBar.css';
 
 const IOSTopBar: React.FC = () => {
   const location = useLocation();
+  const { theme, toggleTheme } = useTheme();
   const [selectedId, setSelectedId] = React.useState<number | null>(null);
 
   const getTitle = (pathname: string) => {
@@ -24,82 +28,56 @@ const IOSTopBar: React.FC = () => {
     return '仪表盘';
   };
 
-  const styles = {
-    header: {
-      height: 'var(--header-height)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      padding: '0 20px',
-      background: 'var(--glass-bg)',
-      backdropFilter: 'blur(var(--blur-amount)) saturate(180%)',
-      WebkitBackdropFilter: 'blur(var(--blur-amount)) saturate(180%)',
-      borderBottom: '1px solid var(--glass-border)',
-      position: 'sticky' as const,
-      top: 0,
-      zIndex: 100,
-      transition: 'all var(--transition-speed) var(--transition-ease)',
-    },
-    leftGroup: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: '12px',
-    },
-    title: {
-      fontSize: 'var(--font-size-header)',
-      fontWeight: 600,
-      color: 'var(--text-primary)',
-      letterSpacing: '-0.01em',
-      fontFamily: 'var(--font-stack)',
-      marginLeft: '0px',
-    },
-    rightSection: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: '8px', // Tighter spacing for toolbar items
-    },
-    navControls: {
-      display: 'flex',
-      gap: '0px',
-    }
-  };
-
   return (
-    <header style={styles.header} className="ios-layout-topbar">
-      <div style={styles.leftGroup}>
-        {/* Navigation History Buttons removed as per user request */}
-        <div style={styles.title}>{getTitle(location.pathname)}</div>
+    <header className="topbar-container">
+      <div className="topbar-left">
+        <div style={{ 
+          fontSize: '18px', 
+          fontWeight: 600, 
+          color: 'var(--color-text-main)', 
+          fontFamily: 'var(--font-stack)' 
+        }}>
+          {getTitle(location.pathname)}
+        </div>
       </div>
       
-      <div style={styles.rightSection}>
-        <div style={{ transform: 'scale(0.9)', marginRight: '8px' }}>
+      <div className="topbar-right">
+        <div style={{ transform: 'scale(0.95)' }}>
           <GlobalConnectionSelector 
              selectedConnectionId={selectedId} 
              setSelectedConnectionId={setSelectedId} 
           />
         </div>
         
-        {/* Search Input Imitation */}
-        <div style={{ position: 'relative', marginRight: '8px' }}>
-          <SearchOutlined style={{ 
-            position: 'absolute', 
-            left: '10px', 
-            top: '50%', 
-            transform: 'translateY(-50%)', 
-            fontSize: '14px', 
-            color: 'var(--text-secondary)',
-            pointerEvents: 'none'
-          }} />
+        <div className="search-bar">
+          <SearchOutlined style={{ marginRight: 8, fontSize: '16px' }} />
           <input 
             type="text" 
-            placeholder="搜索" 
-            className="macos-search-input"
+            placeholder="搜索..." 
+            style={{ 
+              border: 'none', 
+              background: 'transparent', 
+              outline: 'none', 
+              color: 'inherit', 
+              width: '100%',
+              fontSize: '14px'
+            }} 
           />
         </div>
 
-        <button className="macos-toolbar-btn">
-          <BellOutlined style={{ fontSize: '16px' }} />
+        <button className="icon-button">
+          <BellOutlined />
         </button>
+
+        <Tooltip title={theme === 'light' ? '切换到深色模式' : '切换到浅色模式'}>
+          <button className="icon-button" onClick={toggleTheme}>
+            {theme === 'light' ? (
+              <BulbOutlined />
+            ) : (
+              <BulbFilled style={{ color: 'var(--color-accent)' }} />
+            )}
+          </button>
+        </Tooltip>
       </div>
     </header>
   );

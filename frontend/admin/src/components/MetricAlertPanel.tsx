@@ -112,6 +112,7 @@ const MetricAlertPanel: React.FC<MetricAlertPanelProps> = ({
     setEditingAlert(record);
     form.setFieldsValue({
       ...record,
+      notify_channels: record.notify_channels || [],
     });
     setAlertType(record.alert_type);
     setFormVisible(true);

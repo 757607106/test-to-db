@@ -82,7 +82,7 @@ const DashboardListPage: React.FC = () => {
         name: dashboard.name,
         description: dashboard.description,
         is_public: dashboard.is_public,
-        tags: dashboard.tags,
+        tags: dashboard.tags || [],
       });
     }
     setModalVisible(true);
@@ -324,7 +324,7 @@ const DashboardListPage: React.FC = () => {
         onCancel={handleCancel}
         width={600}
       >
-        <Form form={form} layout="vertical" initialValues={{ is_public: false }}>
+        <Form form={form} layout="vertical" initialValues={{ is_public: false, tags: [] }}>
           <Form.Item
             name="name"
             label="名称"

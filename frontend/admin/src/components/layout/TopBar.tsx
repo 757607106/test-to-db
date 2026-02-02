@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
-import { BellOutlined, SearchOutlined, UserOutlined } from '@ant-design/icons';
+import { BellOutlined, SearchOutlined, UserOutlined, SunOutlined, MoonOutlined } from '@ant-design/icons';
 import GlobalConnectionSelector from '../GlobalConnectionSelector';
+import { useTheme } from '../../contexts/ThemeContext';
+import { Tooltip } from 'antd';
 import '../../styles/TopBar.css';
 
 const TopBar: React.FC = () => {
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const { theme, toggleTheme } = useTheme();
 
   return (
     <header className="glass-panel topbar-container">
@@ -28,6 +31,12 @@ const TopBar: React.FC = () => {
            <SearchOutlined style={{ marginRight: '8px', opacity: 0.6 }} />
            <span style={{ fontSize: '14px', opacity: 0.6 }}>Search data...</span>
         </div>
+
+        <Tooltip title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}>
+          <div className="icon-button" onClick={toggleTheme}>
+            {theme === 'light' ? <MoonOutlined /> : <SunOutlined />}
+          </div>
+        </Tooltip>
 
         <BellOutlined className="icon-button" />
         

@@ -58,6 +58,7 @@ import {
   OptimizationSuggestion,
   SkillSuggestion,
 } from '../services/skillService';
+import { useGlobalConnection } from '../contexts/GlobalConnectionContext';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -89,10 +90,11 @@ const JOIN_TYPE_OPTIONS = [
 ];
 
 const SkillsPage: React.FC = () => {
+  const { selectedConnectionId } = useGlobalConnection();
   const [loading, setLoading] = useState(false);
   const [skills, setSkills] = useState<Skill[]>([]);
-  const [connections, setConnections] = useState<any[]>([]);
-  const [selectedConnection, setSelectedConnection] = useState<number | null>(null);
+  // const [connections, setConnections] = useState<any[]>([]); // 使用全局 Context
+  // const [selectedConnection, setSelectedConnection] = useState<number | null>(null); // 使用全局 Context
   const [modalVisible, setModalVisible] = useState(false);
   const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
   const [hasSkillsConfigured, setHasSkillsConfigured] = useState(false);
@@ -113,36 +115,23 @@ const SkillsPage: React.FC = () => {
   const [optimizeLoading, setOptimizeLoading] = useState(false);
   const [optimizeSuggestions, setOptimizeSuggestions] = useState<OptimizationSuggestion[]>([]);
 
-  // 加载连接列表
-  useEffect(() => {
-    fetchConnections();
-  }, []);
-
   // 加载 Skills 列表
   useEffect(() => {
-    if (selectedConnection) {
+    if (selectedConnectionId) {
       fetchSkills();
+    } else {
+      setSkills([]);
+      setHasSkillsConfigured(false);
     }
-  }, [selectedConnection]);
+  }, [selectedConnectionId]);
 
-  const fetchConnections = async () => {
-    try {
-      const response = await getConnections();
-      const data = Array.isArray(response.data) ? response.data : response.data?.items || [];
-      setConnections(data);
-      if (data.length > 0) {
-        setSelectedConnection(data[0].id);
-      }
-    } catch (error) {
-      message.error('获取连接列表失败');
-    }
-  };
+  /* fetchConnections removed as it is handled globally */
 
   const fetchSkills = async () => {
-    if (!selectedConnection) return;
+    if (!selectedConnectionId) return;
     setLoading(true);
     try {
-      const response = await skillService.listSkills(selectedConnection, true);
+      const response = await skillService.listSkills(selectedConnectionId, true);
       setSkills(response.skills);
       setHasSkillsConfigured(response.has_skills_configured);
     } catch (error) {
@@ -196,6 +185,11 @@ const SkillsPage: React.FC = () => {
   };
 
   const handleSubmit = async () => {
+    if (!selectedConnectionId) {
+      message.error('请先选择数据库连接');
+      return;
+    }
+
     try {
       const values = await form.validateFields();
       
@@ -212,7 +206,7 @@ const SkillsPage: React.FC = () => {
         priority: values.priority,
         is_active: values.is_active,
         color: values.color,
-        connection_id: selectedConnection!,
+        connection_id: selectedConnectionId,
       };
 
       if (editingSkill) {
@@ -236,10 +230,10 @@ const SkillsPage: React.FC = () => {
 
   // 自动发现 Skills
   const handleDiscover = async (useLlm = false) => {
-    if (!selectedConnection) return;
+    if (!selectedConnectionId) return;
     setDiscoverLoading(true);
     try {
-      const result = await skillService.discoverSkills(selectedConnection, useLlm);
+      const result = await skillService.discoverSkills(selectedConnectionId, useLlm);
       setDiscoverSuggestions(result.suggestions);
       setDiscoverStats({
         analyzed: result.analyzed_tables,
@@ -260,10 +254,10 @@ const SkillsPage: React.FC = () => {
 
   // 应用发现的 Skills
   const handleApplyDiscovered = async () => {
-    if (!selectedConnection || selectedSuggestions.length === 0) return;
+    if (!selectedConnectionId || selectedSuggestions.length === 0) return;
     setDiscoverLoading(true);
     try {
-      const result = await skillService.applyDiscoveredSkills(selectedConnection, selectedSuggestions);
+      const result = await skillService.applyDiscoveredSkills(selectedConnectionId, selectedSuggestions);
       if (result.success) {
         message.success(`成功创建 ${result.created_count} 个 Skills`);
         setSelectedSuggestions([]);
@@ -282,10 +276,10 @@ const SkillsPage: React.FC = () => {
 
   // 获取优化建议
   const handleFetchOptimizations = async (forceRefresh = false) => {
-    if (!selectedConnection) return;
+    if (!selectedConnectionId) return;
     setOptimizeLoading(true);
     try {
-      const result = await skillService.getOptimizationSuggestions(selectedConnection, 7, forceRefresh);
+      const result = await skillService.getOptimizationSuggestions(selectedConnectionId, 7, forceRefresh);
       setOptimizeSuggestions(result.suggestions);
       if (result.suggestions.length === 0) {
         message.info('暂无优化建议');
@@ -299,9 +293,9 @@ const SkillsPage: React.FC = () => {
 
   // 应用优化建议
   const handleApplyOptimization = async (suggestionId: string) => {
-    if (!selectedConnection) return;
+    if (!selectedConnectionId) return;
     try {
-      const result = await skillService.applyOptimizationSuggestion(suggestionId, selectedConnection);
+      const result = await skillService.applyOptimizationSuggestion(suggestionId, selectedConnectionId);
       if (result.success) {
         message.success(result.message || '应用成功');
         handleFetchOptimizations(true);
@@ -324,7 +318,7 @@ const SkillsPage: React.FC = () => {
     <>
       <Row justify="space-between" style={{ marginBottom: 16 }}>
         <Col>
-          {selectedConnection && !hasSkillsConfigured && (
+          {selectedConnectionId && !hasSkillsConfigured && (
             <Alert
               message="零配置模式"
               description="当前连接未配置 Skills，系统将使用默认的全库检索模式。"
@@ -334,7 +328,7 @@ const SkillsPage: React.FC = () => {
               style={{ marginBottom: 0 }}
             />
           )}
-          {selectedConnection && hasSkillsConfigured && activeSkillsCount > 0 && (
+          {selectedConnectionId && hasSkillsConfigured && activeSkillsCount > 0 && (
             <Alert
               message="Skill 模式已启用"
               description={`已配置 ${activeSkillsCount} 个活跃的 Skills`}
@@ -344,7 +338,7 @@ const SkillsPage: React.FC = () => {
               style={{ marginBottom: 0 }}
             />
           )}
-          {selectedConnection && hasSkillsConfigured && activeSkillsCount === 0 && (
+          {selectedConnectionId && hasSkillsConfigured && activeSkillsCount === 0 && (
             <Alert
               message="Skill 未激活"
               description={`已配置 ${skills.length} 个 Skills，但均未启用。请启用至少一个 Skill 以使用 Skill 模式。`}
@@ -354,32 +348,49 @@ const SkillsPage: React.FC = () => {
               style={{ marginBottom: 0 }}
             />
           )}
+          {!selectedConnectionId && (
+            <Alert
+              message="请选择数据库连接"
+              description="请在顶部导航栏选择一个数据库连接以管理 Skills。"
+              type="info"
+              showIcon
+              style={{ marginBottom: 0 }}
+            />
+          )}
         </Col>
         <Col>
           <Space>
-            <Button icon={<ReloadOutlined />} onClick={fetchSkills} loading={loading}>
-              刷新
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate} disabled={!selectedConnection}>
+            <Input
+              placeholder="搜索..."
+              prefix={<SearchOutlined />}
+              style={{ width: 200 }}
+            />
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={handleCreate}
+              disabled={!selectedConnectionId}
+            >
               创建 Skill
+            </Button>
+            <Button
+              icon={<ReloadOutlined />}
+              onClick={fetchSkills}
+              loading={loading}
+              disabled={!selectedConnectionId}
+            >
+              刷新
             </Button>
           </Space>
         </Col>
       </Row>
+
       <Table
         columns={columns}
         dataSource={skills}
         rowKey="id"
         loading={loading}
-        pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `共 ${total} 个 Skills` }}
-        locale={{
-          emptyText: (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={selectedConnection ? '暂无 Skills，点击"创建 Skill"开始配置' : '请先选择数据库连接'}
-            />
-          ),
-        }}
+        pagination={false}
       />
     </>
     );
@@ -676,18 +687,7 @@ const SkillsPage: React.FC = () => {
             </Space>
           </Col>
           <Col>
-            <Space>
-              <Select
-                style={{ width: 200 }}
-                placeholder="选择数据库连接"
-                value={selectedConnection}
-                onChange={setSelectedConnection}
-                options={connections.map(c => ({
-                  value: c.id,
-                  label: c.name || c.database,
-                }))}
-              />
-            </Space>
+            {/* Connection Selector Removed - handled globally */}
           </Col>
         </Row>
 

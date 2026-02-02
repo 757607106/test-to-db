@@ -22,15 +22,32 @@
   padding: 24px;
   overflow: auto;
   position: relative;
-  /* 继承 glass-panel 的样式，但这里我们通过类名组合来实现，或者在这里重新定义特定的覆盖 */
+  /* Use glass background for the content wrapper */
+  /* This creates the "floating card" effect over the global background */
+  background: transparent;
+}
+
+.content-wrapper {
+  flex: 1;
+  padding: 24px;
+  overflow: auto;
+  position: relative;
+  /* Make content wrapper transparent to let page background show, 
+     but individual cards will have glass effect */
+  background: transparent;
+}
+
+/* If we want the WHOLE content area to be one big glass panel: */
+/* 
+.content-wrapper {
+  margin: 20px;
   background: var(--glass-bg);
   backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--glass-shadow);
   border-radius: var(--border-radius-lg);
-  transition: var(--transition-base);
-}
+  border: 1px solid var(--glass-border-solid);
+} 
+*/
+/* But user asked for "components" to have glass effect, usually meaning Cards */
 
 /* 响应式调整 */
 @media (max-width: 768px) {

@@ -14,6 +14,7 @@ import {
   EyeOutlined,
   EyeInvisibleOutlined
 } from '@ant-design/icons';
+import '../styles/ProfessionalKnowledgeGraph.css';
 
 const { Option } = Select;
 
@@ -362,71 +363,39 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
 
   if (loading) {
     return (
-      <div style={{ 
-        height, 
-        display: 'flex', 
-        flexDirection: 'column',
-        alignItems: 'center', 
-        justifyContent: 'center',
-        background: 'linear-gradient(135deg, #f6f9fc 0%, #ffffff 100%)',
-        borderRadius: '8px',
-        gap: '16px'
-      }}>
+      <div className="pkg-loading-container" style={{ height }}>
         <Spin size="large" />
-        <div style={{ color: '#1890ff' }}>加载专业知识图谱中...</div>
+        <div className="pkg-loading-text">加载专业知识图谱中...</div>
       </div>
     );
   }
 
   if (!data.nodes || data.nodes.length === 0) {
     return (
-      <div style={{ 
-        height, 
-        display: 'flex', 
-        alignItems: 'center', 
-        justifyContent: 'center',
-        background: 'linear-gradient(135deg, #f6f9fc 0%, #ffffff 100%)',
-        borderRadius: '8px',
-        flexDirection: 'column'
-      }}>
-        <SettingOutlined style={{ fontSize: '48px', color: '#ccc', marginBottom: '16px' }} />
-        <div style={{ fontSize: '16px', color: '#666' }}>暂无图数据</div>
-        <div style={{ fontSize: '14px', color: '#999', marginTop: '8px' }}>请选择数据库连接并同步数据</div>
+      <div className="pkg-empty-container" style={{ height }}>
+        <SettingOutlined className="pkg-empty-icon" />
+        <div className="pkg-empty-text">暂无图数据</div>
+        <div className="pkg-empty-subtext">请选择数据库连接并同步数据</div>
       </div>
     );
   }
 
   return (
-    <div style={{ 
-      position: 'relative', 
-      width: '100%', 
-      height,
-      background: 'linear-gradient(135deg, #f6f9fc 0%, #ffffff 100%)',
-      borderRadius: '8px',
-      overflow: 'hidden'
-    }}>
+    <div className="pkg-container" style={{ height }}>
       {/* 顶部控制栏 */}
       {showControls && (
         <Card 
           size="small" 
-          style={{ 
-            position: 'absolute', 
-            top: 10, 
-            left: 10, 
-            right: 10, 
-            zIndex: 10,
-            background: 'rgba(255, 255, 255, 0.95)',
-            backdropFilter: 'blur(8px)'
-          }}
+          className="pkg-controls-card"
         >
-          <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+          <Space wrap className="pkg-controls-wrapper">
             <Space wrap>
               <Input
                 placeholder="搜索节点..."
                 prefix={<SearchOutlined />}
                 value={searchValue}
                 onChange={(e) => handleSearch(e.target.value)}
-                style={{ width: 200 }}
+                className="pkg-search-input"
                 size="small"
               />
               
@@ -434,7 +403,7 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
                 value={layout}
                 onChange={setLayout}
                 size="small"
-                style={{ width: 120 }}
+                className="pkg-layout-select"
               >
                 <Option value="force">力导向</Option>
                 <Option value="circular">环形</Option>
@@ -446,7 +415,7 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
                 value={nodeSize}
                 onChange={setNodeSize}
                 size="small"
-                style={{ width: 80 }}
+                className="pkg-size-select"
               >
                 <Option value="small">小</Option>
                 <Option value="medium">中</Option>
@@ -454,7 +423,7 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
               </Select>
 
               <Space>
-                <span style={{ fontSize: '12px', color: '#666' }}>标签:</span>
+                <span className="pkg-label-text">标签:</span>
                 <Switch
                   checked={showLabels}
                   onChange={setShowLabels}
@@ -509,23 +478,14 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
           size="small"
           icon={<SettingOutlined />}
           onClick={() => setShowControls(true)}
-          style={{
-            position: 'absolute',
-            top: 10,
-            right: 10,
-            zIndex: 10
-          }}
+          className="pkg-show-controls-btn"
         />
       )}
 
       {/* 图谱容器 */}
       <div 
         ref={containerRef} 
-        style={{ 
-          width: '100%', 
-          height: '100%',
-          background: 'transparent'
-        }} 
+        className="pkg-graph-canvas"
       />
 
       {/* 图例 */}
@@ -533,64 +493,24 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
         <Card
           size="small"
           title="图例"
-          style={{
-            position: 'absolute',
-            bottom: 10,
-            right: 10,
-            width: 200,
-            zIndex: 10,
-            background: 'rgba(255, 255, 255, 0.95)',
-            backdropFilter: 'blur(8px)'
-          }}
+          className="pkg-legend-card"
         >
           <Space direction="vertical" size="small" style={{ width: '100%' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div style={{
-                width: '16px',
-                height: '16px',
-                borderRadius: '50%',
-                backgroundColor: '#1890ff',
-                border: '2px solid #ffffff'
-              }} />
-              <span style={{ fontSize: '12px' }}>表 (Table)</span>
+            <div className="pkg-legend-item">
+              <div className="pkg-legend-dot-table" />
+              <span className="pkg-legend-text">表 (Table)</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div style={{
-                width: '16px',
-                height: '16px',
-                borderRadius: '50%',
-                backgroundColor: '#eb2f96',
-                border: '2px solid #ffffff'
-              }} />
-              <span style={{ fontSize: '12px' }}>列 (Column)</span>
+            <div className="pkg-legend-item">
+              <div className="pkg-legend-dot-column" />
+              <span className="pkg-legend-text">列 (Column)</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div style={{
-                width: '16px',
-                height: '2px',
-                backgroundColor: '#999',
-                position: 'relative'
-              }}>
-                <div style={{
-                  position: 'absolute',
-                  right: '-4px',
-                  top: '-3px',
-                  width: '0',
-                  height: '0',
-                  borderLeft: '4px solid #999',
-                  borderTop: '3px solid transparent',
-                  borderBottom: '3px solid transparent'
-                }} />
+            <div className="pkg-legend-item">
+              <div className="pkg-legend-line-relation">
+                <div className="pkg-legend-arrow" />
               </div>
-              <span style={{ fontSize: '12px' }}>关系 (Relation)</span>
+              <span className="pkg-legend-text">关系 (Relation)</span>
             </div>
-            <div style={{
-              borderTop: '1px solid #f0f0f0',
-              paddingTop: '8px',
-              marginTop: '8px',
-              fontSize: '11px',
-              color: '#999'
-            }}>
+            <div className="pkg-legend-footer">
               节点: {data.nodes.length} | 边: {data.edges.length}
             </div>
           </Space>
@@ -599,16 +519,7 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
 
       {/* 简化的底部信息栏（当图例隐藏时显示） */}
       {!showLegend && (
-        <div style={{
-          position: 'absolute',
-          bottom: 10,
-          right: 10,
-          background: 'rgba(255, 255, 255, 0.9)',
-          padding: '4px 8px',
-          borderRadius: '4px',
-          fontSize: '12px',
-          color: '#666'
-        }}>
+        <div className="pkg-simple-footer">
           节点: {data.nodes.length} | 边: {data.edges.length}
         </div>
       )}

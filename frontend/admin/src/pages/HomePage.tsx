@@ -27,25 +27,25 @@ const HomePage: React.FC = () => {
       icon: <BulbOutlined />,
       title: '智能查询',
       description: '自然语言转SQL，让数据查询变得简单直观',
-      color: '#6366f1' // Indigo
+      className: 'feature-indigo'
     },
     {
       icon: <DatabaseOutlined />,
       title: '数据建模',
       description: '智能识别数据结构，自动构建数据模型',
-      color: '#2dd4bf' // Teal
+      className: 'feature-teal'
     },
     {
       icon: <ShareAltOutlined />,
       title: '图可视化',
       description: '直观展示数据关系，洞察数据价值',
-      color: '#f59e0b' // Amber
+      className: 'feature-amber'
     },
     {
       icon: <ApiOutlined />,
       title: '智能问答',
       description: '基于知识图谱的智能问答系统',
-      color: '#ec4899' // Pink
+      className: 'feature-pink'
     }
   ];
 
@@ -102,13 +102,7 @@ const HomePage: React.FC = () => {
           {features.map((feature, index) => (
             <Col xs={24} sm={12} md={6} key={index}>
               <Card className="feature-card" variant="borderless">
-                <div 
-                  className="feature-icon-wrapper" 
-                  style={{ 
-                    color: feature.color,
-                    background: `${feature.color}15` // 10% opacity
-                  }}
-                >
+                <div className={`feature-icon-wrapper ${feature.className}`}>
                   {feature.icon}
                 </div>
                 <AntTitle level={4} className="feature-title">

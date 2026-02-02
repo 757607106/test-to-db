@@ -38,6 +38,7 @@ import {
   QuestionCircleOutlined,
   SettingOutlined
 } from '@ant-design/icons';
+import '../../styles/HybridQA.css';
 import { hybridQAService } from '../../services/hybridQA';
 import { getConnections } from '../../services/api';
 import { getQASampleConfig, updateQASampleConfig, type QASampleConfig } from '../../services/systemConfig';
@@ -289,7 +290,7 @@ export const HybridQAContent: React.FC = () => {
       ellipsis: true,
       width: 400,
       render: (sql: string) => (
-        <code style={{ fontSize: '12px', background: '#f5f5f5', padding: '2px 4px' }}>
+        <code className="hybrid-qa-code-block">
           {sql}
         </code>
       ),
@@ -309,7 +310,7 @@ export const HybridQAContent: React.FC = () => {
       key: 'difficulty_level',
       width: 80,
       render: (level: number) => (
-        <Tag style={{ backgroundColor: getDifficultyColor(level), color: '#fff' }}>
+        <Tag color={getDifficultyColor(level)} className="hybrid-qa-tag-difficulty">
           {level}
         </Tag>
       ),
@@ -388,7 +389,7 @@ export const HybridQAContent: React.FC = () => {
       ellipsis: true,
       width: 400,
       render: (sql: string) => (
-        <code style={{ fontSize: '12px', background: '#f5f5f5', padding: '2px 4px' }}>
+        <code className="hybrid-qa-code-block">
           {sql}
         </code>
       ),
@@ -467,18 +468,18 @@ export const HybridQAContent: React.FC = () => {
   ];
 
   return (
-    <div>
-      <Card title="混合检索问答对管理" style={{ marginBottom: '24px' }}>
+    <div className="hybrid-qa-container">
+      <Card title="混合检索问答对管理" className="hybrid-qa-card">
         {/* 数据库连接选择器 */}
-        <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="hybrid-qa-db-selector-container">
           <div>
-            <span style={{ marginRight: '8px' }}>数据库连接:</span>
+            <span className="hybrid-qa-db-selector-label">数据库连接:</span>
             <Select
               placeholder="选择数据库连接（可选）"
               value={selectedConnectionId}
               onChange={setSelectedConnectionId}
               loading={loadingConnections}
-              style={{ width: 300 }}
+              className="hybrid-qa-db-selector"
               allowClear
             >
               {connections.map(conn => (
@@ -489,11 +490,11 @@ export const HybridQAContent: React.FC = () => {
             </Select>
           </div>
           <Tooltip title="选择数据库连接后，统计信息和搜索结果将仅显示该连接下的问答对">
-            <QuestionCircleOutlined style={{ color: '#999' }} />
+            <QuestionCircleOutlined className="hybrid-qa-icon-help" />
           </Tooltip>
         </div>
 
-        <Row gutter={16} style={{ marginBottom: '24px' }}>
+        <Row gutter={16} className="hybrid-qa-stats-row">
           <Col span={6}>
             <Statistic
               title="总问答对数"
@@ -531,7 +532,7 @@ export const HybridQAContent: React.FC = () => {
         {/* QA 样本检索配置 */}
         <Card 
           size="small" 
-          style={{ marginBottom: '16px', background: '#fafafa' }}
+          className="hybrid-qa-config-card"
           title={
             <Space>
               <SettingOutlined />
@@ -574,7 +575,7 @@ export const HybridQAContent: React.FC = () => {
           </Space>
         </Card>
 
-        <Space style={{ marginBottom: '16px' }}>
+        <Space className="hybrid-qa-action-bar">
           <Button
             type="primary"
             icon={<PlusOutlined />}
@@ -635,7 +636,7 @@ export const HybridQAContent: React.FC = () => {
               label: '智能搜索',
               children: (
                 <>
-                  <Card size="small" style={{ marginBottom: '16px' }}>
+                  <Card size="small" className="hybrid-qa-search-card">
                     <Form
                       form={searchForm}
                       layout="inline"
@@ -647,13 +648,13 @@ export const HybridQAContent: React.FC = () => {
                       >
                         <Input
                           placeholder="输入自然语言问题"
-                          style={{ width: 300 }}
+                          className="hybrid-qa-search-input"
                         />
                       </Form.Item>
                       <Form.Item name="connection_id">
                         <Select
                           placeholder="选择数据库连接"
-                          style={{ width: 200 }}
+                          className="hybrid-qa-search-select"
                           allowClear
                         >
                           {connections.map(conn => (
@@ -668,7 +669,7 @@ export const HybridQAContent: React.FC = () => {
                           placeholder="返回数量"
                           min={1}
                           max={20}
-                          style={{ width: 100 }}
+                          className="hybrid-qa-search-number"
                         />
                       </Form.Item>
                       <Form.Item>

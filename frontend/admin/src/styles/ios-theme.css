@@ -1,251 +1,301 @@
-:root {
-  /* Animation - Snappy & Smooth like macOS */
-  --transition-speed: 0.2s; /* Faster for UI interactions */
-  --transition-ease: cubic-bezier(0.2, 0, 0, 1); /* "Default" macOS easing */
-  
-  /* Dimensions */
-  --sidebar-width: 260px;
-  --header-height: 52px; /* Slightly shorter, more compact like standard toolbars */
-  --radius-l: 12px; /* Standard window/panel content radius */
-  --radius-m: 8px; /* Standard control radius */
-  --radius-s: 6px; /* Small control radius */
-  
-  /* Fonts - San Francisco */
-  --font-stack: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --font-size-body: 13px; /* Standard macOS body size */
-  --font-size-header: 16px; /* Standard header size */
-  --font-size-large-title: 22px;
+@import './theme.css';
 
-  /* Light Mode Variables */
-  --bg-base: #F5F5F7;
-  --bg-card: #FFFFFF;
-  --bg-secondary: #EBEBF0;
-  --bg-tertiary: #E2E2E7;
-  
-  --text-primary: #1C1C1E;
-  --text-secondary: rgba(60, 60, 67, 0.6);
-  --text-tertiary: rgba(60, 60, 67, 0.3);
+/* ==========================================================================
+   iOS / macOS Glassmorphism Theme Overrides for Ant Design
+   ========================================================================== */
 
-  /* Glass - More Vibrancy */
-  --glass-bg: rgba(245, 245, 247, 0.85);
-  --glass-border: rgba(0, 0, 0, 0.06);
-  --glass-highlight: inset 0 1px 0 0 rgba(255, 255, 255, 0.4);
-  --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
-  --blur-amount: 20px; /* Stronger blur for "Material" feel */
-
-  --system-blue: #007AFF;
-  --system-blue-pressed: #0062CC;
-  
-  /* Sidebar Item Colors */
-  --sidebar-item-hover: rgba(0, 0, 0, 0.04);
-  --sidebar-item-active: rgba(0, 0, 0, 0.08);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-base: #1E1E1E;
-    --bg-card: #2C2C2E;
-    --bg-secondary: #3A3A3C;
-    --bg-tertiary: #48484A;
-    
-    --text-primary: #FFFFFF;
-    --text-secondary: rgba(235, 235, 245, 0.6);
-    --text-tertiary: rgba(235, 235, 245, 0.3);
-
-    --glass-bg: rgba(30, 30, 30, 0.75); /* More transparent in dark mode */
-    --glass-border: rgba(255, 255, 255, 0.08);
-    --glass-highlight: inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
-    --glass-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
-
-    --system-blue: #0A84FF;
-    --system-blue-pressed: #0071E3;
-    
-    --sidebar-item-hover: rgba(255, 255, 255, 0.04);
-    --sidebar-item-active: rgba(255, 255, 255, 0.08);
-  }
-}
-
+/* --- 1. Global Layout & Typography --- */
 body {
-  margin: 0;
-  padding: 0;
-  font-family: var(--font-stack);
-  background-color: var(--bg-base);
-  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  font-size: var(--font-size-body);
-  line-height: 1.4;
-  overflow: hidden; /* App-like feel */
+  color: var(--color-text-main);
+  background-color: var(--color-bg-page); /* Fallback */
 }
 
-/* --- Native Interactions Classes --- */
-
-/* Sidebar Item */
-.macos-sidebar-item {
-  display: flex;
-  align-items: center;
-  padding: 8px 12px; /* Increased padding */
-  margin: 0 8px 4px 8px; /* Increased margin */
-  border-radius: 8px; /* Slightly larger radius */
-  text-decoration: none;
-  color: var(--text-primary);
-  font-size: 15px; /* Increased from 13px */
-  font-weight: 500; /* Slightly bolder for better readability */
-  cursor: default;
-  transition: background-color 0.1s ease-out, color 0.1s ease-out;
-  user-select: none;
-}
-
-.macos-sidebar-item:hover {
-  background-color: var(--sidebar-item-hover);
-  text-decoration: none;
-}
-
-.macos-sidebar-item:active {
-  background-color: var(--sidebar-item-active);
-}
-
-.macos-sidebar-item.active {
-  background-color: var(--system-blue);
-  color: #FFFFFF;
-  font-weight: 600; /* Bolder active state */
-}
-
-.macos-sidebar-item.active .sidebar-icon {
-  color: #FFFFFF;
-}
-
-.sidebar-icon {
-  font-size: 18px; /* Increased from 15px */
-  margin-right: 12px; /* More space */
-  color: var(--system-blue);
-  transition: color 0.1s;
-}
-
-/* Toolbar Button */
-.macos-toolbar-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  color: var(--text-secondary);
-  transition: all 0.1s ease-out;
-  cursor: default;
-  background: transparent;
-  border: none;
-  outline: none;
-}
-
-.macos-toolbar-btn:hover {
-  background-color: var(--bg-secondary);
-  color: var(--text-primary);
-}
-
-.macos-toolbar-btn:active {
-  background-color: var(--bg-tertiary);
-  transform: scale(0.96); /* Subtle press effect */
-}
-
-/* Search Bar */
-.macos-search-input {
-  background: var(--bg-secondary); /* Darker background */
-  border: 1px solid transparent;
-  border-radius: 8px;
-  padding: 6px 12px 6px 32px; /* Space for icon */
-  font-size: 13px;
-  color: var(--text-primary);
-  width: 200px;
-  outline: none;
-  transition: all 0.2s ease;
-}
-
-.macos-search-input:focus {
-  background: var(--bg-card);
-  border-color: var(--system-blue);
-  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.2);
-  width: 240px; /* Expand on focus */
-}
-
-/* Window/Card Container */
-.macos-window-content {
-  background-color: var(--bg-card);
-  border-radius: var(--radius-l);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(0,0,0,0.02); /* Delicate border */
-  overflow: hidden;
-  transition: background-color 0.3s ease;
-}
-
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(120, 120, 120, 0.3);
-  border-radius: 5px;
-  border: 3px solid transparent;
-  background-clip: content-box;
-}
-::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(120, 120, 120, 0.5);
-}
-
-body.dashboard-fullscreen {
+/* --- 2. Card (Glass Containers) --- */
+.ant-card {
+  background: var(--glass-bg) !important;
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border-solid) !important;
+  border-radius: var(--border-radius-lg) !important;
+  box-shadow: var(--glass-shadow) !important;
+  transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), box-shadow 0.3s ease !important;
   overflow: hidden;
 }
 
-body.dashboard-fullscreen .ios-layout {
-  height: 100vh;
-  overflow: hidden;
+.ant-card-bordered {
+  border: 1px solid var(--glass-border-solid) !important;
 }
 
-body.dashboard-fullscreen .ios-layout-sidebar {
-  opacity: 0;
-  transform: translateX(-24px);
-  pointer-events: none;
+.ant-card:hover {
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08) !important;
+  border-color: var(--glass-border) !important;
 }
 
-body.dashboard-fullscreen .ios-layout-topbar {
-  opacity: 0;
-  transform: translateY(-24px);
-  pointer-events: none;
+.ant-card-head {
+  border-bottom: 1px solid var(--glass-border-solid) !important;
+  padding: 0 24px !important;
+  min-height: 56px !important;
+  font-size: 17px !important;
+  font-weight: 600 !important;
+  color: var(--color-text-main) !important;
 }
 
-body.dashboard-fullscreen .ios-layout-main {
-  margin-left: 0 !important;
-  height: 100vh;
+.ant-card-body {
+  padding: 24px !important;
 }
 
-body.dashboard-fullscreen .ios-layout-content {
-  padding: 0 !important;
+/* --- 3. Buttons (iOS Style) --- */
+.ant-btn {
+  border-radius: 8px !important;
+  box-shadow: none !important;
+  font-weight: 500 !important;
+  height: 36px !important;
+  padding: 4px 16px !important;
+  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+}
+
+.ant-btn-primary {
+  background: var(--color-primary) !important;
+  border-color: var(--color-primary) !important;
+  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.25) !important;
+  color: #fff !important; /* Ensure text is white */
+}
+
+.ant-btn-primary:disabled {
+  background: rgba(0, 0, 0, 0.04) !important;
+  border-color: transparent !important;
+  color: rgba(0, 0, 0, 0.25) !important;
+  box-shadow: none !important;
+}
+
+[data-theme="dark"] .ant-btn-primary:disabled {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: rgba(255, 255, 255, 0.3) !important;
+}
+
+.ant-btn-primary:not(:disabled):hover {
+  background: var(--color-primary-hover) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 122, 255, 0.35) !important;
+}
+
+.ant-btn-default {
+  background: rgba(255, 255, 255, 0.5) !important;
+  border: 1px solid var(--glass-border-solid) !important;
+  backdrop-filter: blur(4px);
+  color: var(--color-text-main) !important;
+}
+
+.ant-btn-default:disabled {
+  background: rgba(0, 0, 0, 0.04) !important;
+  border-color: transparent !important;
+  color: rgba(0, 0, 0, 0.25) !important;
+  backdrop-filter: none;
+  box-shadow: none !important;
+}
+
+[data-theme="dark"] .ant-btn-default:disabled {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: rgba(255, 255, 255, 0.3) !important;
+}
+
+.ant-btn-default:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.8) !important;
+  border-color: var(--color-primary) !important;
+  color: var(--color-primary) !important;
+}
+
+/* --- 4. Inputs & Selects (iOS Field Style) --- */
+.ant-input,
+.ant-input-number,
+.ant-select-selector {
+  background-color: rgba(255, 255, 255, 0.5) !important; /* Lighter background */
+  border: 1px solid transparent !important;
+  border-radius: 8px !important;
+  transition: all 0.2s ease !important;
+  backdrop-filter: blur(8px) !important; /* Add blur to inputs */
+}
+
+[data-theme="dark"] .ant-input,
+[data-theme="dark"] .ant-input-number,
+[data-theme="dark"] .ant-select-selector {
+  background-color: rgba(0, 0, 0, 0.2) !important;
+}
+
+.ant-input:hover,
+.ant-select-selector:hover {
+  background-color: rgba(255, 255, 255, 0.7) !important;
+}
+
+[data-theme="dark"] .ant-input:hover,
+[data-theme="dark"] .ant-select-selector:hover {
+  background-color: rgba(0, 0, 0, 0.3) !important;
+}
+
+.ant-input:focus,
+.ant-input-focused,
+.ant-select-focused .ant-select-selector {
+  background-color: var(--color-bg-card) !important;
+  border-color: var(--color-primary) !important;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15) !important; /* Indigo ring */
+}
+
+/* --- 5. Tables (Glass Tables) --- */
+.ant-table {
+  background: transparent !important;
+}
+
+.ant-table-container {
+  border-radius: var(--border-radius-lg) !important;
   overflow: hidden !important;
+  border: 1px solid var(--glass-border-solid);
 }
 
-.dashboard-fullscreen-exit-zone {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 44px;
-  z-index: 2000;
-  pointer-events: auto;
+.ant-table-thead > tr > th {
+  background: rgba(245, 245, 247, 0.5) !important; /* Semi-transparent header */
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--glass-border-solid) !important;
+  color: var(--color-text-secondary) !important;
+  font-weight: 600 !important;
 }
 
-.dashboard-fullscreen-exit-inner {
-  position: absolute;
-  top: 8px;
-  right: 16px;
-  opacity: 0;
-  transform: translateY(-8px);
-  transition: opacity 0.2s ease, transform 0.2s ease;
+[data-theme="dark"] .ant-table-thead > tr > th {
+  background: rgba(40, 40, 40, 0.5) !important;
 }
 
-.dashboard-fullscreen-exit-zone:hover .dashboard-fullscreen-exit-inner {
-  opacity: 1;
-  transform: translateY(0);
+.ant-table-tbody > tr > td {
+  background: transparent !important;
+  border-bottom: 1px solid var(--glass-border-solid) !important;
+  transition: background 0.2s ease;
+}
+
+.ant-table-tbody > tr:hover > td {
+  background: rgba(0, 122, 255, 0.05) !important; /* Subtle blue tint on hover */
+}
+
+/* --- 6. Modals (Glass Overlay) --- */
+.ant-modal-mask {
+  background-color: rgba(0, 0, 0, 0.2) !important;
+  backdrop-filter: blur(4px);
+}
+
+.ant-modal-content {
+  background: var(--glass-bg) !important;
+  backdrop-filter: blur(24px) !important;
+  border: 1px solid var(--glass-border-solid) !important;
+  border-radius: 20px !important; /* Larger iOS modal radius */
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15) !important;
+  padding: 0 !important;
+  overflow: hidden;
+}
+
+.ant-modal-header {
+  background: transparent !important;
+  border-bottom: 1px solid var(--glass-border-solid) !important;
+  padding: 20px 24px !important;
+}
+
+.ant-modal-title {
+  font-size: 18px !important;
+  font-weight: 600 !important;
+}
+
+.ant-modal-body {
+  padding: 24px !important;
+}
+
+.ant-modal-footer {
+  border-top: 1px solid var(--glass-border-solid) !important;
+  padding: 16px 24px !important;
+}
+
+/* --- 7. Menu / Sidebar --- */
+.ant-menu {
+  background: transparent !important;
+  border-right: none !important;
+}
+
+.ant-menu-item {
+  border-radius: 8px !important;
+  margin: 4px 8px !important;
+  width: calc(100% - 16px) !important;
+  transition: all 0.2s ease !important;
+}
+
+.ant-menu-item-selected {
+  background-color: var(--color-primary) !important;
+  color: #fff !important;
+  box-shadow: 0 4px 12px rgba(0, 122, 255, 0.25);
+}
+
+.ant-menu-item:hover:not(.ant-menu-item-selected) {
+  background-color: rgba(0, 0, 0, 0.04) !important;
+}
+
+[data-theme="dark"] .ant-menu-item:hover:not(.ant-menu-item-selected) {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* --- 8. Tabs (Segmented Control Style) --- */
+.ant-tabs-nav::before {
+  border-bottom: 1px solid var(--glass-border-solid) !important;
+}
+
+.ant-tabs-tab {
+  padding: 12px 16px !important;
+  margin: 0 8px 0 0 !important;
+  font-size: 14px !important;
+  border-radius: 8px;
+  transition: all 0.2s ease !important;
+}
+
+.ant-tabs-tab:hover {
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--color-primary);
+}
+
+.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--color-primary) !important;
+  font-weight: 600 !important;
+}
+
+/* Remove bottom bar for a more segmented look, or keep it subtle */
+.ant-tabs-ink-bar {
+  background: var(--color-primary) !important;
+  height: 3px !important;
+  border-radius: 3px 3px 0 0;
+  display: none !important; /* Hide ink bar for segmented look */
+}
+
+.ant-tabs-tab-active {
+  background: rgba(255, 255, 255, 0.5) !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+[data-theme="dark"] .ant-tabs-tab-active {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* --- 9. Utility Classes for Custom Components --- */
+.glass-surface {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border-solid);
+  border-radius: var(--border-radius-lg);
+}
+
+.ios-heading {
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+
+/* --- 10. Tags --- */
+.ant-tag {
+  border: none !important;
+  border-radius: 6px !important;
+  padding: 2px 8px !important;
+  font-weight: 500 !important;
+  backdrop-filter: blur(4px);
 }

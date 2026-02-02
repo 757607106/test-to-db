@@ -86,7 +86,10 @@ const AgentProfilePage: React.FC = () => {
   // 处理编辑
   const handleEdit = (record: AgentProfile) => {
     setEditingId(record.id);
-    form.setFieldsValue(record);
+    form.setFieldsValue({
+      ...record,
+      tools: record.tools || [],
+    });
     setModalVisible(true);
   };
 
@@ -235,7 +238,7 @@ const AgentProfilePage: React.FC = () => {
         <Form
           form={form}
           layout="vertical"
-          initialValues={{ is_active: true }}
+          initialValues={{ is_active: true, tools: [] }}
         >
           <Form.Item
             name="name"

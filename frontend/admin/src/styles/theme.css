@@ -1,4 +1,7 @@
-:root {
+/* ============================================
+   Light Mode (Default)
+   ============================================ */
+:root, [data-theme="light"] {
   /* Brand Colors - Matching Chat's Modern Aesthetic */
   --color-primary: #6366f1; /* Indigo-500 */
   --color-primary-hover: #4f46e5; /* Indigo-600 */
@@ -14,36 +17,88 @@
   --color-bg-page: #f8fafc; /* Slate-50 */
   --color-bg-card: #ffffff;
   --color-bg-hover: #f1f5f9; /* Slate-100 */
+  --bg-base: #f8fafc;
+  --bg-card: #ffffff;
   
   /* Borders */
   --color-border: #e2e8f0; /* Slate-200 */
   
-  /* Glass Effect Variables - Refined */
-  --glass-bg: rgba(255, 255, 255, 0.85);
+  /* Glass Effect Variables - Refined Apple Style */
+  --glass-bg: rgba(255, 255, 255, 0.75); /* More opaque for cleaner look */
+  --glass-bg-hover: rgba(255, 255, 255, 0.85);
   --glass-border: rgba(255, 255, 255, 0.6);
-  --glass-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+  --glass-border-solid: rgba(255, 255, 255, 0.4); /* Cleaner white border */
+  --glass-shadow: 
+    0 4px 24px rgba(0, 0, 0, 0.06), 
+    0 1px 2px rgba(0, 0, 0, 0.04); /* Soft, diffused shadow */
   --glass-highlight: inset 0 1px 0 0 rgba(255, 255, 255, 0.8);
-  --glass-blur: 16px;
+  --glass-blur: 24px; /* Stronger blur for "depth" */
   
-  /* Layout */
+  /* Apple Layout & Spacing */
   --sidebar-width: 260px;
-  --header-height: 64px;
-  --layout-gap: 24px;
-  --border-radius-base: 12px;
-  --border-radius-lg: 16px;
+  --header-height: 60px;
+  --layout-gap: 20px;
+  --border-radius-base: 10px;
+  --border-radius-lg: 16px; /* Continuous curve match */
+  --border-radius-xl: 24px;
   
   /* Transitions */
-  --transition-base: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-base: all 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
+  --transition-speed: 0.3s;
+  --transition-ease: cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+/* ============================================
+   Dark Mode
+   ============================================ */
+[data-theme="dark"] {
+  /* Brand Colors - Adjusted for dark mode */
+  --color-primary: #0A84FF; /* iOS Blue Dark */
+  --color-primary-hover: #409CFF;
+  --color-secondary: #5E5CE6; /* iOS Indigo Dark */
+  --color-accent: #30D158; /* iOS Green Dark */
+  
+  /* Neutral Colors */
+  --color-text-main: #FFFFFF;
+  --color-text-secondary: rgba(255, 255, 255, 0.65);
+  --color-text-tertiary: rgba(255, 255, 255, 0.45);
+  
+  /* Backgrounds */
+  --color-bg-page: #000000; /* Pure black for OLED feel */
+  --color-bg-card: #1C1C1E; /* iOS System Gray 6 */
+  --color-bg-hover: #2C2C2E; /* iOS System Gray 5 */
+  --bg-base: #000000;
+  --bg-card: #1C1C1E;
+  
+  /* Borders */
+  --color-border: #38383A;
+  
+  /* Glass Effect Variables - Dark Mode */
+  --glass-bg: rgba(30, 30, 30, 0.65);
+  --glass-bg-hover: rgba(45, 45, 45, 0.75);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-border-solid: rgba(255, 255, 255, 0.1);
+  --glass-shadow: 
+    0 4px 24px rgba(0, 0, 0, 0.4),
+    0 1px 2px rgba(0, 0, 0, 0.2);
+  --glass-highlight: inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
+  --glass-blur: 24px;
 }
 
 body {
   margin: 0;
   padding: 0;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   background-color: var(--color-bg-page);
   color: var(--color-text-main);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.08) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(45, 212, 191, 0.08) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(244, 63, 94, 0.05) 0px, transparent 50%),
+    radial-gradient(at 0% 100%, rgba(59, 130, 246, 0.08) 0px, transparent 50%);
+  background-attachment: fixed;
 }
 
 /* Enhanced Glass Panel */
@@ -51,10 +106,23 @@ body {
   background: var(--glass-bg);
   backdrop-filter: blur(var(--glass-blur));
   -webkit-backdrop-filter: blur(var(--glass-blur));
-  border: 1px solid var(--glass-border);
+  border: 1px solid var(--glass-border-solid);
   box-shadow: var(--glass-shadow);
   border-radius: var(--border-radius-lg);
   transition: var(--transition-base);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Add subtle noise texture for realism */
+.glass-panel::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  box-shadow: var(--glass-highlight);
+  border-radius: var(--border-radius-lg);
+  pointer-events: none;
+  z-index: 1;
 }
 
 .glass-panel:hover {
