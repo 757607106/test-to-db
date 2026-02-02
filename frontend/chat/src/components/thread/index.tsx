@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { useStreamContext, StateType } from "@/providers/Stream";
 import { Button } from "../ui/button";
 import { Checkpoint, Message } from "@langchain/langgraph-sdk";
-import { AssistantMessage, AssistantMessageLoading, StageMessageBubble } from "./messages/ai";
+import { AssistantMessage, AssistantMessageLoading } from "./messages/ai";
 import { HumanMessage } from "./messages/human";
 import {
   DO_NOT_RENDER_ID_PREFIX,
@@ -267,34 +267,14 @@ export function Thread() {
   const hasNoAIOrToolMessages = !messages.find(
     (m) => m.type === "ai" || m.type === "tool",
   );
-  const stageMessages = stream.queryContext?.stageMessages ?? [];
   const filteredMessages = messages.filter(
     (m) =>
       !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX) &&
-      m.type !== "tool",
+      m.type !== "tool" &&
+      // 过滤掉 LangGraph Supervisor 的技术性交接消息
+      !(typeof m.content === "string" && m.content.includes("Transferring back to")) &&
+      !(Array.isArray(m.content) && m.content.some(c => typeof c === 'object' && 'text' in c && c.text.includes("Transferring back to")))
   );
-  let lastAssistantIndex = -1;
-  for (let i = filteredMessages.length - 1; i >= 0; i -= 1) {
-    if (filteredMessages[i].type === "ai") {
-      lastAssistantIndex = i;
-      break;
-    }
-  }
-  // 修复：stage messages 应该在最后一个 AI 消息之后显示（index + 1）
-  const stageInsertIndex =
-    lastAssistantIndex >= 0 ? lastAssistantIndex + 1 : filteredMessages.length;
-  const shouldAppendStageMessages = stageInsertIndex === filteredMessages.length;
-  const stageMessageNodes =
-    stageMessages.length > 0
-      ? stageMessages.map((stage, index) => (
-          <StageMessageBubble
-            key={`stage-${stage.step ?? "stage"}-${stage.time_ms}-${index}`}
-            message={stage.message}
-            step={stage.step}
-            timeMs={stage.time_ms}
-          />
-        ))
-      : null;
 
   return (
     <div className="flex h-screen w-full overflow-hidden">
@@ -442,7 +422,6 @@ export function Thread() {
                 <>
                   {filteredMessages.map((message, index) => (
                     <Fragment key={message.id || `${message.type}-${index}`}>
-                      {index === stageInsertIndex && stageMessageNodes}
                       {message.type === "human" ? (
                         <HumanMessage
                           message={message}
@@ -458,7 +437,6 @@ export function Thread() {
                       )}
                     </Fragment>
                   ))}
-                  {shouldAppendStageMessages && stageMessageNodes}
                   {/* Special rendering case where there are no AI/tool messages, but there is an interrupt.
                     We need to render it outside of the messages list, since there are no messages to render */}
                   {hasNoAIOrToolMessages && !!stream.interrupt && (
