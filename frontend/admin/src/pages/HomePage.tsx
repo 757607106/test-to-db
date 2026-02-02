@@ -53,8 +53,9 @@ const HomePage: React.FC = () => {
     try {
       // 获取一次性 session code
       const { code } = await createSessionCode();
-      // 使用 code 而非 token 跳转，更安全
-      window.open(`http://localhost:3000?code=${code}`, '_blank');
+      // 使用环境变量或默认局域网地址
+      const chatUrl = process.env.REACT_APP_CHAT_URL || 'http://192.168.13.163:3000';
+      window.open(`${chatUrl}?code=${code}`, '_blank');
     } catch (error) {
       console.error('获取 session code 失败:', error);
       message.error('跳转失败，请重试');
