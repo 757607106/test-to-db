@@ -6,7 +6,16 @@
  */
 import axios from 'axios';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://192.168.13.163:8000/api';
+// 动态获取 API 地址
+const getApiUrl = (): string => {
+  if (process.env.REACT_APP_API_URL) return process.env.REACT_APP_API_URL;
+  const hostname = window.location.hostname;
+  return (hostname === 'localhost' || hostname === '127.0.0.1') 
+    ? 'http://localhost:8000/api' 
+    : 'http://192.168.13.163:8000/api';
+};
+
+const API_URL = getApiUrl();
 
 const api = axios.create({
   baseURL: API_URL,

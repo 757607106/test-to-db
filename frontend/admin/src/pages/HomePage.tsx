@@ -53,9 +53,20 @@ const HomePage: React.FC = () => {
     try {
       // 获取一次性 session code
       const { code } = await createSessionCode();
-      // 使用环境变量或默认局域网地址
-      const chatUrl = process.env.REACT_APP_CHAT_URL || 'http://192.168.13.163:3000';
-      window.open(`${chatUrl}?code=${code}`, '_blank');
+      
+      // 动态获取对话前端地址
+      const getChatUrl = (): string => {
+        if (process.env.REACT_APP_CHAT_URL) {
+          return process.env.REACT_APP_CHAT_URL;
+        }
+        const hostname = window.location.hostname;
+        if (hostname === 'localhost' || hostname === '127.0.0.1') {
+          return 'http://localhost:3000';
+        }
+        return 'http://192.168.13.163:3000';
+      };
+      
+      window.open(`${getChatUrl()}?code=${code}`, '_blank');
     } catch (error) {
       console.error('获取 session code 失败:', error);
       message.error('跳转失败，请重试');

@@ -8,8 +8,21 @@ import { Toaster } from "@/components/ui/sonner";
 import React, { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
-// 后端 API 地址
-const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || "http://192.168.13.163:8000/api";
+// 后端 API 地址 - 动态适配
+const getApiBaseUrl = (): string => {
+  if (process.env.NEXT_PUBLIC_BACKEND_API_URL) {
+    return process.env.NEXT_PUBLIC_BACKEND_API_URL;
+  }
+  
+  // 根据当前访问的 hostname 动态决定后端地址
+  const hostname = window.location.hostname;
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return 'http://localhost:8000/api';
+  }
+  return 'http://192.168.13.163:8000/api';
+};
+
+const API_BASE_URL = getApiBaseUrl();
 
 // 用 session code 交换 token
 async function exchangeCodeForToken(code: string): Promise<string | null> {
@@ -94,6 +107,15 @@ function TokenHandler({ children }: { children: React.ReactNode }) {
   }
 
   if (error) {
+    // 动态获取管理后台地址
+    const getAdminUrl = () => {
+      const hostname = window.location.hostname;
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        return 'http://localhost:3001';
+      }
+      return 'http://192.168.13.163:3001';
+    };
+
     return (
       <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
         <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-xl text-center">
@@ -105,7 +127,7 @@ function TokenHandler({ children }: { children: React.ReactNode }) {
           <h1 className="text-xl font-bold text-gray-900 mb-2">需要登录</h1>
           <p className="text-gray-600 mb-6">{error}</p>
           <a
-            href="http://192.168.13.163:3001"
+            href={getAdminUrl()}
             className="inline-block px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
           >
             前往管理后台登录
