@@ -72,7 +72,7 @@ const HomePage: React.FC = () => {
             </div>
 
             <AntTitle level={1} className="hero-title">
-              任我行智能BI分析系统
+              慧眼数据平台
             </AntTitle>
 
             <Paragraph className="hero-subtitle">
@@ -118,7 +118,7 @@ const HomePage: React.FC = () => {
       </div>
 
       <div className="footer-section">
-        © 2024 任我行智能BI平台 · Powered by LLM & Knowledge Graph
+        © 2024 慧眼数据平台 · Powered by LLM & Knowledge Graph
       </div>
     </div>
   );

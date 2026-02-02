@@ -386,7 +386,7 @@ export function Thread() {
                     height={32}
                   />
                   <span className="text-xl font-semibold tracking-tight">
-                    任我行智能BI
+                    慧眼数据平台
                   </span>
                 </motion.button>
               </div>
@@ -460,7 +460,7 @@ export function Thread() {
                     <div className="flex items-center gap-3">
                       <LangGraphLogoSVG className="h-8 flex-shrink-0" />
                       <h1 className="text-2xl font-semibold tracking-tight">
-                        任我行智能BI
+                        慧眼数据平台
                       </h1>
                     </div>
                   )}
