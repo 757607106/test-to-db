@@ -43,7 +43,7 @@ def setup_environment():
         "LANGSMITH_LANGGRAPH_API_VARIANT": "local_dev",
         "LANGGRAPH_DISABLE_FILE_PERSISTENCE": "false",
         "LANGGRAPH_ALLOW_BLOCKING": "true",
-        "LANGGRAPH_API_URL": "http://localhost:2024",
+        "LANGGRAPH_API_URL": "http://192.168.13.163:2024",
 
         "LANGGRAPH_DEFAULT_RECURSION_LIMIT": "200",
         
@@ -73,10 +73,10 @@ def main():
     
     # Print server information
     print("\n" + "="*60)
-    print("📍 Server URL: http://localhost:2024")
-    print("📚 API Documentation: http://localhost:2024/docs")
-    print("🎨 Studio UI: http://localhost:2024/ui")
-    print("💚 Health Check: http://localhost:2024/ok")
+    print("📍 Server URL: http://192.168.13.163:2024")
+    print("📚 API Documentation: http://192.168.13.163:2024/docs")
+    print("🎨 Studio UI: http://192.168.13.163:2024/ui")
+    print("💚 Health Check: http://192.168.13.163:2024/ok")
     print("="*60)
     
     try:
