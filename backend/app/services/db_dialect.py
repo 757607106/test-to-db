@@ -223,10 +223,18 @@ def get_syntax_guide_for_prompt(db_type: str) -> str:
     # 6. 日期函数
     lines.append(f"6. 日期格式化：使用 {dialect.date_format_func}() 函数")
     
-    # 7. 保留字提醒
+    # 7. PostgreSQL 特有的日期运算规则
+    if db_type.lower() in ["postgresql", "postgres"]:
+        lines.append("7. 【重要】日期运算：date - date 直接返回整数（天数），不需要 EXTRACT")
+        lines.append("   错误示例：EXTRACT(DAY FROM (date1 - date2))")
+        lines.append("   正确写法：date1 - date2（直接返回天数差值）")
+        lines.append("   计算平均天数：AVG(date1 - date2)")
+    
+    # 8. 保留字提醒
     if dialect.reserved_words:
         words = ", ".join(dialect.reserved_words[:5])
-        lines.append(f"7. 保留字：{words} 等作为列名时需要用引号包裹")
+        next_num = 8 if db_type.lower() in ["postgresql", "postgres"] else 7
+        lines.append(f"{next_num}. 保留字：{words} 等作为列名时需要用引号包裹")
     
     return "\n".join(lines)
 

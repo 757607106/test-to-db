@@ -81,6 +81,7 @@ def _adapt_for_sql_generator(state: DashboardInsightState) -> Dict[str, Any]:
         "messages": [HumanMessage(content=state.get("user_intent", "自动发现关键业务指标和趋势"))],
         "schema_info": {"tables": state.get("enriched_schema", {})},
         "connection_id": state.get("connection_id"),  # 必须由调用方传入
+        "db_type": state.get("db_type", "mysql"),  # 传递数据库类型，确保生成正确的SQL语法
         "skip_sample_retrieval": False,
         "error_recovery_context": None,
     }
@@ -94,6 +95,7 @@ def _adapt_for_error_recovery(state: DashboardInsightState) -> Dict[str, Any]:
         "messages": [HumanMessage(content=state.get("user_intent", ""))],
         "generated_sql": state.get("generated_sql"),
         "connection_id": state.get("connection_id"),  # 必须由调用方传入
+        "db_type": state.get("db_type", "mysql"),  # 传递数据库类型，确保恢复时生成正确的SQL语法
         "error_history": state.get("error_history", []),
         "retry_count": state.get("retry_count", 0),
         "max_retries": state.get("max_retries", 2),
