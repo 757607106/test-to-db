@@ -51,7 +51,7 @@ def apply_mining_suggestions(
     dashboard_id: int,
     request: schemas.ApplyMiningRequest,
 ) -> Any:
-    """应用推荐，创建Widget"""
+    """应用推荐,创建Widget"""
     try:
         from app import crud
         # 检查权限
@@ -61,8 +61,34 @@ def apply_mining_suggestions(
         if not has_permission:
             raise HTTPException(status_code=403, detail="No permission to edit this dashboard")
         
+        # 获取现有的widgets以计算起始位置
+        existing_widgets = crud.crud_dashboard_widget.get_by_dashboard(
+            db, dashboard_id=dashboard_id
+        )
+        
+        # 计算最大y值
+        max_y = 0
+        for widget in existing_widgets:
+            pos = widget.position_config or {}
+            widget_bottom = pos.get("y", 0) + pos.get("h", 4)
+            max_y = max(max_y, widget_bottom)
+        
+        # 创建widgets时使用双列网格布局
         created_widgets = []
-        for suggestion in request.suggestions:
+        for index, suggestion in enumerate(request.suggestions):
+            # 计算双列网格位置: 列宽6 (12/2=6), 每行高度4
+            col_index = index % 2  # 0 或 1
+            row_index = index // 2
+            
+            position_config = {
+                "x": col_index * 6,  # 0 或 6
+                "y": max_y + (row_index * 4),
+                "w": 6,
+                "h": 4,
+                "minW": 2,
+                "minH": 2
+            }
+            
             # 创建 Widget
             widget_create = schemas.WidgetCreate(
                 title=suggestion.title,
@@ -73,7 +99,7 @@ def apply_mining_suggestions(
                     "query_intent": suggestion.analysis_intent
                 },
                 chart_config={"chart_type": suggestion.chart_type},
-                position_config={"x": 0, "y": 0, "w": 6, "h": 4}, # Default position
+                position_config=position_config,
                 refresh_interval=0
             )
             

@@ -1,29 +1,16 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { BellOutlined, SearchOutlined, UserOutlined, SunOutlined, MoonOutlined } from '@ant-design/icons';
-import GlobalConnectionSelector from '../GlobalConnectionSelector';
 import { useTheme } from '../../contexts/ThemeContext';
 import { Tooltip } from 'antd';
 import '../../styles/TopBar.css';
 
 const TopBar: React.FC = () => {
-  const [selectedId, setSelectedId] = useState<number | null>(null);
   const { theme, toggleTheme } = useTheme();
 
   return (
     <header className="glass-panel topbar-container">
       <div className="topbar-left">
-        {/* Connection Selector as a Pill */}
-        <div className="connection-pill">
-          <div className="status-indicator" />
-          <div style={{ transform: 'scale(0.9)', marginLeft: '-8px' }}>
-             {/* We use the existing component but might need to style it deeply via CSS if we want full transparency.
-                 For now, we wrap it. */}
-             <GlobalConnectionSelector 
-                selectedConnectionId={selectedId} 
-                setSelectedConnectionId={setSelectedId} 
-             />
-          </div>
-        </div>
+        {/* 数据库选择器已移至知识图谱页面内 */}
       </div>
 
       <div className="topbar-right">

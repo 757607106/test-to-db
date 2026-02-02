@@ -2,14 +2,12 @@ import React from 'react';
 import { useLocation } from 'react-router-dom';
 import { SearchOutlined, BellOutlined, BulbOutlined, BulbFilled } from '@ant-design/icons';
 import { Tooltip } from 'antd';
-import GlobalConnectionSelector from '../GlobalConnectionSelector';
 import { useTheme } from '../../contexts/ThemeContext';
 import '../../styles/TopBar.css';
 
 const IOSTopBar: React.FC = () => {
   const location = useLocation();
   const { theme, toggleTheme } = useTheme();
-  const [selectedId, setSelectedId] = React.useState<number | null>(null);
 
   const getTitle = (pathname: string) => {
     // Handle sub-paths by matching the start of the pathname
@@ -42,13 +40,6 @@ const IOSTopBar: React.FC = () => {
       </div>
       
       <div className="topbar-right">
-        <div style={{ transform: 'scale(0.95)' }}>
-          <GlobalConnectionSelector 
-             selectedConnectionId={selectedId} 
-             setSelectedConnectionId={setSelectedId} 
-          />
-        </div>
-        
         <div className="search-bar">
           <SearchOutlined style={{ marginRight: 8, fontSize: '16px' }} />
           <input 

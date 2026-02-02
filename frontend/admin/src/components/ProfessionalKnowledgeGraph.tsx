@@ -1,5 +1,5 @@
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { Graph } from '@antv/g6';
 import { Card, Space, Select, Switch, Input, Button, Tooltip, Spin, Badge } from 'antd';
 import {
@@ -54,26 +54,22 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
 
   // 这些函数在 G6 v5 中不再需要，因为样式直接在配置中定义
 
-  // 初始化图谱
-  useEffect(() => {
-    if (!containerRef.current || loading || !data.nodes.length) return;
-
-    // 清理之前的图谱
-    if (graphRef.current && typeof graphRef.current.destroy === 'function') {
-      try {
-        graphRef.current.destroy();
-      } catch (error) {
-        console.warn('Error destroying previous graph:', error);
-      }
-      graphRef.current = null;
+  // 使用 useMemo 缓存处理后的数据，避免每次都重新计算
+  const processedData = useMemo(() => {
+    if (!data.nodes || data.nodes.length === 0) {
+      return { nodes: [], edges: [] };
     }
 
-    // 处理数据 - 转换为 G6 v5 格式，并确保边ID唯一和节点存在
-    const edgeIdSet = new Set<string>();
-    let edgeIdCounter = 0;
+    // 性能优化：如果节点数量过多，限制显示数量
+    const maxNodes = 500;
+    const maxEdges = 1000;
+    const shouldLimit = data.nodes.length > maxNodes;
+    
+    const nodesToProcess = shouldLimit ? data.nodes.slice(0, maxNodes) : data.nodes;
+    const edgesToProcess = shouldLimit ? data.edges.slice(0, maxEdges) : data.edges;
 
     // 首先处理节点
-    const processedNodes = data.nodes.map(node => ({
+    const processedNodes = nodesToProcess.map(node => ({
       id: node.id,
       data: {
         label: node.label || node.id,
@@ -85,33 +81,24 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
 
     // 创建节点ID集合用于验证边
     const nodeIdSet = new Set(processedNodes.map(node => node.id));
-    console.log('可用节点ID:', Array.from(nodeIdSet));
 
     // 处理边，验证源节点和目标节点是否存在
     const validEdges: any[] = [];
-    const invalidEdges: any[] = [];
+    const edgeIdSet = new Set<string>();
+    let edgeIdCounter = 0;
 
-    data.edges.forEach(edge => {
+    edgesToProcess.forEach(edge => {
       // 检查源节点和目标节点是否存在
-      if (!nodeIdSet.has(edge.source)) {
-        console.warn(`边 ${edge.id} 的源节点 ${edge.source} 不存在`);
-        invalidEdges.push(edge);
-        return;
-      }
-
-      if (!nodeIdSet.has(edge.target)) {
-        console.warn(`边 ${edge.id} 的目标节点 ${edge.target} 不存在`);
-        invalidEdges.push(edge);
+      if (!nodeIdSet.has(edge.source) || !nodeIdSet.has(edge.target)) {
         return;
       }
 
       let edgeId = edge.id || `${edge.source}-${edge.target}`;
 
-      // 确保边ID唯一，如果重复则添加后缀
+      // 确保边ID唯一
       if (edgeIdSet.has(edgeId)) {
         edgeIdCounter++;
         edgeId = `${edgeId}-${edgeIdCounter}`;
-        console.warn(`发现重复边ID，已重命名为: ${edgeId}`);
       }
       edgeIdSet.add(edgeId);
 
@@ -126,24 +113,29 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
       });
     });
 
-    if (invalidEdges.length > 0) {
-      console.warn(`跳过了 ${invalidEdges.length} 个无效边:`, invalidEdges);
-    }
-
-    const processedData = {
+    return {
       nodes: processedNodes,
       edges: validEdges
     };
+  }, [data]);
+
+  // 初始化图谱
+  useEffect(() => {
+    if (!containerRef.current || loading || processedData.nodes.length === 0) return;
+
+    // 清理之前的图谱
+    if (graphRef.current && typeof graphRef.current.destroy === 'function') {
+      try {
+        graphRef.current.destroy();
+      } catch (error) {
+        console.warn('Error destroying previous graph:', error);
+      }
+      graphRef.current = null;
+    }
 
     // 创建图谱实例 - 使用正确的 G6 v5 API，并添加错误处理
     let graph;
     try {
-      console.log('创建图谱实例，数据:', {
-        nodes: processedData.nodes.length,
-        edges: processedData.edges.length,
-        edgeIds: processedData.edges.map(e => e.id)
-      });
-
       graph = new Graph({
         container: containerRef.current,
         width,
@@ -156,38 +148,64 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
             color: ['#1890ff', '#eb2f96', '#13c2c2', '#52c41a', '#faad14', '#f5222d']
           },
           style: {
-            size: nodeSize === 'small' ? 20 : nodeSize === 'large' ? 40 : 30,
+            size: nodeSize === 'small' ? 25 : nodeSize === 'large' ? 45 : 35,
             labelText: (d: any) => showLabels ? d.data.label : '',
             labelPosition: 'bottom',
-            labelFontSize: 12,
+            labelFontSize: nodeSize === 'small' ? 10 : nodeSize === 'large' ? 14 : 12,
             labelFill: '#333',
+            labelBackground: true,
+            labelBackgroundFill: 'rgba(255, 255, 255, 0.8)',
+            labelBackgroundRadius: 4,
+            labelPadding: [2, 4],
             stroke: '#ffffff',
-            lineWidth: 2
+            lineWidth: 2,
+            fillOpacity: 0.85
           }
         },
         edge: {
           style: {
-            stroke: '#999',
-            lineWidth: 2,
+            stroke: '#d9d9d9',
+            lineWidth: 1.5,
             endArrow: true,
             labelText: (d: any) => showLabels ? d.data.label || '' : '',
             labelFill: '#666',
-            labelFontSize: 10
+            labelFontSize: 10,
+            labelBackground: true,
+            labelBackgroundFill: 'rgba(255, 255, 255, 0.9)',
+            labelPadding: [2, 4],
+            opacity: 0.6
           }
         },
         layout: {
           type: layout === 'force' ? 'force' : layout === 'circular' ? 'circular' : layout === 'grid' ? 'grid' : 'dagre',
           ...(layout === 'force' && {
             preventOverlap: true,
-            nodeSize: 50,
-            linkDistance: 150
+            nodeSize: nodeSize === 'small' ? 40 : nodeSize === 'large' ? 80 : 60,
+            linkDistance: 200,
+            nodeSpacing: 50,
+            nodeStrength: -50,
+            edgeStrength: 0.6,
+            collideStrength: 0.8,
+            alpha: 0.3,
+            alphaDecay: 0.028,
+            alphaMin: 0.01,
+            // 性能优化：限制迭代次数，节点越多迭代次数越少
+            iterations: Math.max(100, 300 - processedData.nodes.length)
           }),
           ...(layout === 'circular' && {
-            radius: 200
+            radius: Math.max(300, Math.min(processedData.nodes.length * 5, 800)),
+            divisions: Math.min(processedData.nodes.length, 10)
           }),
           ...(layout === 'grid' && {
-            rows: Math.ceil(Math.sqrt(data.nodes.length)),
-            cols: Math.ceil(Math.sqrt(data.nodes.length))
+            rows: Math.ceil(Math.sqrt(processedData.nodes.length)),
+            cols: Math.ceil(Math.sqrt(processedData.nodes.length)),
+            sortBy: 'cluster'
+          }),
+          ...(layout === 'dagre' && {
+            rankdir: 'TB',
+            nodesep: 40,
+            ranksep: 80,
+            controlPoints: true
           })
         },
         behaviors: [
@@ -197,70 +215,48 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
             type: 'drag-element',
             key: 'drag-element',
             enable: (event: any) => ['node', 'combo'].includes(event.targetType),
-            animation: true,
+            // 性能优化：禁用动画和阴影
+            animation: false,
             dropEffect: 'move',
             shadow: false
           }
         ]
       });
-
-      console.log('图谱实例创建成功');
     } catch (error) {
       console.error('创建图谱实例失败:', error);
       // 如果创建失败，返回空的清理函数
       return () => {};
     }
 
-    // 事件监听
+    // 事件监听 - 使用正确的 G6 v5 事件对象
     graph.on('node:click', (evt: any) => {
-      onNodeClick?.(evt.target.id);
+      // G6 v5 中，evt.itemId 或 evt.target.id 是节点ID
+      const nodeId = evt.itemId || evt.target?.id;
+      if (nodeId) {
+        const nodeData = processedData.nodes.find(n => n.id === nodeId);
+        onNodeClick?.(nodeData || { id: nodeId });
+      }
     });
 
     graph.on('node:dblclick', (evt: any) => {
-      onNodeDoubleClick?.(evt.target.id);
+      const nodeId = evt.itemId || evt.target?.id;
+      if (nodeId) {
+        const nodeData = processedData.nodes.find(n => n.id === nodeId);
+        onNodeDoubleClick?.(nodeData || { id: nodeId });
+      }
     });
 
     graph.on('edge:click', (evt: any) => {
-      onEdgeClick?.(evt.target.id);
-    });
-
-    // 拖拽事件监听 - 添加拖拽反馈效果
-    graph.on('node:dragstart', (evt: any) => {
-      const { target } = evt;
-      console.log('开始拖拽节点:', target.id, target.data);
-
-      // 如果是表节点，可以添加特殊的视觉效果
-      if (target && target.data && target.data.nodeType === 'table') {
-        console.log('开始拖拽表节点:', target.id);
-        // 未来可以在这里添加表节点拖拽时的特殊效果
-      }
-    });
-
-    graph.on('node:drag', (evt: any) => {
-      const { target } = evt;
-      // 拖拽过程中的实时反馈
-      if (target && target.data && target.data.nodeType === 'table') {
-        // 未来可以在这里实现表节点带动子节点的效果
-        console.log('正在拖拽表节点:', target.id);
-      }
-    });
-
-    graph.on('node:dragend', (evt: any) => {
-      const { target } = evt;
-      console.log('结束拖拽节点:', target.id);
-
-      // 拖拽结束后的处理
-      if (target && target.data && target.data.nodeType === 'table') {
-        console.log('表节点拖拽完成:', target.id);
-        // 未来可以在这里添加拖拽完成后的处理逻辑
+      const edgeId = evt.itemId || evt.target?.id;
+      if (edgeId) {
+        const edgeData = processedData.edges.find(e => e.id === edgeId);
+        onEdgeClick?.(edgeData || { id: edgeId });
       }
     });
 
     // 渲染图谱
     try {
-      console.log('开始渲染图谱...');
       graph.render();
-      console.log('图谱渲染成功');
       graphRef.current = graph;
     } catch (error) {
       console.error('图谱渲染失败:', error);
@@ -285,15 +281,14 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
         graphRef.current = null;
       }
     };
-  }, [data, layout, nodeSize, showLabels, width, height, loading]);
+  }, [processedData, layout, nodeSize, showLabels, width, height]); // 数据、布局、样式、尺寸变化时重建
 
-  // 搜索功能 - 简化版本，G6 v5 的高亮功能需要不同的实现方式
-  const handleSearch = (value: string) => {
+  // 搜索功能 - 使用 useCallback 优化
+  const handleSearch = useCallback((value: string) => {
     setSearchValue(value);
     if (!graphRef.current) return;
 
     if (!value.trim()) {
-      // 重新渲染以清除高亮
       graphRef.current.render();
       return;
     }
@@ -304,10 +299,8 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
       node.id.toLowerCase().includes(value.toLowerCase())
     );
 
-    // 在 G6 v5 中，我们可以通过重新设置数据来实现高亮效果
-    // 这里简化处理，实际项目中可以使用插件或自定义渲染
-    console.log('匹配的节点:', matchedNodes.map(n => n.label || n.id));
-  };
+    // 可以在这里实现高亮效果
+  }, [data.nodes]);
 
   // 工具栏操作 - 使用 G6 v5 API
   const handleZoomIn = () => {
@@ -389,6 +382,19 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
           className="pkg-controls-card"
         >
           <Space wrap className="pkg-controls-wrapper">
+            {/* 数据量过大警告 */}
+            {data.nodes.length > 500 && (
+              <div style={{ 
+                padding: '4px 12px', 
+                background: '#fff7e6', 
+                border: '1px solid #ffd591',
+                borderRadius: '4px',
+                fontSize: '12px',
+                color: '#d46b08'
+              }}>
+                ⚠️ 节点数量较多（{data.nodes.length}），已限制显示前 500 个节点。建议使用网格或层次布局以获得更好性能。
+              </div>
+            )}
             <Space wrap>
               <Input
                 placeholder="搜索节点..."
@@ -511,7 +517,12 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
               <span className="pkg-legend-text">关系 (Relation)</span>
             </div>
             <div className="pkg-legend-footer">
-              节点: {data.nodes.length} | 边: {data.edges.length}
+              显示: {processedData.nodes.length} 节点 / {processedData.edges.length} 边
+              {data.nodes.length > processedData.nodes.length && (
+                <span style={{ color: '#d46b08', fontSize: '11px', marginLeft: '8px' }}>
+                  (总计 {data.nodes.length} 节点)
+                </span>
+              )}
             </div>
           </Space>
         </Card>
@@ -520,7 +531,12 @@ const ProfessionalKnowledgeGraph: React.FC<ProfessionalKnowledgeGraphProps> = ({
       {/* 简化的底部信息栏（当图例隐藏时显示） */}
       {!showLegend && (
         <div className="pkg-simple-footer">
-          节点: {data.nodes.length} | 边: {data.edges.length}
+          显示: {processedData.nodes.length} 节点 / {processedData.edges.length} 边
+          {data.nodes.length > processedData.nodes.length && (
+            <span style={{ color: '#d46b08', marginLeft: '8px' }}>
+              (总计 {data.nodes.length} 节点)
+            </span>
+          )}
         </div>
       )}
     </div>

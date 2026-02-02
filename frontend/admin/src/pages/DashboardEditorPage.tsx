@@ -162,7 +162,7 @@ const GRID_CONFIG = {
   rowHeight: 100, // 增加行高以容纳更大的图表
   margin: [16, 16] as [number, number], // 增加间距改善视觉分离
   containerPadding: [4, 4] as [number, number],
-  compactType: 'vertical' as const,
+  compactType: null, // 禁用自动压缩，保持后端指定的布局位置
   preventCollision: false,
 };
 

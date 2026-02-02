@@ -167,6 +167,68 @@ class DashboardInsightService:
         
         return True, "", []
     
+    def _validate_sql_syntax(
+        self,
+        sql: str,
+        connection_id: int,
+        db_type: str = "MYSQL"
+    ) -> tuple[bool, str]:
+        """
+        使用 EXPLAIN 验证 SQL 语法正确性（不实际执行）
+        
+        Returns:
+            is_valid: 是否有效
+            error_msg: 错误信息
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            from app.services.db_service import get_db_connection_by_id, get_db_engine
+            import sqlalchemy
+            
+            connection = get_db_connection_by_id(connection_id)
+            if not connection:
+                return False, "数据库连接不存在"
+            
+            engine = get_db_engine(connection, timeout_seconds=10)
+            
+            # 根据数据库类型构造 EXPLAIN 语句
+            db_type_upper = db_type.upper()
+            if db_type_upper in ("MYSQL", "MARIADB"):
+                explain_sql = f"EXPLAIN {sql}"
+            elif db_type_upper == "POSTGRESQL":
+                explain_sql = f"EXPLAIN {sql}"
+            elif db_type_upper == "SQLITE":
+                explain_sql = f"EXPLAIN QUERY PLAN {sql}"
+            elif db_type_upper in ("SQLSERVER", "MSSQL"):
+                explain_sql = f"SET SHOWPLAN_TEXT ON; {sql}; SET SHOWPLAN_TEXT OFF;"
+            elif db_type_upper == "ORACLE":
+                explain_sql = f"EXPLAIN PLAN FOR {sql}"
+            else:
+                # 默认使用 EXPLAIN
+                explain_sql = f"EXPLAIN {sql}"
+            
+            with engine.connect() as conn:
+                # 执行 EXPLAIN，如果SQL有语法错误会抛出异常
+                conn.execute(sqlalchemy.text(explain_sql))
+            
+            return True, ""
+            
+        except Exception as e:
+            error_msg = str(e)
+            # 提取关键错误信息
+            if "aggregate function calls cannot be nested" in error_msg:
+                return False, "SQL语法错误: 聚合函数不能嵌套使用"
+            elif "does not exist" in error_msg:
+                return False, f"SQL语法错误: 函数或列不存在 - {error_msg[:200]}"
+            elif "syntax error" in error_msg.lower():
+                return False, f"SQL语法错误: {error_msg[:200]}"
+            elif "GroupingError" in error_msg or "grouping" in error_msg.lower():
+                return False, f"SQL分组错误: {error_msg[:200]}"
+            else:
+                return False, f"SQL验证失败: {error_msg[:200]}"
+    
     async def generate_mining_suggestions(
         self, 
         db: Session, 
@@ -286,6 +348,7 @@ class DashboardInsightService:
             # 5. 验证每个 SQL 并过滤无效的
             validated_suggestions = []
             invalid_count = 0
+            syntax_error_count = 0
             
             for idx, s in enumerate(raw_suggestions):
                 sql = s.get("sql", "")
@@ -296,7 +359,7 @@ class DashboardInsightService:
                     invalid_count += 1
                     continue
                 
-                # 验证 SQL
+                # 验证 SQL 白名单
                 is_valid, error_msg, invalid_refs = self._validate_sql_against_whitelist(
                     sql, valid_tables, valid_columns, db_type
                 )
@@ -307,6 +370,17 @@ class DashboardInsightService:
                         logger.warning(f"[Mining]   - {ref}")
                     invalid_count += 1
                     # 直接跳过验证失败的建议，不保留
+                    continue
+                
+                # ✨ 新增: SQL 语法验证（使用 EXPLAIN）
+                syntax_valid, syntax_error = self._validate_sql_syntax(
+                    sql, request.connection_id, db_type
+                )
+                
+                if not syntax_valid:
+                    logger.warning(f"[Mining] 建议 '{title}' SQL 语法验证失败: {syntax_error}")
+                    syntax_error_count += 1
+                    # 跳过语法错误的建议
                     continue
                 
                 validated_suggestions.append(
@@ -333,7 +407,8 @@ class DashboardInsightService:
             total_count = len(raw_suggestions)
             success_rate = (valid_count / total_count * 100) if total_count > 0 else 0
             
-            logger.info(f"[Mining] 最终返回 {valid_count}/{total_count} 个有效建议 ({success_rate:.1f}%), {invalid_count} 个因SQL验证失败被过滤")
+            logger.info(f"[Mining] 最终返回 {valid_count}/{total_count} 个有效建议 ({success_rate:.1f}%), "
+                        f"{invalid_count} 个白名单验证失败, {syntax_error_count} 个SQL语法错误被过滤")
             
             # 如果有效建议太少，记录警告
             if success_rate < 50 and total_count > 0:

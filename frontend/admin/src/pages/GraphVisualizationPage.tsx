@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Select, Button, message, Typography, Space, Card } from 'antd';
 import { DatabaseOutlined, ReloadOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import ProfessionalKnowledgeGraph from '../components/ProfessionalKnowledgeGraph';
+import GlobalConnectionSelector from '../components/GlobalConnectionSelector';
 import { useGlobalConnection } from '../contexts/GlobalConnectionContext';
 
 import * as api from '../services/api';
@@ -23,6 +24,8 @@ const KnowledgeGraphVisualization = () => {
   // const [connections, setConnections] = useState<any[]>([]); 
   const [loading, setLoading] = useState<boolean>(false);
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dimensions, setDimensions] = useState({ width: 1200, height: 700 });
 
   // 监听全局连接变化
   useEffect(() => {
@@ -32,6 +35,40 @@ const KnowledgeGraphVisualization = () => {
       setGraphData({ nodes: [], edges: [] });
     }
   }, [selectedConnectionId]);
+
+  // 监听容器尺寸变化，动态调整图谱大小
+  useEffect(() => {
+    const updateDimensions = () => {
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        // 确保有有效的尺寸才更新
+        if (rect.width > 0 && rect.height > 0) {
+          setDimensions({
+            width: rect.width,
+            height: rect.height
+          });
+        }
+      }
+    };
+
+    // 初始化尺寸
+    updateDimensions();
+
+    // 监听窗口大小变化
+    window.addEventListener('resize', updateDimensions);
+    
+    // 延迟更新多次，确保布局完全稳定
+    const timer1 = setTimeout(updateDimensions, 100);
+    const timer2 = setTimeout(updateDimensions, 300);
+    const timer3 = setTimeout(updateDimensions, 500);
+
+    return () => {
+      window.removeEventListener('resize', updateDimensions);
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+      clearTimeout(timer3);
+    };
+  }, [graphData, selectedConnectionId]); // 当图数据加载或数据库切换时重新计算尺寸
 
   /* Removed fetchConnections and handleConnectionChange as they are handled globally */
 
@@ -131,47 +168,42 @@ const KnowledgeGraphVisualization = () => {
   // 节点点击处理
   const handleNodeClick = (node: any) => {
     console.log('节点点击:', node);
-    message.info(`点击了节点: ${node.label || node.id}`);
+    const label = node.data?.label || node.label || node.id;
+    const nodeType = node.data?.nodeType || node.type || '未知类型';
+    message.info(`点击了节点: ${label} (类型: ${nodeType})`);
   };
 
   // 边点击处理
   const handleEdgeClick = (edge: any) => {
     console.log('边点击:', edge);
-    message.info(`点击了边: ${edge.label || edge.id}`);
+    const label = edge.data?.label || edge.label || edge.id;
+    message.info(`点击了边: ${label}`);
   };
 
   // 节点双击处理
   const handleNodeDoubleClick = (node: any) => {
     console.log('节点双击:', node);
-    message.info(`双击了节点: ${node.label || node.id}`);
+    const label = node.data?.label || node.label || node.id;
+    message.success(`双击了节点: ${label}`);
   };
 
   return (
-    <div style={{ padding: '24px', height: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ 
+      height: '100%',
+      display: 'flex', 
+      flexDirection: 'column',
+      overflow: 'hidden'
+    }}>
       {/*<Title level={3} style={{ marginBottom: '24px', color: '#1890ff' }}>*/}
       {/*  🧠 知识图谱可视化*/}
       {/*</Title>*/}
 
       {/* 控制面板 */}
-      <Card style={{ marginBottom: '16px' }}>
+      <Card style={{ marginBottom: '16px', flexShrink: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
           <Space size="large">
-            {/* Connection Selector Removed */}
-            {/*
-            <Space>
-              <DatabaseOutlined style={{ color: '#1890ff' }} />
-              <Select
-                placeholder="选择数据库连接"
-                style={{ width: 240 }}
-                onChange={handleConnectionChange}
-                loading={loading}
-              >
-                {connections.map(conn => (
-                  <Option key={conn.id} value={conn.id}>{conn.name}</Option>
-                ))}
-              </Select>
-            </Space>
-            */}
+            {/* 数据库选择器 */}
+            <GlobalConnectionSelector />
 
             <Button
               icon={<ReloadOutlined />}
@@ -198,17 +230,21 @@ const KnowledgeGraphVisualization = () => {
       </Card>
       
       {/* 知识图谱可视化区域 */}
-      <div style={{
-        flex: 1,
-        minHeight: '600px',
-        height: 'calc(100vh - 200px)', // 确保铺满剩余空间
-        width: '100%'
-      }}>
+      <div 
+        ref={containerRef}
+        style={{
+          flex: 1,
+          minHeight: 0, // 重要：允许 flex 子项缩小
+          width: '100%',
+          position: 'relative',
+          overflow: 'hidden'
+        }}
+      >
         <ProfessionalKnowledgeGraph
           data={graphData}
           loading={loading}
-          width={window.innerWidth - 48} // 动态宽度
-          height={window.innerHeight - 200} // 动态高度
+          width={dimensions.width}
+          height={dimensions.height}
           onNodeClick={handleNodeClick}
           onEdgeClick={handleEdgeClick}
           onNodeDoubleClick={handleNodeDoubleClick}
