@@ -1,11 +1,15 @@
 /**
  * ClarificationInterruptView 组件
  * 简洁的澄清确认卡片，显示问题和选项
+ * 
+ * 用户可以：
+ * 1. 点击选项快速回答
+ * 2. 在主输入框中输入自定义回答（无需使用此组件的输入框）
  */
-import { useState } from "react";
 import { useStreamContext } from "@/providers/Stream";
 import { cn } from "@/lib/utils";
-import { LoaderCircle, X } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
+import { useState } from "react";
 
 export interface ClarificationQuestion {
   id: string;
@@ -38,71 +42,33 @@ export function ClarificationInterruptView({
 }: ClarificationInterruptViewProps) {
   const stream = useStreamContext();
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
-  const [customInput, setCustomInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showCustomInput, setShowCustomInput] = useState(false);
 
   const question = interrupt.questions?.[0];
   const options = question?.options || [];
 
   const handleSelect = (option: string) => {
     setSelectedOption(option);
-    setShowCustomInput(false);
-    // 直接提交选中的选项
     submitAnswer(option);
-  };
-
-  const handleCustomClick = () => {
-    setShowCustomInput(true);
-    setSelectedOption(null);
-  };
-
-  const handleCustomSubmit = () => {
-    if (customInput.trim()) {
-      submitAnswer(customInput.trim());
-    }
   };
 
   const submitAnswer = async (answer: string) => {
     setIsSubmitting(true);
     
-    const formattedResponses = {
-      session_id: interrupt.session_id,
-      answers: [{
-        question_id: question?.id || "q_default",
-        answer: answer,
-      }],
-    };
-
     try {
+      // 直接使用 Command(resume=answer) 恢复执行
       stream.submit(
         {},
         {
-          command: { resume: formattedResponses },
+          command: { resume: answer },
           streamMode: ["values", "custom"],
           streamSubgraphs: true,
         } as any
       );
     } finally {
-      setIsSubmitting(false);
+      // 不要立即设置为 false，等待流结束
+      setTimeout(() => setIsSubmitting(false), 1000);
     }
-  };
-
-  const handleSkip = () => {
-    stream.submit(
-      {},
-      {
-        command: { 
-          resume: { 
-            skipped: true,
-            session_id: interrupt.session_id,
-            original_query: interrupt.original_query 
-          } 
-        },
-        streamMode: ["values", "custom"],
-        streamSubgraphs: true,
-      } as any
-    );
   };
 
   if (!question) return null;
@@ -110,21 +76,14 @@ export function ClarificationInterruptView({
   return (
     <div className="w-full max-w-xl my-3">
       <div className="rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-sm overflow-hidden">
-        {/* 问题 + 关闭按钮 */}
-        <div className="px-4 py-3 flex items-start justify-between gap-3">
+        {/* 问题文本 */}
+        <div className="px-4 py-3">
           <p className="text-sm text-slate-700 dark:text-slate-200">
             {question.question}
           </p>
-          <button
-            onClick={handleSkip}
-            className="flex-shrink-0 p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:text-slate-300 dark:hover:bg-zinc-800 transition-colors"
-            title="跳过"
-          >
-            <X className="w-4 h-4" />
-          </button>
         </div>
 
-        {/* 选项按钮 */}
+        {/* 选项按钮 - 简洁样式 */}
         <div className="px-4 pb-4 flex flex-wrap gap-2">
           {options.map((option) => (
             <button
@@ -145,36 +104,13 @@ export function ClarificationInterruptView({
               {option}
             </button>
           ))}
-          
-          {/* 其他选项 */}
-          {showCustomInput ? (
-            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
-              <input
-                type="text"
-                value={customInput}
-                onChange={(e) => setCustomInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleCustomSubmit()}
-                placeholder="输入自定义值..."
-                autoFocus
-                className="flex-1 px-3 py-1.5 rounded-lg text-sm border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-700 dark:text-slate-200 placeholder-slate-400 focus:outline-none focus:border-indigo-500"
-              />
-              <button
-                onClick={handleCustomSubmit}
-                disabled={!customInput.trim() || isSubmitting}
-                className="px-3 py-1.5 rounded-lg text-sm bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                确定
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={handleCustomClick}
-              disabled={isSubmitting}
-              className="px-3 py-1.5 rounded-lg text-sm border border-dashed border-slate-300 text-slate-500 hover:border-indigo-300 hover:text-indigo-600 dark:border-zinc-600 dark:text-slate-400 dark:hover:border-indigo-500 dark:hover:text-indigo-400 transition-colors"
-            >
-              其他...
-            </button>
-          )}
+        </div>
+        
+        {/* 提示：可以在输入框输入 */}
+        <div className="px-4 pb-3 border-t border-slate-100 dark:border-zinc-800 pt-2">
+          <p className="text-xs text-slate-400 dark:text-slate-500">
+            也可以在下方输入框直接输入您的回答
+          </p>
         </div>
       </div>
     </div>

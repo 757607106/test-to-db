@@ -19,7 +19,11 @@ logger = logging.getLogger(__name__)
 # ===== 防护配置 =====
 MAX_SUPERVISOR_TURNS = 30  # 最大调用轮次（提高到 30，支持复杂查询 + 图表生成）
 MAX_SAME_AGENT_CONSECUTIVE = 3  # 同一 Agent 最大连续调用次数
+MAX_SQL_GENERATION_RETRIES = 3  # SQL 生成最大重试次数（循环检测）
 REQUIRED_STAGES_FOR_SQL = ["schema_analysis"]  # 生成 SQL 前必须完成的阶段
+
+# SQL 生成-验证-恢复 循环模式
+SQL_LOOP_PATTERN = ["sql_generator_agent", "sql_validator_agent", "error_recovery_agent"]
 
 
 def check_turn_limit(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -112,6 +116,53 @@ def check_agent_loop(state: Dict[str, Any], current_agent: str) -> Dict[str, Any
         return {
             "should_stop": True,
             "reason": f"检测到 {current_agent} 被连续调用 {consecutive_count} 次，可能存在循环"
+        }
+    
+    # 检测 SQL 生成-验证-恢复 循环模式
+    sql_loop_result = check_sql_generation_loop(state, current_agent)
+    if sql_loop_result.get("should_stop"):
+        return sql_loop_result
+    
+    return {}
+
+
+def check_sql_generation_loop(state: Dict[str, Any], current_agent: str) -> Dict[str, Any]:
+    """
+    检测 SQL 生成-验证-恢复 循环模式
+    
+    当系统反复在 sql_generator → sql_validator → error_recovery 之间循环时，
+    说明当前查询无法通过自动修复解决，应该终止并提示用户。
+    
+    Args:
+        state: 当前状态
+        current_agent: 即将调用的 Agent 名称
+    
+    Returns:
+        {"should_stop": bool, "reason": str} 如果检测到循环
+        {} 如果可以继续
+    """
+    # 只在进入 sql_generator_agent 时检查
+    if current_agent != "sql_generator_agent":
+        return {}
+    
+    agent_call_history = state.get("agent_call_history", [])
+    
+    if len(agent_call_history) < 3:
+        return {}
+    
+    # 统计 sql_generator_agent 被调用的次数
+    sql_gen_count = sum(1 for agent in agent_call_history if agent == "sql_generator_agent")
+    
+    # 如果 sql_generator 已经被调用超过最大重试次数
+    if sql_gen_count >= MAX_SQL_GENERATION_RETRIES:
+        # 获取最近的错误信息
+        error_history = state.get("error_history", [])
+        last_error = error_history[-1].get("error", "未知错误") if error_history else "未知错误"
+        
+        logger.warning(f"SQL 生成循环检测: sql_generator_agent 已调用 {sql_gen_count} 次，错误: {last_error}")
+        return {
+            "should_stop": True,
+            "reason": f"SQL 生成已重试 {sql_gen_count} 次仍无法成功。最近错误: {last_error}。请尝试简化查询或提供更多信息。"
         }
     
     return {}

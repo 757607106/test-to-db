@@ -307,40 +307,54 @@ def _send_data_query_event(state: SQLMessageState, result: Dict[str, Any], write
     from app.schemas.stream_events import create_data_query_event
     
     try:
-        # 获取执行结果
-        exec_result = state.get("execution_result")
-        if not exec_result:
+        # 获取执行结果（优先使用 query_results，兼容 execution_result）
+        data = state.get("query_results")
+        if not data:
+            exec_result = state.get("execution_result")
+            if exec_result:
+                if hasattr(exec_result, 'data'):
+                    data = exec_result.data
+                else:
+                    data = exec_result.get('data', {})
+        
+        if not data:
             logger.warning("[chart_generator_node] 无执行结果，跳过 data_query 事件")
             return
         
-        # 提取数据（兼容 Pydantic 对象和 dict）
-        if hasattr(exec_result, 'data'):
-            data = exec_result.data
-            success = getattr(exec_result, 'success', True)
-        else:
-            data = exec_result.get('data', {})
-            success = exec_result.get('success', True)
-        
-        if not success or not data:
-            logger.warning("[chart_generator_node] 执行失败或无数据，跳过 data_query 事件")
-            return
-        
         # 提取 columns 和 rows
-        columns = data.get("columns", []) if isinstance(data, dict) else []
-        raw_rows = data.get("data", []) if isinstance(data, dict) else []
-        row_count = data.get("row_count", len(raw_rows)) if isinstance(data, dict) else len(raw_rows)
-        
-        if not columns:
-            logger.warning("[chart_generator_node] 无列信息，跳过 data_query 事件")
+        # query_results 可能是列表格式 [{"col1": v1, ...}, ...] 或 {"columns": [...], "data": [...]}
+        if isinstance(data, list) and len(data) > 0:
+            # 列表格式，直接使用
+            if isinstance(data[0], dict):
+                columns = list(data[0].keys())
+                rows = data
+                row_count = len(data)
+            else:
+                logger.warning("[chart_generator_node] 数据格式不支持，跳过 data_query 事件")
+                return
+        elif isinstance(data, dict):
+            columns = data.get("columns", [])
+            raw_rows = data.get("data", [])
+            row_count = data.get("row_count", len(raw_rows))
+            
+            if not columns:
+                logger.warning("[chart_generator_node] 无列信息，跳过 data_query 事件")
+                return
+            
+            # 转换数据格式：数组数组 -> 对象数组
+            rows = []
+            for raw_row in raw_rows:
+                if isinstance(raw_row, list) and len(raw_row) == len(columns):
+                    rows.append(dict(zip(columns, raw_row)))
+                elif isinstance(raw_row, dict):
+                    rows.append(raw_row)
+        else:
+            logger.warning("[chart_generator_node] 数据格式不支持，跳过 data_query 事件")
             return
         
-        # 转换数据格式：数组数组 -> 对象数组
-        rows = []
-        for raw_row in raw_rows:
-            if isinstance(raw_row, list) and len(raw_row) == len(columns):
-                rows.append(dict(zip(columns, raw_row)))
-            elif isinstance(raw_row, dict):
-                rows.append(raw_row)
+        if not columns or not rows:
+            logger.warning("[chart_generator_node] 无有效数据，跳过 data_query 事件")
+            return
         
         # 获取图表配置（优先使用结果中的，其次使用状态中的，最后自动生成）
         chart_config = result.get("chart_config") or state.get("chart_config")

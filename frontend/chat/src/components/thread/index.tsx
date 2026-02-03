@@ -146,6 +146,26 @@ export function Thread() {
     if ((input.trim().length === 0 && contentBlocks.length === 0) || isLoading)
       return;
     
+    // 检查是否处于 interrupt 状态（澄清中）
+    // 如果是，则使用 resume 模式恢复执行
+    if (stream.interrupt) {
+      const userResponse = input.trim();
+      
+      // 使用 Command(resume=...) 恢复执行
+      stream.submit(
+        {},
+        {
+          command: { resume: userResponse },
+          streamMode: ["values", "custom"],
+          streamSubgraphs: true,
+        } as any
+      );
+      
+      setInput("");
+      setContentBlocks([]);
+      return;
+    }
+    
     // 新增: 检查是否需要选择数据库
     if (!selectedConnectionId && connectionCount > 0) {
       toast.error("请先选择数据库", {

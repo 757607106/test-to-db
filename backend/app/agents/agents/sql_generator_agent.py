@@ -76,6 +76,21 @@ def generate_sql_query(
         sample_retrieval_result = state.get("sample_retrieval_result", {})
         sample_qa_pairs = sample_retrieval_result.get("qa_pairs", [])
         
+        # 获取错误历史，用于避免重复生成相同错误的 SQL
+        error_history = state.get("error_history", [])
+        previous_errors_prompt = ""
+        if error_history:
+            recent_errors = error_history[-3:]  # 最近3条错误
+            error_details = []
+            for err in recent_errors:
+                error_details.append(f"- {err.get('error', '未知错误')}")
+            previous_errors_prompt = f"""
+## 【重要】之前的 SQL 生成尝试失败了，请避免以下错误：
+{chr(10).join(error_details)}
+
+请根据上述错误调整 SQL 生成策略，避免重复相同的问题。
+"""
+        
         # 获取 Skill 上下文
         skill_context = state.get("skill_context", {})
         skill_prompt = ""
@@ -136,6 +151,7 @@ SQL: {sample.get('sql', '')}
 
 {context}
 {sample_context}
+{previous_errors_prompt}
 
 请生成一个准确、高效的SQL查询语句。要求：
 1. 只返回SQL语句，不要其他解释
@@ -386,6 +402,21 @@ SQL生成原则：
             skill_context = state.get("skill_context", {})
             skill_prompt = self._build_skill_prompt(skill_context)
             
+            # 获取错误历史，用于避免重复生成相同错误的 SQL
+            error_history = state.get("error_history", [])
+            previous_errors_prompt = ""
+            if error_history:
+                recent_errors = error_history[-3:]  # 最近3条错误
+                error_details = []
+                for err in recent_errors:
+                    error_details.append(f"- {err.get('error', '未知错误')}")
+                previous_errors_prompt = f"""
+## 【重要】之前的 SQL 生成尝试失败了，请避免以下错误：
+{chr(10).join(error_details)}
+
+请根据上述错误调整 SQL 生成策略，避免重复相同的问题。
+"""
+            
             # 准备输入消息
             sample_info = ""
             if sample_qa_pairs:
@@ -417,6 +448,7 @@ SQL生成原则：
 模式信息: {schema_info}
 {sample_info}
 {skill_prompt}
+{previous_errors_prompt}
 
 【重要约束】
 1. 必须优先参考上面的“业务意图分析”来决定 SQL 的结构。

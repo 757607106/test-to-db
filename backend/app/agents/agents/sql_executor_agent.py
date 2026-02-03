@@ -1,6 +1,10 @@
 """
-SQL执行代理
+SQL执行代理 - 简化版
 负责安全地执行SQL查询并处理结果
+
+设计原则：
+- 只负责执行 SQL，不做复杂的错误分析
+- 错误分析交给 error_recovery_agent 和 LLM 处理
 """
 from typing import Dict, Any, Annotated
 
@@ -80,7 +84,7 @@ def execute_sql_query(
         
         row_count = len(result_data) if result_data else 0
         
-        # 发送 sql_step 事件 - 关键！
+        # 发送 sql_step 事件
         writer = get_stream_writer()
         if writer:
             writer(create_sql_step_event(
@@ -93,7 +97,7 @@ def execute_sql_query(
                 step="sql_executor"
             ))
         
-        # 返回 Command 更新父图状态（关键：graph=Command.PARENT）
+        # 返回 Command 更新父图状态
         return Command(
             graph=Command.PARENT,
             update={
@@ -107,80 +111,48 @@ def execute_sql_query(
         )
 
     except Exception as e:
-        # 提取业务化的错误信息
+        # 记录错误并进入错误恢复流程
+        # 不再做硬编码的错误分类，让 error_recovery_agent 使用 LLM 智能分析
         error_msg = str(e)
-        business_error = _extract_business_error(error_msg, sql_query)
         
-        # 设置澄清上下文，用于触发业务化澄清
-        clarification_context = {
-            "trigger": "sql_execution_error",
-            "error": business_error,  # 业务化的错误描述
-            "technical_error": error_msg,  # 技术错误（仅供日志）
-            "sql": sql_query,
-            "needs_user_confirmation": True
+        # 发送错误状态事件
+        writer = get_stream_writer()
+        if writer:
+            writer(create_sql_step_event(
+                step="sql_executor",
+                status="error",
+                result=f"SQL 执行失败"
+            ))
+        
+        # 记录错误到 error_history
+        error_info = {
+            "stage": "sql_execution",
+            "error": error_msg,
+            "sql": sql_query
         }
         
         return Command(
             graph=Command.PARENT,
             update={
-                "current_stage": "clarification",  # 触发澄清流程
-                "clarification_context": clarification_context,
+                "current_stage": "error_recovery",
+                "error_history": [error_info],  # 会被合并到现有的 error_history
                 "messages": [ToolMessage(
-                    content=f"执行遇到问题，需要您的确认",
+                    content=f"SQL 执行失败，正在分析错误...",
                     tool_call_id=tool_call_id
                 )]
             }
         )
 
 
-def _extract_business_error(error_msg: str, sql: str) -> str:
-    """
-    将技术错误转换为业务化描述
-    
-    原则：
-    - 不暴露表名、字段名等技术细节
-    - 用业务语言描述问题
-    - 给用户可理解的提示
-    """
-    error_lower = error_msg.lower()
-    
-    # 字段不存在
-    if "unknown column" in error_lower or "column" in error_lower and "not found" in error_lower:
-        return "查询的数据维度可能不存在，需要调整查询内容"
-    
-    # 表不存在
-    if "table" in error_lower and ("doesn't exist" in error_lower or "not found" in error_lower):
-        return "查询的数据范围可能超出了可访问的范围"
-    
-    # 语法错误
-    if "syntax error" in error_lower or "sql syntax" in error_lower:
-        return "查询语句的结构需要调整"
-    
-    # 权限错误
-    if "permission" in error_lower or "denied" in error_lower or "access" in error_lower:
-        return "当前没有权限访问相关数据"
-    
-    # 超时
-    if "timeout" in error_lower or "time out" in error_lower:
-        return "查询数据量较大，建议缩小查询范围或添加时间限制"
-    
-    # 连接错误
-    if "connection" in error_lower:
-        return "数据库连接出现问题，请稍后重试"
-    
-    # 默认：通用业务化描述
-    return "执行查询时遇到了问题，可能需要调整查询条件或数据范围"
-
-
 class SQLExecutorAgent:
-    """SQL执行代理"""
+    """SQL执行代理 - 简化版"""
 
     def __init__(self):
         self.name = "sql_executor_agent"
         self.llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR)
         self.tools = [execute_sql_query]
         
-        # 创建ReAct代理（使用自定义 state_schema 以支持 connection_id 等字段）
+        # 创建ReAct代理
         self.agent = create_react_agent(
             self.llm,
             self.tools,
@@ -191,16 +163,17 @@ class SQLExecutorAgent:
     
     def _create_system_prompt(self, state: SQLMessageState, config: RunnableConfig) -> list[AnyMessage]:
         connection_id = extract_connection_id(state)
-        """创建系统提示"""
         system_msg = f"""你是一个专业的SQL执行专家。
 **重要：当前数据库connection_id是 {connection_id}**
-你的任务是：
-1. 安全地执行SQL查询（使用 execute_sql_query）
 
-**执行原则（严格）：**
-- **只输出执行状态**（如“执行成功”或具体的报错信息）。
-- **禁止输出任何对数据的分析或解释。**
-- **禁止向用户提供建议。**
+你的任务是：
+1. 使用 execute_sql_query 工具执行 SQL 查询
+2. 只输出执行状态（成功或失败）
+
+**执行原则：**
+- 只输出执行状态
+- 禁止输出任何对数据的分析或解释
+- 禁止向用户提供建议
 """
         return [{"role": "system", "content": system_msg}] + state["messages"]
 
@@ -220,6 +193,7 @@ class SQLExecutorAgent:
             connection_id = extract_connection_id(state) or state.get("connection_id")
             if not connection_id:
                 raise ValueError("未指定数据库连接，请先在界面中选择一个数据库")
+            
             raw_result = await execute_sql_query.ainvoke({
                 "sql_query": sql_query,
                 "connection_id": connection_id,
