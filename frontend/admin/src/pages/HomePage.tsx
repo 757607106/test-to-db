@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Card,
   Row,
@@ -7,21 +7,27 @@ import {
   Button,
   Typography,
   Space,
-  message
+  message,
+  Tabs
 } from 'antd';
 import {
   RocketOutlined,
   DatabaseOutlined,
   BulbOutlined,
   ShareAltOutlined,
-  ApiOutlined
+  ApiOutlined,
+  DeploymentUnitOutlined
 } from '@ant-design/icons';
 import { createSessionCode } from '../services/auth';
+import { getChatUrl } from '../utils/apiConfig';
+import SqlAgentFlowDiagram from '../components/SqlAgentFlowDiagram';
 import '../styles/HomePage.css';
 
 const { Title: AntTitle, Paragraph } = Typography;
+const { TabPane } = Tabs;
 
 const HomePage: React.FC = () => {
+  const [activeTab, setActiveTab] = useState('overview');
   const features = [
     {
       icon: <BulbOutlined />,
@@ -53,8 +59,9 @@ const HomePage: React.FC = () => {
     try {
       // 获取一次性 session code
       const { code } = await createSessionCode();
-      // 使用 code 而非 token 跳转，更安全
-      window.open(`http://localhost:3000?code=${code}`, '_blank');
+      // 使用动态 Chat URL，支持局域网访问
+      const chatUrl = getChatUrl();
+      window.open(`${chatUrl}?code=${code}`, '_blank');
     } catch (error) {
       console.error('获取 session code 失败:', error);
       message.error('跳转失败，请重试');
@@ -68,7 +75,7 @@ const HomePage: React.FC = () => {
         <Card className="hero-card" variant="borderless">
           <Space direction="vertical" size="large" style={{ width: '100%' }}>
             <div className="hero-icon-wrapper">
-              <ApiOutlined className="hero-icon" />
+              <DeploymentUnitOutlined className="hero-icon" />
             </div>
 
             <AntTitle level={1} className="hero-title">
@@ -76,8 +83,8 @@ const HomePage: React.FC = () => {
             </AntTitle>
 
             <Paragraph className="hero-subtitle">
-              基于人工智能的下一代数据分析平台，让数据洞察触手可及。<br/>
-              连接您的数据源，开启智能对话之旅。
+              基于LangGraph的智能Text-to-SQL系统，采用Hub-and-Spoke架构<br/>
+              支持多轮对话、混合检索与可视化分析，让数据洞察触手可及
             </Paragraph>
 
             <Button
@@ -93,32 +100,55 @@ const HomePage: React.FC = () => {
         </Card>
       </div>
 
-      {/* 功能特性区域 */}
-      <div className="features-section">
-        <AntTitle level={2} className="section-title">
-          核心功能
-        </AntTitle>
-        <Row gutter={[24, 24]}>
-          {features.map((feature, index) => (
-            <Col xs={24} sm={12} md={6} key={index}>
-              <Card className="feature-card" variant="borderless">
-                <div className={`feature-icon-wrapper ${feature.className}`}>
-                  {feature.icon}
-                </div>
-                <AntTitle level={4} className="feature-title">
-                  {feature.title}
+      {/* 核心内容区域 - 使用Tabs切换 */}
+      <div className="content-section">
+        <Tabs 
+          activeKey={activeTab} 
+          onChange={setActiveTab}
+          centered
+          size="large"
+          className="homepage-tabs"
+        >
+          <TabPane tab="核心功能" key="overview">
+            <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
+              {features.map((feature, index) => (
+                <Col xs={24} sm={12} lg={6} key={index}>
+                  <Card className="feature-card" variant="borderless">
+                    <div className={`feature-icon-wrapper ${feature.className}`}>
+                      {feature.icon}
+                    </div>
+                    <AntTitle level={4} className="feature-title">
+                      {feature.title}
+                    </AntTitle>
+                    <Paragraph className="feature-desc">
+                      {feature.description}
+                    </Paragraph>
+                  </Card>
+                </Col>
+              ))}
+            </Row>
+          </TabPane>
+          
+          <TabPane tab="系统架构" key="architecture">
+            <div className="architecture-section">
+              <Card className="architecture-card" variant="borderless">
+                <AntTitle level={3} style={{ textAlign: 'center', marginBottom: 32 }}>
+                  SQL Agent 数据流程架构
                 </AntTitle>
-                <Paragraph className="feature-desc">
-                  {feature.description}
+                <Paragraph style={{ textAlign: 'center', color: '#64748b', marginBottom: 40 }}>
+                  基于LangGraph的Hub-and-Spoke Graph架构，实现智能SQL生成与执行
                 </Paragraph>
+                <div className="flow-diagram-placeholder">
+                  <SqlAgentFlowDiagram />
+                </div>
               </Card>
-            </Col>
-          ))}
-        </Row>
+            </div>
+          </TabPane>
+        </Tabs>
       </div>
 
       <div className="footer-section">
-        © 2024 慧眼数据平台 · Powered by LLM & Knowledge Graph
+        © 2024 慧眼数据平台 · Powered by LangGraph & LLM
       </div>
     </div>
   );

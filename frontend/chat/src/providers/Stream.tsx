@@ -49,9 +49,10 @@ import {
   sleep,
   checkGraphStatus,
   getStorageKey,
-  DEFAULT_API_URL,
+  getDefaultApiUrl,
   DEFAULT_ASSISTANT_ID,
 } from "./stream/utils";
+import { getLangGraphApiUrl } from "@/utils/apiConfig";
 
 // 重新导出类型，保持向后兼容
 export type { StateType, ExtendedStreamContextType } from "./stream/types";
@@ -364,12 +365,20 @@ const StreamSession = ({
 export const StreamProvider: React.FC<{ children: ReactNode }> = ({
   children,
 }) => {
+  // 动态获取 LangGraph API URL
+  const [dynamicApiUrl, setDynamicApiUrl] = useState<string>("");
+  
+  // 客户端初始化时获取动态 URL
+  useEffect(() => {
+    setDynamicApiUrl(getLangGraphApiUrl());
+  }, []);
+  
   // Get environment variables
   const envApiUrl: string | undefined = process.env.NEXT_PUBLIC_API_URL;
   const envAssistantId: string | undefined =
     process.env.NEXT_PUBLIC_ASSISTANT_ID;
 
-  // Use URL params with env var fallbacks
+  // Use URL params with env var fallbacks、动态获取的 URL 优先级更高
   const [apiUrl, setApiUrl] = useQueryState("apiUrl", {
     defaultValue: envApiUrl || "",
   });
@@ -388,8 +397,8 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
     _setApiKey(key);
   };
 
-  // Determine final values to use, prioritizing URL params then env vars
-  const finalApiUrl = apiUrl || envApiUrl;
+  // Determine final values to use, prioritizing URL params then env vars、最后是动态 URL
+  const finalApiUrl = apiUrl || envApiUrl || dynamicApiUrl;
   const finalAssistantId = assistantId || envAssistantId;
 
   // Show the form if we: don't have an API URL, or don't have an assistant ID
@@ -437,7 +446,7 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
                 id="apiUrl"
                 name="apiUrl"
                 className="bg-background"
-                defaultValue={apiUrl || DEFAULT_API_URL}
+                defaultValue={apiUrl || dynamicApiUrl || getDefaultApiUrl()}
                 required
               />
             </div>

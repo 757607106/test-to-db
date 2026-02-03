@@ -2,6 +2,8 @@
  * Stream Provider 辅助函数
  */
 
+import { getLangGraphApiUrl } from '@/utils/apiConfig';
+
 /**
  * 异步等待指定毫秒数
  */
@@ -45,7 +47,8 @@ export function getStorageKey(threadId: string): string {
 }
 
 /**
- * 默认表单值
+ * 默认表单值 - 动态获取 API 地址
  */
-export const DEFAULT_API_URL = "http://localhost:2024";
+export const getDefaultApiUrl = (): string => getLangGraphApiUrl();
+export const DEFAULT_API_URL = "http://localhost:2024"; // 静态默认值，客户端会动态覆盖
 export const DEFAULT_ASSISTANT_ID = "agent";

@@ -1,6 +1,8 @@
 import axios from 'axios';
+import { getApiBaseUrl } from '../utils/apiConfig';
 
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000/api';
+// 使用动态 API 地址，支持 localhost 和局域网 IP 访问
+const API_BASE_URL = getApiBaseUrl();
 
 export interface SystemConfigResponse {
   id: number;

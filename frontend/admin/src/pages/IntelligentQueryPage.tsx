@@ -112,15 +112,34 @@ const IntelligentQueryPage: React.FC = () => {
     }
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text).then(
-      () => {
+  const copyToClipboard = async (text: string) => {
+    try {
+      // 优先使用现代 Clipboard API（需要 HTTPS 或 localhost）
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(text);
         message.success('已复制到剪贴板');
-      },
-      () => {
-        message.error('复制失败');
+      } else {
+        // 备用方案：使用 execCommand（支持 HTTP 环境）
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        const success = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        if (success) {
+          message.success('已复制到剪贴板');
+        } else {
+          message.error('复制失败');
+        }
       }
-    );
+    } catch (err) {
+      console.error('复制失败:', err);
+      message.error('复制失败');
+    }
   };
 
   return (

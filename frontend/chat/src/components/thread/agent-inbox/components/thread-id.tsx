@@ -39,11 +39,31 @@ export function ThreadIdCopyable({
 }) {
   const [copied, setCopied] = React.useState(false);
 
-  const handleCopy = (e: React.MouseEvent<HTMLButtonElement, MouseEvent>) => {
+  const handleCopy = async (e: React.MouseEvent<HTMLButtonElement, MouseEvent>) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(threadId);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    
+    try {
+      // 优先使用现代 Clipboard API（需要 HTTPS 或 localhost）
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(threadId);
+      } else {
+        // 备用方案：使用 execCommand（支持 HTTP 环境）
+        const textArea = document.createElement('textarea');
+        textArea.value = threadId;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('复制失败:', err);
+    }
   };
 
   return (

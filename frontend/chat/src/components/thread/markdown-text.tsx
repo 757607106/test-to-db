@@ -85,13 +85,31 @@ const useCopyToClipboard = ({
 } = {}) => {
   const [isCopied, setIsCopied] = useState<boolean>(false);
 
-  const copyToClipboard = (value: string) => {
+  const copyToClipboard = async (value: string) => {
     if (!value) return;
 
-    navigator.clipboard.writeText(value).then(() => {
+    try {
+      // 优先使用现代 Clipboard API（需要 HTTPS 或 localhost）
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(value);
+      } else {
+        // 备用方案：使用 execCommand（支持 HTTP 环境）
+        const textArea = document.createElement('textarea');
+        textArea.value = value;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), copiedDuration);
-    });
+    } catch (err) {
+      console.error('复制失败:', err);
+    }
   };
 
   return { isCopied, copyToClipboard };

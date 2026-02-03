@@ -5,16 +5,14 @@ import { StreamProvider } from "@/providers/Stream";
 import { ThreadProvider } from "@/providers/Thread";
 import { ArtifactProvider } from "@/components/thread/artifact";
 import { Toaster } from "@/components/ui/sonner";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
-
-// 后端 API 地址
-const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+import { getBackendBaseUrl, getAdminUrl } from "@/utils/apiConfig";
 
 // 用 session code 交换 token
-async function exchangeCodeForToken(code: string): Promise<string | null> {
+async function exchangeCodeForToken(code: string, apiBaseUrl: string): Promise<string | null> {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/auth/exchange-code?code=${encodeURIComponent(code)}`, {
+    const response = await fetch(`${apiBaseUrl}/api/auth/exchange-code?code=${encodeURIComponent(code)}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -38,6 +36,10 @@ function TokenHandler({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // 动态获取 API 地址
+  const apiBaseUrl = useMemo(() => getBackendBaseUrl(), []);
+  const adminUrl = useMemo(() => getAdminUrl(), []);
 
   useEffect(() => {
     const initAuth = async () => {
@@ -45,7 +47,7 @@ function TokenHandler({ children }: { children: React.ReactNode }) {
       const urlCode = searchParams.get('code');
       if (urlCode) {
         // 用 code 交换 token
-        const token = await exchangeCodeForToken(urlCode);
+        const token = await exchangeCodeForToken(urlCode, apiBaseUrl);
         if (token) {
           localStorage.setItem('auth_token', token);
         }
@@ -80,7 +82,7 @@ function TokenHandler({ children }: { children: React.ReactNode }) {
     };
     
     initAuth();
-  }, [searchParams]);
+  }, [searchParams, apiBaseUrl]);
 
   if (!isReady) {
     return (
@@ -105,7 +107,7 @@ function TokenHandler({ children }: { children: React.ReactNode }) {
           <h1 className="text-xl font-bold text-gray-900 mb-2">需要登录</h1>
           <p className="text-gray-600 mb-6">{error}</p>
           <a
-            href="http://localhost:3001"
+            href={adminUrl}
             className="inline-block px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
           >
             前往管理后台登录
