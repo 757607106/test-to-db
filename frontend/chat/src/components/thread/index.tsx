@@ -18,6 +18,7 @@ import { Button } from "../ui/button";
 import { Checkpoint, Message } from "@langchain/langgraph-sdk";
 import { AssistantMessage, AssistantMessageLoading } from "./messages/ai";
 import { HumanMessage } from "./messages/human";
+import { ThinkingProcess } from "./messages/ThinkingProcess";
 import {
   DO_NOT_RENDER_ID_PREFIX,
   ensureToolCallsHaveResponses,
@@ -288,29 +289,52 @@ export function Thread() {
     (m) => m.type === "ai" || m.type === "tool",
   );
   
+  // 检查是否有思考过程数据（用于决定是否显示 Loading 动画）
+  const hasThinkingContent = 
+    (stream.queryContext?.thoughts && stream.queryContext.thoughts.length > 0) ||
+    (stream.queryContext?.sqlSteps && stream.queryContext.sqlSteps.length > 0) ||
+    (stream.queryContext?.stageMessages && stream.queryContext.stageMessages.length > 0) ||
+    stream.queryContext?.cacheHit;
+  
   // 消息去重和过滤
-  // 1. 先基于 ID 去重（保留最后一个同 ID 消息，因为可能是更新后的版本）
-  // 2. 再应用其他过滤条件
+  // 1. 基于 ID 去重（保留最后一个同 ID 消息，因为可能是更新后的版本）
+  // 2. 对没有 ID 的消息，只去重连续的相同内容消息（避免误删合法的重复消息）
+  // 3. 再应用其他过滤条件
   const filteredMessages = React.useMemo(() => {
     // 使用 Map 进行去重，相同 ID 保留最后出现的版本
-    const seenIds = new Map<string, Message>();
+    const seenIds = new Map<string, number>(); // ID -> index in deduped
     const deduped: Message[] = [];
+    
+    // 生成消息内容的哈希（用于连续重复检测）
+    const getContentHash = (m: Message): string => {
+      const content = typeof m.content === 'string' 
+        ? m.content 
+        : JSON.stringify(m.content);
+      return `${m.type}:${content}`;
+    };
+    
+    let lastContentHash: string | null = null;
     
     for (const m of messages) {
       if (m.id) {
         // 如果有 ID，检查是否已存在
         if (seenIds.has(m.id)) {
           // 更新为最新版本（替换之前的位置）
-          const existingIndex = deduped.findIndex(msg => msg.id === m.id);
-          if (existingIndex !== -1) {
-            deduped[existingIndex] = m;
-          }
+          const existingIndex = seenIds.get(m.id)!;
+          deduped[existingIndex] = m;
         } else {
-          seenIds.set(m.id, m);
+          seenIds.set(m.id, deduped.length);
           deduped.push(m);
         }
+        lastContentHash = getContentHash(m);
       } else {
-        // 没有 ID 的消息直接添加
+        // 没有 ID 的消息，只去重连续的相同内容（流式更新可能产生连续重复）
+        const contentHash = getContentHash(m);
+        if (contentHash === lastContentHash) {
+          // 连续重复内容，跳过
+          continue;
+        }
+        lastContentHash = contentHash;
         deduped.push(m);
       }
     }
@@ -501,8 +525,17 @@ export function Thread() {
                       connectionId={selectedConnectionId || undefined}
                     />
                   )}
-                  {/* Loading 指示器：只在没有收到第一个 token 时显示 */}
-                  {isLoading && !firstTokenReceived && (
+                  {/* 规划执行过程 - 独立渲染在消息列表底部，避免位置跳动 */}
+                  {isLoading && hasThinkingContent && (
+                    <div className="w-full">
+                      <ThinkingProcess 
+                        queryContext={stream.queryContext} 
+                        isLoading={true} 
+                      />
+                    </div>
+                  )}
+                  {/* Loading 指示器：只在没有收到第一个 token 且没有思考过程数据时显示 */}
+                  {isLoading && !firstTokenReceived && !hasThinkingContent && (
                     <AssistantMessageLoading />
                   )}
                 </>

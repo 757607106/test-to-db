@@ -269,8 +269,8 @@ export function AssistantMessage({
     <div className="group mr-auto flex w-full items-start gap-2">
       <div className="flex w-full flex-col gap-2">
         <>
-          {/* 规划执行过程 - 固定在最上方，使用稳定布局避免跳动 */}
-          {showTransientComponents && (
+          {/* 规划执行过程 - 只在加载完成后显示，加载中由 index.tsx 独立渲染，避免位置跳动 */}
+          {showTransientComponents && !isLoading && (
             <div className="w-full">
               <ThinkingProcess 
                 queryContext={thread.queryContext} 
@@ -352,31 +352,16 @@ export function AssistantMessage({
 }
 
 export function AssistantMessageLoading() {
-  const thread = useStreamContext();
-
-  // 检查是否有任何思考过程数据
-  const hasThinkingContent = 
-    (thread.queryContext?.thoughts && thread.queryContext.thoughts.length > 0) ||
-    (thread.queryContext?.sqlSteps && thread.queryContext.sqlSteps.length > 0) ||
-    (thread.queryContext?.stageMessages && thread.queryContext.stageMessages.length > 0) ||
-    thread.queryContext?.cacheHit;
-
+  // ThinkingProcess 现在由 index.tsx 独立渲染，这里只显示简单的加载动画
   return (
     <div className="mr-auto flex w-full flex-col gap-2">
-      {hasThinkingContent ? (
-        <ThinkingProcess 
-          queryContext={thread.queryContext} 
-          isLoading={true} 
-        />
-      ) : (
-        <div className="mr-auto flex items-start gap-2">
-          <div className="bg-muted flex h-8 items-center gap-1 rounded-2xl px-4 py-2">
-            <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_infinite] rounded-full"></div>
-            <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_0.5s_infinite] rounded-full"></div>
-            <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_1s_infinite] rounded-full"></div>
-          </div>
+      <div className="mr-auto flex items-start gap-2">
+        <div className="bg-muted flex h-8 items-center gap-1 rounded-2xl px-4 py-2">
+          <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_infinite] rounded-full"></div>
+          <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_0.5s_infinite] rounded-full"></div>
+          <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_1s_infinite] rounded-full"></div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

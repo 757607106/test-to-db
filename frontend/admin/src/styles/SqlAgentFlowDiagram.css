@@ -1,404 +1,796 @@
 @import './theme.css';
 
-/* Hub-and-Spoke 容器 */
-.sql-agent-hub-spoke {
+/* ============================================
+   SQL Agent Flow Diagram - 增强版样式
+   ============================================ */
+
+/* 主容器 */
+.sql-agent-flow-container {
   width: 100%;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
 }
 
-/* 顶部说明 */
-.hub-spoke-header {
-  padding: 24px;
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(8px);
-  border-radius: 16px 16px 0 0;
-  border: 1px solid rgba(99, 102, 241, 0.2);
-  border-bottom: none;
-  text-align: center;
+/* ============================================
+   流程步骤指示器
+   ============================================ */
+.flow-steps-indicator {
+  padding: 20px 24px;
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(12px);
+  border-radius: 16px;
+  border: 1px solid rgba(99, 102, 241, 0.15);
+  overflow-x: auto;
 }
 
-[data-theme='dark'] .hub-spoke-header {
-  background: rgba(30, 41, 59, 0.6);
-  border-color: rgba(99, 102, 241, 0.3);
+[data-theme='dark'] .flow-steps-indicator {
+  background: rgba(30, 41, 59, 0.8);
+  border-color: rgba(99, 102, 241, 0.25);
 }
 
-.hub-spoke-header h4 {
-  margin: 0 0 8px 0;
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--color-text-main);
-}
-
-.hub-spoke-header p {
-  margin: 0;
-  font-size: 14px;
-  color: var(--color-text-secondary);
-}
-
-/* 架构图容器 */
-.hub-spoke-diagram {
-  position: relative;
-  width: 100%;
-  height: 500px;
-  background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
-  border: 1px solid rgba(99, 102, 241, 0.2);
+.steps-track {
   display: flex;
   align-items: center;
   justify-content: center;
+  min-width: max-content;
+  gap: 4px;
+}
+
+.step-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 20px;
+  transition: all 0.3s ease;
+  background: transparent;
+}
+
+.step-item.active {
+  background: rgba(99, 102, 241, 0.1);
+}
+
+[data-theme='dark'] .step-item.active {
+  background: rgba(99, 102, 241, 0.2);
+}
+
+.step-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  flex-shrink: 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.step-item.completed .step-dot {
+  background: #6366f1;
+}
+
+.step-item.active .step-dot {
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.5);
+}
+
+.step-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  transition: color 0.3s ease;
+}
+
+.step-item.completed .step-label,
+.step-item.active .step-label {
+  color: var(--color-text-main);
+  font-weight: 600;
+}
+
+.step-connector {
+  width: 24px;
+  height: 2px;
+  background: #e2e8f0;
+  border-radius: 1px;
+  transition: background 0.3s ease;
+}
+
+.step-connector.active {
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+}
+
+/* ============================================
+   主图区域
+   ============================================ */
+.flow-diagram-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 40px 20px;
+  background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
+  border-radius: 20px;
+  border: 1px solid rgba(99, 102, 241, 0.15);
+  position: relative;
+  min-height: 550px;
   overflow: hidden;
 }
 
-[data-theme='dark'] .hub-spoke-diagram {
+[data-theme='dark'] .flow-diagram-main {
   background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
-  border-color: rgba(99, 102, 241, 0.3);
+  border-color: rgba(99, 102, 241, 0.25);
 }
 
-/* Start/End 端点节点 */
-.endpoint-node {
+/* 背景装饰 */
+.flow-diagram-main::before {
+  content: '';
   position: absolute;
+  top: -100px;
+  right: -100px;
+  width: 300px;
+  height: 300px;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.1) 0%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.flow-diagram-main::after {
+  content: '';
+  position: absolute;
+  bottom: -100px;
+  left: -100px;
+  width: 250px;
+  height: 250px;
+  background: radial-gradient(circle, rgba(20, 184, 166, 0.1) 0%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+/* ============================================
+   端点节点（用户输入/结果输出）
+   ============================================ */
+.flow-endpoint {
+  width: 160px;
+  padding: 20px 16px;
+  background: white;
+  border-radius: 16px;
+  border: 2px solid rgba(99, 102, 241, 0.2);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  z-index: 2;
+  gap: 12px;
+  z-index: 5;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  flex-shrink: 0;
 }
 
-.start-node {
-  left: 5%;
-  top: 50%;
-  transform: translateY(-50%);
+[data-theme='dark'] .flow-endpoint {
+  background: rgba(30, 41, 59, 0.95);
+  border-color: rgba(99, 102, 241, 0.3);
 }
 
-.end-node {
-  right: 5%;
-  top: 50%;
-  transform: translateY(-50%);
+.flow-endpoint.active {
+  border-color: #6366f1;
 }
 
-.endpoint-node .node-icon {
-  width: 50px;
-  height: 50px;
-  border-radius: 12px;
+.flow-endpoint.result-output.active {
+  border-color: #10b981;
+}
+
+.endpoint-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
+  font-size: 28px;
   color: white;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.15);
 }
 
-.endpoint-node .node-label {
-  font-size: 13px;
-  font-weight: 600;
+.endpoint-content {
+  text-align: center;
+}
+
+.endpoint-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-text-main);
+  margin-bottom: 4px;
+}
+
+.endpoint-desc {
+  font-size: 12px;
   color: var(--color-text-secondary);
 }
 
-/* 连接线 */
-.connection-line {
+.data-packet {
   position: absolute;
+  bottom: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: white;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+}
+
+.data-packet.success {
+  background: linear-gradient(135deg, #10b981, #059669);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+}
+
+/* ============================================
+   连接线
+   ============================================ */
+.flow-connector {
+  width: 100px;
+  height: 100px;
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+.animated-dash {
+  animation: dashFlow 1s linear infinite;
+}
+
+@keyframes dashFlow {
+  from {
+    stroke-dashoffset: 24;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* ============================================
+   Hub-and-Spoke 区域
+   ============================================ */
+.hub-spoke-area {
+  position: relative;
+  width: 500px;
+  height: 500px;
+  flex-shrink: 0;
+}
+
+/* SVG连接线层 */
+.spoke-lines-layer {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 500px;
+  height: 500px;
+  pointer-events: none;
   z-index: 1;
 }
 
-.start-to-hub {
-  left: calc(5% + 50px);
-  top: 50%;
-  transform: translateY(-50%);
-  width: calc(50% - 5% - 120px);
-  height: 100px;
-}
-
-.hub-to-end {
-  right: calc(5% + 50px);
-  top: 50%;
-  transform: translateY(-50%);
-  width: calc(50% - 5% - 120px);
-  height: 100px;
-}
-
-.active-path {
-  stroke: #6366f1 !important;
-  stroke-width: 3 !important;
-  animation: pathFlow 2s ease-in-out infinite;
-}
-
-@keyframes pathFlow {
-  0%, 100% {
-    stroke-dasharray: 10, 5;
-    stroke-dashoffset: 0;
-  }
-  50% {
-    stroke-dashoffset: 15;
-  }
-}
-
-/* 中心 Hub 节点 (Supervisor) */
-.hub-node {
+/* ============================================
+   Supervisor 中心节点
+   ============================================ */
+.supervisor-hub {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
   width: 140px;
   height: 140px;
-  background: white;
-  border: 3px solid #6366f1;
   border-radius: 50%;
+  background: white;
+  border: 4px solid #6366f1;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.2);
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   z-index: 10;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-[data-theme='dark'] .hub-node {
-  background: rgba(30, 41, 59, 0.95);
+[data-theme='dark'] .supervisor-hub {
+  background: rgba(30, 41, 59, 0.98);
   border-color: #8b5cf6;
 }
 
-.hub-node.active {
-  transform: translate(-50%, -50%) scale(1.1);
-  box-shadow: 0 12px 32px rgba(99, 102, 241, 0.4);
-  border-width: 4px;
+.supervisor-hub.active {
+  border-width: 5px;
 }
 
-.hub-icon {
+.hub-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.hub-icon-container {
   font-size: 40px;
   color: #6366f1;
+  line-height: 1;
 }
 
 .hub-label {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text-main);
+}
+
+.hub-sublabel {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+/* Hub装饰环 */
+.hub-ring {
+  position: absolute;
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  border: 2px dashed rgba(99, 102, 241, 0.3);
+  pointer-events: none;
+  animation: ringRotate 20s linear infinite;
+}
+
+.hub-ring.ring-2 {
+  width: 180px;
+  height: 180px;
+  border-color: rgba(99, 102, 241, 0.15);
+  animation-direction: reverse;
+  animation-duration: 30s;
+}
+
+@keyframes ringRotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ============================================
+   Worker Agent 节点
+   ============================================ */
+.worker-agent {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  cursor: pointer;
+}
+
+.agent-card {
+  position: relative;
+  width: 130px;
+  padding: 14px 12px;
+  background: white;
+  border-radius: 14px;
+  border: 2px solid var(--agent-color, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+[data-theme='dark'] .agent-card {
+  background: rgba(30, 41, 59, 0.98);
+}
+
+.worker-agent.active .agent-card {
+  border-width: 3px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+.worker-agent:hover .agent-card {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+}
+
+.agent-step-badge {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+}
+
+.agent-step-badge .ant-badge-count {
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 20px;
+  height: 20px;
+  line-height: 20px;
+}
+
+.agent-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  color: white;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.worker-agent.active .agent-icon {
+  animation: iconPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes iconPulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+.agent-info {
+  text-align: center;
+}
+
+.agent-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-main);
+  line-height: 1.3;
+  margin-bottom: 2px;
+}
+
+.agent-desc {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  line-height: 1.3;
+}
+
+.agent-status {
+  position: absolute;
+  bottom: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.status-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 10px;
+  margin: 0;
+}
+
+/* ============================================
+   底部信息卡片区域
+   ============================================ */
+.flow-info-section {
+  padding: 0;
+}
+
+.info-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+
+.flow-info-card {
+  background: rgba(255, 255, 255, 0.9) !important;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(99, 102, 241, 0.12) !important;
+  border-radius: 16px !important;
+  padding: 24px !important;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  transition: all 0.3s ease;
+}
+
+[data-theme='dark'] .flow-info-card {
+  background: rgba(30, 41, 59, 0.9) !important;
+  border-color: rgba(99, 102, 241, 0.2) !important;
+}
+
+.flow-info-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 24px rgba(99, 102, 241, 0.12) !important;
+  border-color: rgba(99, 102, 241, 0.25) !important;
+}
+
+.info-card-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  color: white;
+  flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.info-card-content h4 {
+  margin: 0 0 8px 0;
   font-size: 16px;
   font-weight: 700;
   color: var(--color-text-main);
 }
 
-.hub-desc {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-}
-
-/* Spoke Agents 容器 */
-.spoke-agents {
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  left: 0;
-  top: 0;
-}
-
-/* Spoke 连接线 */
-.spoke-line {
-  z-index: 1;
-}
-
-.active-spoke {
-  animation: spokeGlow 2s ease-in-out infinite;
-}
-
-@keyframes spokeGlow {
-  0%, 100% {
-    filter: drop-shadow(0 0 4px currentColor);
-  }
-  50% {
-    filter: drop-shadow(0 0 12px currentColor);
-  }
-}
-
-/* Worker Agent 节点 */
-.spoke-node {
-  position: absolute;
-  width: 130px;
-  padding: 12px;
-  background: white;
-  border: 2px solid;
-  border-radius: 12px;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  z-index: 5;
-}
-
-[data-theme='dark'] .spoke-node {
-  background: rgba(30, 41, 59, 0.95);
-}
-
-.spoke-node.active {
-  transform: translate(-50%, -50%) scale(1.15);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
-  border-width: 3px;
-  z-index: 6;
-}
-
-.spoke-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  color: white;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-}
-
-.spoke-node.active .spoke-icon {
-  animation: spokeIconPulse 1.5s ease-in-out infinite;
-}
-
-@keyframes spokeIconPulse {
-  0%, 100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.2);
-  }
-}
-
-.spoke-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--color-text-main);
-  text-align: center;
-  line-height: 1.3;
-}
-
-.spoke-desc {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-  text-align: center;
-}
-
-/* 底部说明 */
-.hub-spoke-footer {
-  padding: 24px;
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(8px);
-  border-radius: 0 0 16px 16px;
-  border: 1px solid rgba(99, 102, 241, 0.2);
-  border-top: none;
-}
-
-[data-theme='dark'] .hub-spoke-footer {
-  background: rgba(30, 41, 59, 0.6);
-  border-color: rgba(99, 102, 241, 0.3);
-}
-
-.info-card {
-  background: transparent !important;
-  border: none !important;
-  padding: 0 !important;
-}
-
-.info-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 20px;
-}
-
-.info-item {
-  padding: 16px;
-  background: rgba(255, 255, 255, 0.8);
-  border-radius: 12px;
-  border: 1px solid rgba(99, 102, 241, 0.15);
-  transition: all 0.3s ease;
-}
-
-[data-theme='dark'] .info-item {
-  background: rgba(30, 41, 59, 0.8);
-  border-color: rgba(99, 102, 241, 0.25);
-}
-
-.info-item:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.15);
-}
-
-.info-item strong {
-  display: block;
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--color-text-main);
-  margin-bottom: 6px;
-}
-
-.info-item p {
+.info-card-content p {
   margin: 0;
   font-size: 13px;
   color: var(--color-text-secondary);
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
-/* 响应式设计 */
-@media (max-width: 1200px) {
-  .hub-spoke-diagram {
+/* ============================================
+   动画控制按钮
+   ============================================ */
+.animation-control {
+  display: flex;
+  justify-content: center;
+  padding-top: 8px;
+}
+
+.control-btn {
+  padding: 10px 24px;
+  background: white;
+  border: 2px solid #e2e8f0;
+  border-radius: 24px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+[data-theme='dark'] .control-btn {
+  background: rgba(30, 41, 59, 0.95);
+  border-color: rgba(99, 102, 241, 0.3);
+  color: var(--color-text-secondary);
+}
+
+.control-btn:hover {
+  border-color: #6366f1;
+  color: #6366f1;
+}
+
+.control-btn.active {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border-color: transparent;
+  color: white;
+}
+
+/* ============================================
+   响应式设计
+   ============================================ */
+@media (max-width: 1400px) {
+  .hub-spoke-area {
+    width: 450px;
     height: 450px;
   }
   
-  .hub-node {
+  .spoke-lines-layer {
+    width: 450px;
+    height: 450px;
+  }
+  
+  .supervisor-hub {
     width: 120px;
     height: 120px;
   }
   
-  .hub-icon {
-    font-size: 36px;
+  .hub-ring {
+    width: 140px;
+    height: 140px;
   }
   
-  .spoke-node {
-    width: 110px;
-    padding: 10px;
+  .hub-ring.ring-2 {
+    width: 160px;
+    height: 160px;
+  }
+  
+  .agent-card {
+    width: 115px;
+    padding: 12px 10px;
+  }
+}
+
+@media (max-width: 1200px) {
+  .flow-diagram-main {
+    flex-direction: column;
+    gap: 24px;
+    min-height: auto;
+    padding: 30px 20px;
+  }
+  
+  .flow-connector {
+    transform: rotate(90deg);
+    width: 80px;
+    height: 80px;
+  }
+  
+  .hub-spoke-area {
+    width: 400px;
+    height: 400px;
+  }
+  
+  .spoke-lines-layer {
+    width: 400px;
+    height: 400px;
+  }
+  
+  .info-cards-grid {
+    grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 768px) {
-  .hub-spoke-diagram {
-    height: 400px;
+  .flow-steps-indicator {
+    padding: 16px;
   }
   
-  .hub-node {
+  .step-label {
+    font-size: 11px;
+  }
+  
+  .step-dot {
+    width: 10px;
+    height: 10px;
+  }
+  
+  .step-connector {
+    width: 16px;
+  }
+  
+  .hub-spoke-area {
+    width: 340px;
+    height: 340px;
+  }
+  
+  .spoke-lines-layer {
+    width: 340px;
+    height: 340px;
+  }
+  
+  .supervisor-hub {
     width: 100px;
     height: 100px;
   }
   
-  .hub-icon {
+  .hub-icon-container {
     font-size: 32px;
   }
   
   .hub-label {
-    font-size: 14px;
+    font-size: 13px;
   }
   
-  .spoke-node {
-    width: 90px;
-    padding: 8px;
-  }
-  
-  .spoke-icon {
-    width: 30px;
-    height: 30px;
-    font-size: 16px;
-  }
-  
-  .spoke-label {
+  .hub-sublabel {
     font-size: 10px;
   }
   
-  .spoke-desc {
+  .hub-ring {
+    width: 120px;
+    height: 120px;
+  }
+  
+  .hub-ring.ring-2 {
+    width: 140px;
+    height: 140px;
+  }
+  
+  .agent-card {
+    width: 100px;
+    padding: 10px 8px;
+    gap: 8px;
+  }
+  
+  .agent-icon {
+    width: 32px;
+    height: 32px;
+    font-size: 16px;
+  }
+  
+  .agent-name {
+    font-size: 10px;
+  }
+  
+  .agent-desc {
     font-size: 9px;
   }
   
-  .endpoint-node .node-icon {
+  .flow-endpoint {
+    width: 140px;
+    padding: 16px 12px;
+  }
+  
+  .endpoint-icon {
+    width: 48px;
+    height: 48px;
+    font-size: 24px;
+  }
+  
+  .endpoint-title {
+    font-size: 14px;
+  }
+  
+  .endpoint-desc {
+    font-size: 11px;
+  }
+  
+  .flow-info-card {
+    padding: 20px !important;
+  }
+  
+  .info-card-icon {
     width: 40px;
     height: 40px;
     font-size: 20px;
   }
   
-  .info-grid {
-    grid-template-columns: 1fr;
+  .info-card-content h4 {
+    font-size: 14px;
+  }
+  
+  .info-card-content p {
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .steps-track {
+    justify-content: flex-start;
+    padding-left: 8px;
+  }
+  
+  .step-item {
+    padding: 6px 8px;
+  }
+  
+  .hub-spoke-area {
+    width: 300px;
+    height: 300px;
+  }
+  
+  .spoke-lines-layer {
+    width: 300px;
+    height: 300px;
+  }
+  
+  .supervisor-hub {
+    width: 90px;
+    height: 90px;
+  }
+  
+  .hub-ring {
+    width: 110px;
+    height: 110px;
+  }
+  
+  .hub-ring.ring-2 {
+    width: 130px;
+    height: 130px;
+  }
+  
+  .agent-card {
+    width: 85px;
+    padding: 8px 6px;
+  }
+  
+  .flow-endpoint {
+    width: 120px;
+    padding: 12px 10px;
+  }
+  
+  .data-packet {
+    font-size: 10px;
+    padding: 4px 10px;
   }
 }
