@@ -4,8 +4,17 @@
 import requests
 import json
 import time
+import os
 
-BASE_URL = "http://localhost:2024"
+# 从环境变量获取 BASE_URL，支持动态配置
+# 优先级：TEST_BASE_URL 环境变量 > SERVICE_HOST 环境变量 > 默认值
+def get_base_url():
+    if os.getenv("TEST_BASE_URL"):
+        return os.getenv("TEST_BASE_URL")
+    service_host = os.getenv("SERVICE_HOST", "localhost")
+    return f"http://{service_host}:2024"
+
+BASE_URL = get_base_url()
 
 
 def print_header(text):

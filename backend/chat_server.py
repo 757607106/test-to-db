@@ -18,6 +18,16 @@ def setup_environment():
     src_path = Path(__file__).parent / "src"
     sys.path.insert(0, str(src_path))
     
+    # 优先加载 .env 文件，以便后续读取 SERVICE_HOST 等配置
+    env_file = Path(__file__).parent / ".env"
+    if env_file.exists():
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(env_file, override=False)  # 不覆盖已存在的环境变量
+            print(f"✅ Loaded environment from .env")
+        except ImportError:
+            print("⚠️  python-dotenv not installed, skipping .env file")
+    
     # Load graphs from langgraph.json
     config_path = Path(__file__).parent / "langgraph.json"
     graphs = {}
@@ -27,10 +37,22 @@ def setup_environment():
             config = json.load(f)
             graphs = config.get("graphs", {})
     
+    # 从环境变量获取主机地址配置，支持 localhost 和局域网 IP 访问
+    # 优先使用环境变量 SERVICE_HOST，默认为 localhost
+    service_host = os.getenv("SERVICE_HOST", "localhost")
+    
+    # PostgreSQL checkpointer URI - 支持通过环境变量完全自定义或使用 SERVICE_HOST
+    default_postgres_uri = f"postgresql://langgraph:langgraph_password_2026@{service_host}:5433/langgraph_checkpoints"
+    postgres_uri = os.getenv("CHECKPOINT_POSTGRES_URI", default_postgres_uri)
+    
+    # LangGraph API URL - 支持通过环境变量完全自定义或使用 SERVICE_HOST
+    default_langgraph_url = f"http://{service_host}:2024"
+    langgraph_api_url = os.getenv("LANGGRAPH_API_URL", default_langgraph_url)
+    
     # Set environment variables
     os.environ.update({
         # Database and storage - 使用自定义 PostgreSQL checkpointer
-        "POSTGRES_URI": "postgresql://langgraph:langgraph_password_2026@localhost:5433/langgraph_checkpoints",
+        "POSTGRES_URI": postgres_uri,
         # "REDIS_URI": "redis://localhost:6379",
         "DATABASE_URI": ":memory:",
         "REDIS_URI": "fake",
@@ -43,7 +65,7 @@ def setup_environment():
         "LANGSMITH_LANGGRAPH_API_VARIANT": "local_dev",
         "LANGGRAPH_DISABLE_FILE_PERSISTENCE": "false",
         "LANGGRAPH_ALLOW_BLOCKING": "true",
-        "LANGGRAPH_API_URL": "http://localhost:2024",
+        "LANGGRAPH_API_URL": langgraph_api_url,
 
         "LANGGRAPH_DEFAULT_RECURSION_LIMIT": "200",
         
@@ -53,16 +75,6 @@ def setup_environment():
         # Worker configuration
         "N_JOBS_PER_WORKER": "1",
     })
-    
-    # Load .env file if exists (强制覆盖已存在的环境变量)
-    env_file = Path(__file__).parent / ".env"
-    if env_file.exists():
-        try:
-            from dotenv import load_dotenv
-            load_dotenv(env_file, override=True)
-            print(f"✅ Loaded environment from .env (with override)")
-        except ImportError:
-            print("⚠️  python-dotenv not installed, skipping .env file")
 
 def main():
     """Start the server"""
@@ -71,12 +83,16 @@ def main():
     # Setup environment
     setup_environment()
     
+    # 获取实际配置的地址用于显示
+    service_host = os.getenv("SERVICE_HOST", "localhost")
+    
     # Print server information
     print("\n" + "="*60)
-    print("📍 Server URL: http://localhost:2024")
-    print("📚 API Documentation: http://localhost:2024/docs")
-    print("🎨 Studio UI: http://localhost:2024/ui")
-    print("💚 Health Check: http://localhost:2024/ok")
+    print(f"📍 Server URL: http://{service_host}:2024")
+    print(f"   (监听 0.0.0.0:2024, 同时支持 localhost 和 {service_host} 访问)")
+    print(f"📚 API Documentation: http://{service_host}:2024/docs")
+    print(f"🎨 Studio UI: http://{service_host}:2024/ui")
+    print(f"💚 Health Check: http://{service_host}:2024/ok")
     print("="*60)
     
     try:

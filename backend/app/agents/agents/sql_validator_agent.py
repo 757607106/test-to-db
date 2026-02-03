@@ -38,18 +38,23 @@ def validate_sql_syntax(
     Returns:
         Command: 更新 validation_result 状态的命令
     """
+    # 获取当前消息历史（包含 LLM 生成的 AIMessage）
+    # 修复：Command.PARENT 需要包含完整消息历史，否则子 Agent 的 AIMessage 会丢失
+    current_messages = list(state.get("messages", []))
+    
     try:
         # 从状态获取必要信息
         sql_query = state.get("generated_sql", "")
         if not sql_query:
+            error_msg = ToolMessage(
+                content="验证失败：没有找到需要验证的 SQL 语句",
+                tool_call_id=tool_call_id
+            )
             return Command(
                 graph=Command.PARENT,
                 update={
                     "current_stage": "error_recovery",
-                    "messages": [ToolMessage(
-                        content="验证失败：没有找到需要验证的 SQL 语句",
-                        tool_call_id=tool_call_id
-                    )]
+                    "messages": current_messages + [error_msg]
                 }
             )
         
@@ -103,10 +108,11 @@ def validate_sql_syntax(
             ))
         
         # 返回 Command 更新父图状态
+        tool_msg = ToolMessage(content=message, tool_call_id=tool_call_id)
         update_dict = {
             "validation_result": validation_result,
             "current_stage": next_stage,
-            "messages": [ToolMessage(content=message, tool_call_id=tool_call_id)]
+            "messages": current_messages + [tool_msg]
         }
         
         # 如果有修复后的 SQL，也更新
@@ -117,14 +123,15 @@ def validate_sql_syntax(
         
     except Exception as e:
         logger.error(f"[SQLValidator] 验证异常: {e}")
+        error_msg = ToolMessage(
+            content=f"SQL 验证失败: {str(e)}",
+            tool_call_id=tool_call_id
+        )
         return Command(
             graph=Command.PARENT,
             update={
                 "current_stage": "error_recovery",
-                "messages": [ToolMessage(
-                    content=f"SQL 验证失败: {str(e)}",
-                    tool_call_id=tool_call_id
-                )]
+                "messages": current_messages + [error_msg]
             }
         )
 

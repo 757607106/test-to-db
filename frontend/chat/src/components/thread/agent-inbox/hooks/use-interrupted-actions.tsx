@@ -89,7 +89,7 @@ export default function useInterruptedActions({
           command: {
             resume: response,
           },
-          streamMode: ["values"],
+          streamMode: ["values", "messages"],
           streamSubgraphs: true,
         } as any,
       );

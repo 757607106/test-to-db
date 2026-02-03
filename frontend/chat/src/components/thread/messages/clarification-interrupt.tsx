@@ -61,7 +61,7 @@ export function ClarificationInterruptView({
         {},
         {
           command: { resume: answer },
-          streamMode: ["values", "custom"],
+          streamMode: ["values", "messages", "custom"],
           streamSubgraphs: true,
         } as any
       );

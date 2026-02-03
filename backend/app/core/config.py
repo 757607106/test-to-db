@@ -9,6 +9,17 @@ class Settings(BaseSettings):
     SECRET_KEY: str = os.getenv("SECRET_KEY", "development_secret_key")
     
     # ==========================================
+    # 统一服务主机配置
+    # ==========================================
+    # SERVICE_HOST 用于配置所有服务的主机地址
+    # 修改此值即可切换所有服务的访问地址
+    # 示例：
+    # - localhost（默认，仅本机访问）
+    # - 192.168.13.163（局域网 IP 访问）
+    # ==========================================
+    SERVICE_HOST: str = os.getenv("SERVICE_HOST", "localhost")
+    
+    # ==========================================
     # LangSmith 监控配置
     # ==========================================
     # LangSmith 提供 LLM 应用的可观测性
@@ -31,15 +42,34 @@ class Settings(BaseSettings):
             return v
         raise ValueError(v)
 
-    # Database settings
-    MYSQL_SERVER: str = os.getenv("MYSQL_SERVER", "localhost")
+    # ==========================================
+    # MySQL 数据库配置（使用 SERVICE_HOST 作为默认值）
+    # ==========================================
+    # 优先级：MYSQL_SERVER 环境变量 > SERVICE_HOST 环境变量 > localhost
+    # ==========================================
+    @property
+    def mysql_host(self) -> str:
+        """获取 MySQL 主机地址"""
+        return os.getenv("MYSQL_SERVER") or self.SERVICE_HOST
+    
+    MYSQL_SERVER: str = os.getenv("MYSQL_SERVER") or os.getenv("SERVICE_HOST", "localhost")
     MYSQL_USER: str = os.getenv("MYSQL_USER", "root")
     MYSQL_PASSWORD: str = os.getenv("MYSQL_PASSWORD", "")
     MYSQL_DB: str = os.getenv("MYSQL_DB", "chatdb")
     MYSQL_PORT: str = os.getenv("MYSQL_PORT", "3306")
 
-    # Neo4j settings
-    NEO4J_URI: str = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+    # ==========================================
+    # Neo4j 图数据库配置（使用 SERVICE_HOST 作为默认值）
+    # ==========================================
+    @property
+    def neo4j_host(self) -> str:
+        """获取 Neo4j 主机地址"""
+        uri = os.getenv("NEO4J_URI", "")
+        if uri:
+            return uri
+        return f"bolt://{self.SERVICE_HOST}:7687"
+    
+    NEO4J_URI: str = os.getenv("NEO4J_URI") or f"bolt://{os.getenv('SERVICE_HOST', 'localhost')}:7687"
     NEO4J_USER: str = os.getenv("NEO4J_USER", "neo4j")
     NEO4J_PASSWORD: str = os.getenv("NEO4J_PASSWORD", "")
 
@@ -50,9 +80,9 @@ class Settings(BaseSettings):
     LLM_MODEL: str = os.getenv("LLM_MODEL", "deepseek-chat")
 
     # ==========================================
-    # Milvus 向量数据库配置
+    # Milvus 向量数据库配置（使用 SERVICE_HOST 作为默认值）
     # ==========================================
-    MILVUS_HOST: str = os.getenv("MILVUS_HOST", "localhost")
+    MILVUS_HOST: str = os.getenv("MILVUS_HOST") or os.getenv("SERVICE_HOST", "localhost")
     MILVUS_PORT: str = os.getenv("MILVUS_PORT", "19530")
 
     # ==========================================
@@ -70,8 +100,8 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "qwen3-embedding:0.6b")
     VECTOR_DIMENSION: int = int(os.getenv("VECTOR_DIMENSION", "1024"))
 
-    # Ollama 配置（本地部署）
-    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    # Ollama 配置（本地部署，使用 SERVICE_HOST 作为默认值）
+    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL") or f"http://{os.getenv('SERVICE_HOST', 'localhost')}:11434"
     OLLAMA_EMBEDDING_MODEL: str = os.getenv("OLLAMA_EMBEDDING_MODEL", "qwen3-embedding:0.6b")  # Fallback
     OLLAMA_REQUEST_TIMEOUT: int = int(os.getenv("OLLAMA_REQUEST_TIMEOUT", "60"))
     OLLAMA_NUM_PREDICT: int = int(os.getenv("OLLAMA_NUM_PREDICT", "-1"))
@@ -143,12 +173,22 @@ class Settings(BaseSettings):
     # 样本质量过滤：最低成功率阈值（0.0-1.0）
     QA_SAMPLE_MIN_SUCCESS_RATE: float = float(os.getenv("QA_SAMPLE_MIN_SUCCESS_RATE", "0.7"))
 
-    # LangGraph Checkpointer 配置
+    # ==========================================
+    # LangGraph Checkpointer 配置（使用 SERVICE_HOST 作为默认值）
+    # ==========================================
     CHECKPOINT_MODE: str = os.getenv("CHECKPOINT_MODE", "postgres")  # postgres | none
+    
+    @property
+    def checkpoint_postgres_uri(self) -> Optional[str]:
+        """获取 PostgreSQL Checkpointer URI"""
+        uri = os.getenv("CHECKPOINT_POSTGRES_URI")
+        if uri:
+            return uri
+        return f"postgresql://langgraph:langgraph_password_2026@{self.SERVICE_HOST}:5433/langgraph_checkpoints"
+    
     CHECKPOINT_POSTGRES_URI: Optional[str] = os.getenv(
-        "CHECKPOINT_POSTGRES_URI", 
-        "postgresql://langgraph:langgraph_password_2026@localhost:5433/langgraph_checkpoints"
-    )
+        "CHECKPOINT_POSTGRES_URI"
+    ) or f"postgresql://langgraph:langgraph_password_2026@{os.getenv('SERVICE_HOST', 'localhost')}:5433/langgraph_checkpoints"
     
     # 消息历史管理配置
     MAX_MESSAGE_HISTORY: int = int(os.getenv("MAX_MESSAGE_HISTORY", "20"))

@@ -1,0 +1,332 @@
+{
+  "description": "inventory_demo 数据库 Skills 配置 (16张表简化版进销存)",
+  "version": "1.0",
+  "database": "inventory_demo",
+  "connection_id": 10,
+  "skills": [
+    {
+      "name": "organization",
+      "display_name": "组织架构",
+      "description": "处理部门、员工相关查询。包括部门信息、员工资料、组织结构分析等。",
+      "keywords": [
+        "部门", "员工", "组织", "人员", "经理", "职位", "人事", "架构"
+      ],
+      "intent_examples": [
+        "查询所有部门信息",
+        "统计各部门员工人数",
+        "查询某部门的员工列表",
+        "哪个部门员工最多"
+      ],
+      "table_names": ["department", "employee"],
+      "table_patterns": [],
+      "business_rules": "1. 部门编码使用 dept_code 字段\n2. 员工状态: 1-在职, 0-离职\n3. 员工与部门通过 dept_id 关联",
+      "common_patterns": [
+        {"pattern": "部门查询", "hint": "关联 department 表获取部门名称"},
+        {"pattern": "员工统计", "hint": "按 dept_id GROUP BY 统计各部门人数"}
+      ],
+      "join_rules": [
+        {
+          "name": "员工-部门",
+          "description": "员工所属部门",
+          "left_table": "employee",
+          "left_column": "dept_id",
+          "right_table": "department",
+          "right_column": "id",
+          "join_type": "LEFT"
+        }
+      ],
+      "priority": 5,
+      "icon": "team",
+      "color": "#1890ff"
+    },
+    {
+      "name": "purchase",
+      "display_name": "采购管理",
+      "description": "处理采购订单、供应商管理相关查询。包括采购明细、供应商信息、采购统计等。",
+      "keywords": [
+        "采购", "进货", "供应商", "采购订单", "采购单", "进货单",
+        "采购额", "采购金额", "采购员", "买入"
+      ],
+      "intent_examples": [
+        "查询本月采购额",
+        "统计各供应商的采购金额",
+        "查询采购订单明细",
+        "哪个供应商采购最多",
+        "某供应商的采购记录"
+      ],
+      "table_names": ["purchase_order", "purchase_order_detail", "supplier"],
+      "table_patterns": ["purchase_*"],
+      "business_rules": "1. 采购金额使用 total_amount 字段\n2. 订单状态: 0-草稿, 1-待审核, 2-已审核, 3-已完成, 4-已取消\n3. 已取消的订单不计入采购统计\n4. 供应商关联使用 supplier_id 字段",
+      "common_patterns": [
+        {"pattern": "采购统计", "hint": "使用 SUM(total_amount) 配合 GROUP BY 时间或供应商"},
+        {"pattern": "供应商分析", "hint": "按 supplier_id 分组，关联 supplier 表获取名称"},
+        {"pattern": "采购明细", "hint": "JOIN purchase_order_detail ON order_id"}
+      ],
+      "join_rules": [
+        {
+          "name": "采购订单-供应商",
+          "description": "采购订单关联供应商",
+          "left_table": "purchase_order",
+          "left_column": "supplier_id",
+          "right_table": "supplier",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "采购订单-明细",
+          "description": "采购订单关联明细",
+          "left_table": "purchase_order",
+          "left_column": "id",
+          "right_table": "purchase_order_detail",
+          "right_column": "order_id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "采购明细-商品",
+          "description": "采购明细关联商品",
+          "left_table": "purchase_order_detail",
+          "left_column": "product_id",
+          "right_table": "product",
+          "right_column": "id",
+          "join_type": "INNER"
+        }
+      ],
+      "priority": 8,
+      "icon": "shopping",
+      "color": "#52c41a"
+    },
+    {
+      "name": "sales",
+      "display_name": "销售管理",
+      "description": "处理销售订单、客户管理相关查询。包括销售明细、客户信息、销售统计、业绩分析等。",
+      "keywords": [
+        "销售", "订单", "客户", "销售额", "成交", "销售订单",
+        "销售统计", "销售分析", "销售员", "业务员", "业绩"
+      ],
+      "intent_examples": [
+        "查询本月销售额",
+        "统计各客户的订单数量",
+        "分析销售趋势",
+        "查询销售订单明细",
+        "哪个客户销售额最高",
+        "各销售员业绩排名"
+      ],
+      "table_names": ["sales_order", "sales_order_detail", "customer"],
+      "table_patterns": ["sales_*"],
+      "business_rules": "1. 销售金额使用 total_amount 字段\n2. 订单状态: 0-草稿, 1-待审核, 2-已审核, 3-已完成, 4-已取消\n3. 已取消的订单不计入销售统计\n4. 折扣金额使用 discount_amount 字段\n5. 销售员关联使用 salesman_id 字段",
+      "common_patterns": [
+        {"pattern": "销售统计", "hint": "使用 SUM(total_amount) 配合 GROUP BY 时间维度"},
+        {"pattern": "客户分析", "hint": "按 customer_id 分组，关联 customer 表"},
+        {"pattern": "销售排行", "hint": "ORDER BY total_amount DESC LIMIT N"}
+      ],
+      "join_rules": [
+        {
+          "name": "销售订单-客户",
+          "description": "销售订单关联客户",
+          "left_table": "sales_order",
+          "left_column": "customer_id",
+          "right_table": "customer",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "销售订单-明细",
+          "description": "销售订单关联明细",
+          "left_table": "sales_order",
+          "left_column": "id",
+          "right_table": "sales_order_detail",
+          "right_column": "order_id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "销售明细-商品",
+          "description": "销售明细关联商品",
+          "left_table": "sales_order_detail",
+          "left_column": "product_id",
+          "right_table": "product",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "销售订单-销售员",
+          "description": "销售订单关联销售员",
+          "left_table": "sales_order",
+          "left_column": "salesman_id",
+          "right_table": "employee",
+          "right_column": "id",
+          "join_type": "LEFT"
+        }
+      ],
+      "priority": 10,
+      "icon": "shopping-cart",
+      "color": "#1890ff"
+    },
+    {
+      "name": "inventory",
+      "display_name": "库存管理",
+      "description": "处理库存查询、出入库记录、库存变动分析。包括实时库存、库存流水、库存预警等。",
+      "keywords": [
+        "库存", "存货", "仓库", "入库", "出库", "库存数量",
+        "库存金额", "可用库存", "库存预警", "库存流水"
+      ],
+      "intent_examples": [
+        "查询当前库存数量",
+        "统计各仓库库存金额",
+        "查询出入库记录",
+        "哪些商品库存不足",
+        "某商品的库存变动记录"
+      ],
+      "table_names": ["inventory", "inventory_transaction", "warehouse", "product"],
+      "table_patterns": ["inventory*", "warehouse*"],
+      "business_rules": "1. 库存数量使用 quantity 字段\n2. 可用库存使用 available_qty 字段\n3. 锁定库存使用 locked_qty 字段\n4. 库存流水方向: 1-入库, -1-出库\n5. 业务类型: PURCHASE_IN-采购入库, SALES_OUT-销售出库, ADJUST-盘点调整",
+      "common_patterns": [
+        {"pattern": "库存查询", "hint": "按 warehouse_id 和 product_id 分组"},
+        {"pattern": "库存预警", "hint": "WHERE quantity < min_stock"},
+        {"pattern": "库存流水", "hint": "关联 inventory_transaction 表"}
+      ],
+      "join_rules": [
+        {
+          "name": "库存-仓库",
+          "description": "库存关联仓库",
+          "left_table": "inventory",
+          "left_column": "warehouse_id",
+          "right_table": "warehouse",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "库存-商品",
+          "description": "库存关联商品",
+          "left_table": "inventory",
+          "left_column": "product_id",
+          "right_table": "product",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "库存流水-仓库",
+          "description": "库存流水关联仓库",
+          "left_table": "inventory_transaction",
+          "left_column": "warehouse_id",
+          "right_table": "warehouse",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "库存流水-商品",
+          "description": "库存流水关联商品",
+          "left_table": "inventory_transaction",
+          "left_column": "product_id",
+          "right_table": "product",
+          "right_column": "id",
+          "join_type": "INNER"
+        }
+      ],
+      "priority": 9,
+      "icon": "database",
+      "color": "#faad14"
+    },
+    {
+      "name": "finance",
+      "display_name": "财务管理",
+      "description": "处理应收应付、付款记录等财务相关查询。包括账款统计、账龄分析、收付款记录等。",
+      "keywords": [
+        "财务", "应收", "应付", "账款", "付款", "收款",
+        "欠款", "账龄", "逾期", "结算"
+      ],
+      "intent_examples": [
+        "查询应收账款总额",
+        "统计未付款账单",
+        "分析账龄分布",
+        "客户欠款排行",
+        "本月收付款情况"
+      ],
+      "table_names": ["accounts_payable", "accounts_receivable", "payment_record"],
+      "table_patterns": ["accounts_*", "payment*"],
+      "business_rules": "1. 应付状态: 0-未付, 1-部分付款, 2-已付清\n2. 应收状态: 0-未收, 1-部分收款, 2-已收清\n3. 付款类型: PAY-付款, RECEIVE-收款\n4. 账龄基于 due_date 计算天数差",
+      "common_patterns": [
+        {"pattern": "账龄分析", "hint": "CASE WHEN DATEDIFF 划分账龄区间"},
+        {"pattern": "欠款统计", "hint": "应收/应付金额 - 已收/已付金额"},
+        {"pattern": "收付款记录", "hint": "按日期汇总 payment_record"}
+      ],
+      "join_rules": [
+        {
+          "name": "应付-供应商",
+          "description": "应付账款关联供应商",
+          "left_table": "accounts_payable",
+          "left_column": "supplier_id",
+          "right_table": "supplier",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "应收-客户",
+          "description": "应收账款关联客户",
+          "left_table": "accounts_receivable",
+          "left_column": "customer_id",
+          "right_table": "customer",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "付款-供应商",
+          "description": "付款记录关联供应商",
+          "left_table": "payment_record",
+          "left_column": "supplier_id",
+          "right_table": "supplier",
+          "right_column": "id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "收款-客户",
+          "description": "收款记录关联客户",
+          "left_table": "payment_record",
+          "left_column": "customer_id",
+          "right_table": "customer",
+          "right_column": "id",
+          "join_type": "LEFT"
+        }
+      ],
+      "priority": 7,
+      "icon": "dollar",
+      "color": "#722ed1"
+    },
+    {
+      "name": "product",
+      "display_name": "商品管理",
+      "description": "处理商品信息、分类管理相关查询。包括商品资料、分类统计、价格分析等。",
+      "keywords": [
+        "商品", "产品", "货品", "分类", "品类", "规格",
+        "价格", "成本", "售价", "进价"
+      ],
+      "intent_examples": [
+        "查询商品信息",
+        "各分类商品数量",
+        "商品价格分析",
+        "毛利最高的商品"
+      ],
+      "table_names": ["product", "product_category"],
+      "table_patterns": ["product*"],
+      "business_rules": "1. 商品编码使用 product_code 字段\n2. 采购价使用 purchase_price, 销售价使用 sale_price\n3. 商品状态: 1-启用, 0-禁用\n4. 分类支持层级结构 (parent_id)",
+      "common_patterns": [
+        {"pattern": "商品查询", "hint": "支持按名称、编码、分类筛选"},
+        {"pattern": "分类统计", "hint": "按 category_id GROUP BY"},
+        {"pattern": "毛利分析", "hint": "毛利 = sale_price - purchase_price"}
+      ],
+      "join_rules": [
+        {
+          "name": "商品-分类",
+          "description": "商品关联分类",
+          "left_table": "product",
+          "left_column": "category_id",
+          "right_table": "product_category",
+          "right_column": "id",
+          "join_type": "LEFT"
+        }
+      ],
+      "priority": 6,
+      "icon": "appstore",
+      "color": "#13c2c2"
+    }
+  ]
+}

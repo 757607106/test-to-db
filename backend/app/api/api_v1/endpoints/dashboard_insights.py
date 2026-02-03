@@ -54,6 +54,8 @@ def apply_mining_suggestions(
     """应用推荐,创建Widget"""
     try:
         from app import crud
+        from app.services.dashboard_widget_service import dashboard_widget_service
+        
         # 检查权限
         has_permission = crud.crud_dashboard.check_permission(
             db, dashboard_id=dashboard_id, user_id=current_user.id, required_level="editor"
@@ -109,8 +111,35 @@ def apply_mining_suggestions(
                 obj_in=widget_create
             )
             created_widgets.append(new_widget.id)
+        
+        # 批量刷新新创建的widget数据
+        refresh_results = []
+        for widget_id in created_widgets:
+            try:
+                result = dashboard_widget_service.refresh_widget(
+                    db,
+                    widget_id=widget_id,
+                    user_id=current_user.id
+                )
+                refresh_results.append({
+                    "widget_id": widget_id,
+                    "success": result is not None,
+                    "error": None
+                })
+            except Exception as e:
+                logger.warning(f"刷新widget {widget_id} 数据失败: {e}")
+                refresh_results.append({
+                    "widget_id": widget_id,
+                    "success": False,
+                    "error": str(e)
+                })
             
-        return {"success": True, "count": len(created_widgets), "widget_ids": created_widgets}
+        return {
+            "success": True,
+            "count": len(created_widgets),
+            "widget_ids": created_widgets,
+            "refresh_results": refresh_results
+        }
     except Exception:
         logger.exception("应用推荐失败: dashboard_id=%s", dashboard_id)
         raise HTTPException(status_code=500, detail="应用推荐失败")

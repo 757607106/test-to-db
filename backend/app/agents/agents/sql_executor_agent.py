@@ -35,6 +35,10 @@ def execute_sql_query(
     Returns:
         Command: 更新父图 query_results 状态的命令
     """
+    # 获取当前消息历史（包含 LLM 生成的 AIMessage）
+    # 修复：Command.PARENT 需要包含完整消息历史，否则子 Agent 的 AIMessage 会丢失
+    current_messages = list(state.get("messages", []))
+    
     try:
         # 立即发送 running 状态事件
         writer = get_stream_writer()
@@ -53,13 +57,14 @@ def execute_sql_query(
         # 从状态获取 connection_id
         connection_id = state.get("connection_id") or extract_connection_id(state)
         if not connection_id:
+            error_msg = ToolMessage(
+                content="错误：未指定数据库连接",
+                tool_call_id=tool_call_id
+            )
             return Command(
                 graph=Command.PARENT,
                 update={
-                    "messages": [ToolMessage(
-                        content="错误：未指定数据库连接",
-                        tool_call_id=tool_call_id
-                    )]
+                    "messages": current_messages + [error_msg]
                 }
             )
         
@@ -69,13 +74,14 @@ def execute_sql_query(
         # 获取数据库连接
         connection = get_db_connection_by_id(connection_id)
         if not connection:
+            error_msg = ToolMessage(
+                content=f"找不到连接ID为 {connection_id} 的数据库连接",
+                tool_call_id=tool_call_id
+            )
             return Command(
                 graph=Command.PARENT,
                 update={
-                    "messages": [ToolMessage(
-                        content=f"找不到连接ID为 {connection_id} 的数据库连接",
-                        tool_call_id=tool_call_id
-                    )]
+                    "messages": current_messages + [error_msg]
                 }
             )
 
@@ -98,15 +104,16 @@ def execute_sql_query(
             ))
         
         # 返回 Command 更新父图状态
+        tool_msg = ToolMessage(
+            content=f"SQL执行成功，返回 {row_count} 条记录",
+            tool_call_id=tool_call_id
+        )
         return Command(
             graph=Command.PARENT,
             update={
                 "query_results": result_data,
                 "current_stage": "data_analysis",
-                "messages": [ToolMessage(
-                    content=f"SQL执行成功，返回 {row_count} 条记录",
-                    tool_call_id=tool_call_id
-                )]
+                "messages": current_messages + [tool_msg]
             }
         )
 
@@ -131,15 +138,16 @@ def execute_sql_query(
             "sql": sql_query
         }
         
+        tool_msg = ToolMessage(
+            content=f"SQL 执行失败，正在分析错误...",
+            tool_call_id=tool_call_id
+        )
         return Command(
             graph=Command.PARENT,
             update={
                 "current_stage": "error_recovery",
                 "error_history": [error_info],  # 会被合并到现有的 error_history
-                "messages": [ToolMessage(
-                    content=f"SQL 执行失败，正在分析错误...",
-                    tool_call_id=tool_call_id
-                )]
+                "messages": current_messages + [tool_msg]
             }
         )
 

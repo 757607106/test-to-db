@@ -260,7 +260,7 @@ class SupervisorAgent:
             model=self.llm,
             agents=self.worker_agents,
             prompt=self._get_supervisor_prompt(),
-            add_handoff_back_messages=True,  # 让 Supervisor 看到 Agent 返回结果，支持动态决策
+            add_handoff_back_messages=False,  # 禁用以避免 null ID 消息干扰前端消息合并逻辑
             output_mode="full_history",  # 保留完整消息历史，避免 Agent 返回后清除之前的消息
             pre_model_hook=combined_pre_model_hook,  # 组合 hook：防护检查 + 消息裁剪
             state_schema=SQLMessageState,

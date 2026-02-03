@@ -76,11 +76,16 @@ def retrieve_database_schema(
             plan="完成表结构分析后，将进行 SQL 生成"
         ))
     
+    # 获取当前消息历史（包含 LLM 生成的 AIMessage）
+    # 修复：Command.PARENT 需要包含完整消息历史，否则子 Agent 的 AIMessage 会丢失
+    current_messages = list(state.get("messages", []))
+    
     connection_id = state.get("connection_id") or extract_connection_id(state)
     if not connection_id:
+        error_msg = ToolMessage(content="错误：未指定数据库连接", tool_call_id=tool_call_id)
         return Command(
             graph=Command.PARENT,
-            update={"messages": [ToolMessage(content="错误：未指定数据库连接", tool_call_id=tool_call_id)]}
+            update={"messages": current_messages + [error_msg]}
         )
     
     # ========== Skill 模式：使用预加载的 schema，跳过全库检索 ==========
@@ -115,6 +120,10 @@ def retrieve_database_schema(
             
             logger.info(f"[SchemaAgent] Skill 模式: {skill_names}, 表数量: {table_count}")
             
+            tool_msg = ToolMessage(
+                content=f"已加载业务领域 [{skill_names}] 的表结构: {table_count} 个表",
+                tool_call_id=tool_call_id
+            )
             return Command(
                 graph=Command.PARENT,
                 update={
@@ -126,10 +135,7 @@ def retrieve_database_schema(
                         "skill_names": [s.get("name") for s in matched_skills],
                     },
                     "current_stage": "sql_generation",
-                    "messages": [ToolMessage(
-                        content=f"已加载业务领域 [{skill_names}] 的表结构: {table_count} 个表",
-                        tool_call_id=tool_call_id
-                    )]
+                    "messages": current_messages + [tool_msg]
                 }
             )
     
@@ -154,6 +160,10 @@ def retrieve_database_schema(
             value_mappings = get_value_mappings(db, schema_context)
             table_count = len(schema_context.get("tables", [])) if isinstance(schema_context, dict) else len(schema_context)
             
+            tool_msg = ToolMessage(
+                content=f"已识别到 {table_count} 个相关表。分析结果：{query_analysis.get('query_intent', '')}",
+                tool_call_id=tool_call_id
+            )
             return Command(
                 graph=Command.PARENT,
                 update={
@@ -164,18 +174,17 @@ def retrieve_database_schema(
                     },
                     "query_analysis": query_analysis,  # 关键：将分析结果共享给后续 Agent
                     "current_stage": "sql_generation",
-                    "messages": [ToolMessage(
-                        content=f"已识别到 {table_count} 个相关表。分析结果：{query_analysis.get('query_intent', '')}",
-                        tool_call_id=tool_call_id
-                    )]
+                    "messages": current_messages + [tool_msg]
                 }
             )
         finally:
             db.close()
     except Exception as e:
+        error_msg = ToolMessage(content=f"检索失败: {str(e)}", tool_call_id=tool_call_id)
         return Command(
             graph=Command.PARENT,
-            update={"messages": [ToolMessage(content=f"检索失败: {str(e)}", tool_call_id=tool_call_id)]})
+            update={"messages": current_messages + [error_msg]}
+        )
 
 
 
@@ -386,11 +395,12 @@ class SchemaAnalysisAgent:
                 step="schema_agent"
             ))
         
-        return {
+        result = {
             "messages": [AIMessage(content=summary)],
             "schema_info": state["schema_info"],
             "current_stage": "sql_generation"
         }
+        return result
     
     async def _process_full_schema(
         self, 

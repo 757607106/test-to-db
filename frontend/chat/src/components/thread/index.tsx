@@ -156,7 +156,7 @@ export function Thread() {
         {},
         {
           command: { resume: userResponse },
-          streamMode: ["values", "custom"],
+          streamMode: ["values", "messages", "custom"],
           streamSubgraphs: true,
         } as any
       );
@@ -224,7 +224,7 @@ export function Thread() {
         context: Object.keys(context).length > 0 ? context : undefined,
       } as any,
       {
-        streamMode: ["values", "custom"],
+        streamMode: ["values", "messages", "custom"],
         streamSubgraphs: true,
         streamResumable: true,
         optimisticValues: (prev: StateType) => ({
@@ -272,7 +272,7 @@ export function Thread() {
       // 使用 checkpoint 回滚到父状态并重新生成
       stream.submit(undefined, {
         checkpoint: parentCheckpoint,
-        streamMode: ["values", "custom"],
+        streamMode: ["values", "messages", "custom"],
         streamSubgraphs: true,
       } as any);
     } catch (error) {

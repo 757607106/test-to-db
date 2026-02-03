@@ -559,7 +559,12 @@ const DashboardEditorPage: React.FC = () => {
     try {
       await widgetService.deleteWidget(widgetId);
       message.success('组件删除成功');
-      fetchDashboard();
+      // 删除后重新获取数据并自动重排布局
+      await fetchDashboard();
+      // 自动应用网格布局以重新排列剩余组件
+      setTimeout(() => {
+        handleAutoLayout('grid');
+      }, 100);
     } catch (error) {
       message.error('删除组件失败');
       console.error(error);
@@ -1207,9 +1212,13 @@ const DashboardEditorPage: React.FC = () => {
         dashboardId={dashboardId}
         connectionId={dashboard?.widgets.find((w) => w.connection_id)?.connection_id}
         onClose={() => setMiningWizardVisible(false)}
-        onSuccess={() => {
+        onSuccess={async () => {
           setMiningWizardVisible(false);
-          fetchDashboard();
+          await fetchDashboard();
+          // 智能挖掘成功后自动应用网格布局
+          setTimeout(() => {
+            handleAutoLayout('grid');
+          }, 100);
         }}
       />
 

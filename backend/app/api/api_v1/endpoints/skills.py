@@ -9,7 +9,7 @@ Skills API 端点 (Skills Endpoints)
 """
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
 
 from app.api import deps
@@ -199,14 +199,20 @@ async def apply_discovered_skills(
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
     connection_id: int = Query(..., description="数据库连接ID"),
-    skill_names: List[str] = Query(..., description="要应用的 Skill 名称列表"),
+    skill_names: List[str] = Query(None, description="要应用的 Skill 名称列表（已废弃，请使用 body）"),
+    suggestions: Optional[List[dict]] = Body(None, description="完整的 suggestions 数据"),
 ) -> Any:
     """
     应用发现的 Skill 建议
     
     批量创建选中的 Skill
+    
+    支持两种方式：
+    1. （推荐）通过 body 传递完整的 suggestions 数据
+    2. （兼容）通过 query 传递 skill_names，会重新执行 discover 匹配
     """
     from app.services.skill_discovery_service import skill_discovery_service
+    from app.schemas.skill import SkillSuggestion
     
     if not current_user.tenant_id:
         raise HTTPException(status_code=403, detail="User is not associated with a tenant")
@@ -219,14 +225,27 @@ async def apply_discovered_skills(
         raise HTTPException(status_code=404, detail="Connection not found")
     
     try:
-        # 先执行发现
-        discovery_result = await skill_discovery_service.discover(connection_id)
+        suggestions_to_apply = []
         
-        # 筛选要应用的建议
-        suggestions_to_apply = [
-            s for s in discovery_result.suggestions 
-            if s.name in skill_names
-        ]
+        # 方式1：直接使用前端传递的完整 suggestions 数据
+        if suggestions:
+            for s in suggestions:
+                suggestions_to_apply.append(SkillSuggestion(
+                    name=s.get("name", ""),
+                    display_name=s.get("display_name", ""),
+                    description=s.get("description", ""),
+                    keywords=s.get("keywords", []),
+                    table_names=s.get("table_names", []),
+                    confidence=s.get("confidence", 0.5),
+                    reasoning=s.get("reasoning", "")
+                ))
+        # 方式2：兼容旧方式，通过 skill_names 重新 discover 匹配
+        elif skill_names:
+            discovery_result = await skill_discovery_service.discover(connection_id)
+            suggestions_to_apply = [
+                s for s in discovery_result.suggestions 
+                if s.name in skill_names
+            ]
         
         if not suggestions_to_apply:
             return {"success": False, "error": "No matching suggestions found"}

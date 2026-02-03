@@ -48,7 +48,8 @@ export function getStorageKey(threadId: string): string {
 
 /**
  * 默认表单值 - 动态获取 API 地址
+ * 通过环境变量 NEXT_PUBLIC_SERVICE_HOST 配置服务主机地址
  */
 export const getDefaultApiUrl = (): string => getLangGraphApiUrl();
-export const DEFAULT_API_URL = "http://localhost:2024"; // 静态默认值，客户端会动态覆盖
+export const DEFAULT_API_URL = getLangGraphApiUrl(); // 动态获取，支持环境变量配置
 export const DEFAULT_ASSISTANT_ID = "agent";

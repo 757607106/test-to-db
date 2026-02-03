@@ -33,6 +33,10 @@ def analyze_and_fix_sql_error(
     Returns:
         Command: 更新状态的命令
     """
+    # 获取当前消息历史（包含 LLM 生成的 AIMessage）
+    # 修复：Command.PARENT 需要包含完整消息历史，否则子 Agent 的 AIMessage 会丢失
+    current_messages = list(state.get("messages", []))
+    
     try:
         # 从状态获取必要信息
         sql_query = state.get("generated_sql", "")
@@ -43,14 +47,15 @@ def analyze_and_fix_sql_error(
         db_type = state.get("db_type", "mysql")
         
         if not sql_query:
+            error_msg = ToolMessage(
+                content="恢复失败：没有找到需要修复的 SQL 语句",
+                tool_call_id=tool_call_id
+            )
             return Command(
                 graph=Command.PARENT,
                 update={
                     "current_stage": "terminated",
-                    "messages": [ToolMessage(
-                        content="恢复失败：没有找到需要修复的 SQL 语句",
-                        tool_call_id=tool_call_id
-                    )]
+                    "messages": current_messages + [error_msg]
                 }
             )
         
@@ -61,14 +66,15 @@ def analyze_and_fix_sql_error(
             error_message = latest_error.get("error", "")
         
         if not error_message:
+            tool_msg = ToolMessage(
+                content="没有发现错误，继续验证",
+                tool_call_id=tool_call_id
+            )
             return Command(
                 graph=Command.PARENT,
                 update={
                     "current_stage": "sql_validation",
-                    "messages": [ToolMessage(
-                        content="没有发现错误，继续验证",
-                        tool_call_id=tool_call_id
-                    )]
+                    "messages": current_messages + [tool_msg]
                 }
             )
         
@@ -126,12 +132,13 @@ def analyze_and_fix_sql_error(
             
             logger.warning(f"[ErrorRecovery] {message}")
             
+            tool_msg = ToolMessage(content=message, tool_call_id=tool_call_id)
             return Command(
                 graph=Command.PARENT,
                 update={
                     "current_stage": next_stage,
                     "retry_count": new_retry_count,
-                    "messages": [ToolMessage(content=message, tool_call_id=tool_call_id)]
+                    "messages": current_messages + [tool_msg]
                 }
             )
         else:
@@ -149,26 +156,28 @@ def analyze_and_fix_sql_error(
             message = "SQL 已通过 LLM 智能修复"
             logger.info(f"[ErrorRecovery] {message}")
             
+            tool_msg = ToolMessage(content=message, tool_call_id=tool_call_id)
             return Command(
                 graph=Command.PARENT,
                 update={
                     "current_stage": "sql_validation",
                     "generated_sql": fixed_sql,
                     "retry_count": 0,
-                    "messages": [ToolMessage(content=message, tool_call_id=tool_call_id)]
+                    "messages": current_messages + [tool_msg]
                 }
             )
         
     except Exception as e:
         logger.error(f"[ErrorRecovery] 修复异常: {e}")
+        error_msg = ToolMessage(
+            content=f"SQL 修复失败: {str(e)}",
+            tool_call_id=tool_call_id
+        )
         return Command(
             graph=Command.PARENT,
             update={
                 "current_stage": "terminated",
-                "messages": [ToolMessage(
-                    content=f"SQL 修复失败: {str(e)}",
-                    tool_call_id=tool_call_id
-                )]
+                "messages": current_messages + [error_msg]
             }
         )
 

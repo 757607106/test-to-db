@@ -258,7 +258,9 @@ const SkillsPage: React.FC = () => {
     if (!selectedConnectionId || selectedSuggestions.length === 0) return;
     setDiscoverLoading(true);
     try {
-      const result = await skillService.applyDiscoveredSkills(selectedConnectionId, selectedSuggestions);
+      // 根据选中的 name 获取完整的 suggestion 数据
+      const suggestionsToApply = discoverSuggestions.filter(s => selectedSuggestions.includes(s.name));
+      const result = await skillService.applyDiscoveredSkills(selectedConnectionId, suggestionsToApply);
       if (result.success) {
         message.success(`成功创建 ${result.created_count} 个 Skills`);
         setSelectedSuggestions([]);

@@ -290,13 +290,11 @@ export const skillService = {
   // 应用发现的 Skill
   async applyDiscoveredSkills(
     connectionId: number, 
-    skillNames: string[]
+    suggestions: SkillSuggestion[]
   ): Promise<{ success: boolean; results: any[]; created_count: number }> {
-    const params = new URLSearchParams();
-    params.append('connection_id', String(connectionId));
-    skillNames.forEach(name => params.append('skill_names', name));
-    
-    const response = await api.post(`/skills/discover/apply?${params}`);
+    const response = await api.post(`/skills/discover/apply?connection_id=${connectionId}`, {
+      suggestions: suggestions,
+    });
     return response.data;
   },
 };

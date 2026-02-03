@@ -54,6 +54,10 @@ def generate_sql_query(
     Returns:
         Command: 更新 generated_sql 状态的命令
     """
+    # 获取当前消息历史（包含 LLM 生成的 AIMessage）
+    # 修复：Command.PARENT 需要包含完整消息历史，否则子 Agent 的 AIMessage 会丢失
+    current_messages = list(state.get("messages", []))
+    
     try:
         # 立即发送 running 状态事件，让前端显示"思考中"
         writer = get_stream_writer()
@@ -175,27 +179,29 @@ SQL: {sample.get('sql', '')}
         sql_query = sql_query.strip()
         
         # 返回 Command 更新父图状态（关键：graph=Command.PARENT）
+        tool_msg = ToolMessage(
+            content=f"SQL 已生成:\n```sql\n{sql_query}\n```",
+            tool_call_id=tool_call_id
+        )
         return Command(
             graph=Command.PARENT,
             update={
                 "generated_sql": sql_query,
                 "current_stage": "sql_validation",
-                "messages": [ToolMessage(
-                    content=f"SQL 已生成:\n```sql\n{sql_query}\n```",
-                    tool_call_id=tool_call_id
-                )]
+                "messages": current_messages + [tool_msg]
             }
         )
         
     except Exception as e:
+        error_msg = ToolMessage(
+            content=f"SQL生成失败: {str(e)}",
+            tool_call_id=tool_call_id
+        )
         return Command(
             graph=Command.PARENT,
             update={
                 "current_stage": "error_recovery",
-                "messages": [ToolMessage(
-                    content=f"SQL生成失败: {str(e)}",
-                    tool_call_id=tool_call_id
-                )]
+                "messages": current_messages + [error_msg]
             }
         )
 

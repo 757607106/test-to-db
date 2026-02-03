@@ -233,7 +233,8 @@ def _register_default_providers():
         supports_base_url=True,
     ))
     
-    # Ollama（本地部署）
+    # Ollama（本地部署，使用 SERVICE_HOST 作为默认主机）
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL") or f"http://{os.getenv('SERVICE_HOST', 'localhost')}:11434/v1"
     register_provider(ProviderConfig(
         name="ollama",
         display_name="Ollama (本地)",
@@ -243,7 +244,7 @@ def _register_default_providers():
         embedding_module="langchain_ollama",
         embedding_class="OllamaEmbeddings",
         supports_base_url=True,
-        default_base_url="http://localhost:11434/v1",
+        default_base_url=ollama_base_url,
     ))
     
     # OpenRouter（聚合平台）

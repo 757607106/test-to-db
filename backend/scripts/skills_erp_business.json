@@ -1,0 +1,509 @@
+{
+  "description": "erp_business 数据库 Skills 配置 (33张表多分公司版ERP - PostgreSQL)",
+  "version": "1.0",
+  "database": "erp_business",
+  "connection_id": 13,
+  "skills": [
+    {
+      "name": "organization",
+      "display_name": "组织架构",
+      "description": "处理分公司、部门、员工、地区相关查询。支持多分公司组织结构分析。",
+      "keywords": [
+        "分公司", "部门", "员工", "组织", "人员", "经理", "地区", "区域"
+      ],
+      "intent_examples": [
+        "查询所有分公司",
+        "统计各分公司员工人数",
+        "查询某部门的员工列表",
+        "各地区客户分布"
+      ],
+      "table_names": ["t_company", "t_department", "t_employee", "t_region"],
+      "table_patterns": [],
+      "business_rules": "1. 表名带 t_ 前缀\n2. 分公司编码使用 company_code 字段\n3. 员工状态: 1-在职, 0-离职\n4. 员工包含提成比例 commission_rate\n5. 地区分层级: 1-省, 2-市, 3-区县",
+      "common_patterns": [
+        {"pattern": "分公司统计", "hint": "按 company_id GROUP BY"},
+        {"pattern": "员工统计", "hint": "按 dept_id 或 company_id GROUP BY"},
+        {"pattern": "地区分析", "hint": "关联 t_region 表获取地区层级"}
+      ],
+      "join_rules": [
+        {
+          "name": "员工-部门",
+          "left_table": "t_employee",
+          "left_column": "dept_id",
+          "right_table": "t_department",
+          "right_column": "id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "员工-分公司",
+          "left_table": "t_employee",
+          "left_column": "company_id",
+          "right_table": "t_company",
+          "right_column": "id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "部门-分公司",
+          "left_table": "t_department",
+          "left_column": "company_id",
+          "right_table": "t_company",
+          "right_column": "id",
+          "join_type": "LEFT"
+        }
+      ],
+      "priority": 5,
+      "icon": "team",
+      "color": "#1890ff"
+    },
+    {
+      "name": "partner",
+      "display_name": "往来单位",
+      "description": "处理供应商、客户及其往来账相关查询。包括供应商/客户信息、往来余额分析等。",
+      "keywords": [
+        "供应商", "客户", "往来", "账户", "余额", "应付余额", "应收余额"
+      ],
+      "intent_examples": [
+        "查询所有供应商",
+        "统计各客户应收余额",
+        "供应商往来账分析",
+        "客户信用额度使用情况"
+      ],
+      "table_names": [
+        "t_supplier", "t_supplier_category", "t_supplier_account",
+        "t_customer", "t_customer_category", "t_customer_account"
+      ],
+      "table_patterns": ["t_supplier*", "t_customer*"],
+      "business_rules": "1. 供应商往来账使用 t_supplier_account 表\n2. 客户往来账使用 t_customer_account 表\n3. 应付余额 payable_balance, 应收余额 receivable_balance\n4. 客户有折扣率 discount_rate",
+      "common_patterns": [
+        {"pattern": "往来余额", "hint": "关联 t_supplier_account 或 t_customer_account"},
+        {"pattern": "分类统计", "hint": "按 category_id GROUP BY"},
+        {"pattern": "信用分析", "hint": "对比 credit_limit 和实际余额"}
+      ],
+      "join_rules": [
+        {
+          "name": "供应商-分类",
+          "left_table": "t_supplier",
+          "left_column": "category_id",
+          "right_table": "t_supplier_category",
+          "right_column": "id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "供应商-往来账",
+          "left_table": "t_supplier",
+          "left_column": "id",
+          "right_table": "t_supplier_account",
+          "right_column": "supplier_id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "供应商-地区",
+          "left_table": "t_supplier",
+          "left_column": "region_id",
+          "right_table": "t_region",
+          "right_column": "id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "客户-分类",
+          "left_table": "t_customer",
+          "left_column": "category_id",
+          "right_table": "t_customer_category",
+          "right_column": "id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "客户-往来账",
+          "left_table": "t_customer",
+          "left_column": "id",
+          "right_table": "t_customer_account",
+          "right_column": "customer_id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "客户-销售员",
+          "left_table": "t_customer",
+          "left_column": "salesman_id",
+          "right_table": "t_employee",
+          "right_column": "id",
+          "join_type": "LEFT"
+        }
+      ],
+      "priority": 6,
+      "icon": "contacts",
+      "color": "#52c41a"
+    },
+    {
+      "name": "purchase",
+      "display_name": "采购管理",
+      "description": "处理采购订单、采购退货相关查询。包括采购统计、退货分析等。",
+      "keywords": [
+        "采购", "进货", "采购订单", "采购单", "采购退货", "到货"
+      ],
+      "intent_examples": [
+        "查询本月采购额",
+        "统计各供应商采购金额",
+        "采购退货率分析",
+        "各分公司采购对比"
+      ],
+      "table_names": [
+        "t_purchase_order", "t_purchase_order_detail",
+        "t_purchase_return", "t_purchase_return_detail"
+      ],
+      "table_patterns": ["t_purchase*"],
+      "business_rules": "1. 采购金额使用 total_amount 字段\n2. 订单状态: 0-草稿, 1-待审核, 2-已审核, 3-已完成, 4-已取消\n3. 包含运费 freight_charge 和其他费用 other_charge\n4. 退货状态: 0-草稿, 1-已审核, 2-已完成",
+      "common_patterns": [
+        {"pattern": "采购统计", "hint": "使用 SUM(total_amount) 配合 GROUP BY"},
+        {"pattern": "分公司对比", "hint": "按 company_id GROUP BY"},
+        {"pattern": "退货分析", "hint": "汇总 t_purchase_return 按原因分类"}
+      ],
+      "join_rules": [
+        {
+          "name": "采购订单-供应商",
+          "left_table": "t_purchase_order",
+          "left_column": "supplier_id",
+          "right_table": "t_supplier",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "采购订单-仓库",
+          "left_table": "t_purchase_order",
+          "left_column": "warehouse_id",
+          "right_table": "t_warehouse",
+          "right_column": "id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "采购订单-分公司",
+          "left_table": "t_purchase_order",
+          "left_column": "company_id",
+          "right_table": "t_company",
+          "right_column": "id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "采购订单-明细",
+          "left_table": "t_purchase_order",
+          "left_column": "id",
+          "right_table": "t_purchase_order_detail",
+          "right_column": "order_id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "采购明细-商品",
+          "left_table": "t_purchase_order_detail",
+          "left_column": "product_id",
+          "right_table": "t_product",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "采购退货-明细",
+          "left_table": "t_purchase_return",
+          "left_column": "id",
+          "right_table": "t_purchase_return_detail",
+          "right_column": "return_id",
+          "join_type": "INNER"
+        }
+      ],
+      "priority": 8,
+      "icon": "shopping",
+      "color": "#52c41a"
+    },
+    {
+      "name": "sales",
+      "display_name": "销售管理",
+      "description": "处理销售订单、销售退货相关查询。包括销售统计、业绩分析、毛利分析等。",
+      "keywords": [
+        "销售", "订单", "销售额", "成交", "销售订单", "销售退货",
+        "业绩", "提成", "毛利"
+      ],
+      "intent_examples": [
+        "查询本月销售额",
+        "统计各客户订单金额",
+        "分析销售毛利",
+        "各销售员业绩排名",
+        "各分公司销售对比"
+      ],
+      "table_names": [
+        "t_sales_order", "t_sales_order_detail",
+        "t_sales_return", "t_sales_return_detail"
+      ],
+      "table_patterns": ["t_sales*"],
+      "business_rules": "1. 销售金额使用 total_amount 字段\n2. 订单状态: 0-草稿, 1-待审核, 2-已审核, 3-已完成, 4-已取消\n3. 毛利使用明细的 gross_profit 字段\n4. 提成金额使用 commission_amount 字段\n5. 退货状态: 0-草稿, 1-已审核, 2-已完成",
+      "common_patterns": [
+        {"pattern": "销售统计", "hint": "使用 SUM(total_amount) 配合 GROUP BY 时间维度"},
+        {"pattern": "毛利分析", "hint": "汇总明细的 gross_profit 字段"},
+        {"pattern": "业绩排名", "hint": "按 salesman_id GROUP BY ORDER BY DESC"}
+      ],
+      "join_rules": [
+        {
+          "name": "销售订单-客户",
+          "left_table": "t_sales_order",
+          "left_column": "customer_id",
+          "right_table": "t_customer",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "销售订单-仓库",
+          "left_table": "t_sales_order",
+          "left_column": "warehouse_id",
+          "right_table": "t_warehouse",
+          "right_column": "id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "销售订单-分公司",
+          "left_table": "t_sales_order",
+          "left_column": "company_id",
+          "right_table": "t_company",
+          "right_column": "id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "销售订单-销售员",
+          "left_table": "t_sales_order",
+          "left_column": "salesman_id",
+          "right_table": "t_employee",
+          "right_column": "id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "销售订单-明细",
+          "left_table": "t_sales_order",
+          "left_column": "id",
+          "right_table": "t_sales_order_detail",
+          "right_column": "order_id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "销售明细-商品",
+          "left_table": "t_sales_order_detail",
+          "left_column": "product_id",
+          "right_table": "t_product",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "销售退货-明细",
+          "left_table": "t_sales_return",
+          "left_column": "id",
+          "right_table": "t_sales_return_detail",
+          "right_column": "return_id",
+          "join_type": "INNER"
+        }
+      ],
+      "priority": 10,
+      "icon": "shopping-cart",
+      "color": "#1890ff"
+    },
+    {
+      "name": "inventory",
+      "display_name": "库存管理",
+      "description": "处理库存查询、库存流水、调拨相关查询。包括实时库存、库存变动分析等。",
+      "keywords": [
+        "库存", "存货", "仓库", "入库", "出库", "调拨",
+        "库存数量", "可用库存", "库存预警"
+      ],
+      "intent_examples": [
+        "查询当前库存数量",
+        "统计各仓库库存金额",
+        "查询调拨记录",
+        "库存预警商品"
+      ],
+      "table_names": [
+        "t_warehouse", "t_inventory", "t_inventory_transaction",
+        "t_warehouse_transfer"
+      ],
+      "table_patterns": ["t_warehouse*", "t_inventory*"],
+      "business_rules": "1. 库存数量使用 quantity 字段\n2. 可用库存 available_qty, 锁定库存 locked_qty\n3. 平均成本 avg_cost_price\n4. 流水方向: 1-入库, -1-出库\n5. 业务类型: PURCHASE_IN, SALES_OUT, TRANSFER, ADJUST, LOSS",
+      "common_patterns": [
+        {"pattern": "库存查询", "hint": "按 warehouse_id 和 product_id 分组"},
+        {"pattern": "调拨记录", "hint": "查询 t_warehouse_transfer"},
+        {"pattern": "库存预警", "hint": "WHERE quantity < min_stock"}
+      ],
+      "join_rules": [
+        {
+          "name": "库存-仓库",
+          "left_table": "t_inventory",
+          "left_column": "warehouse_id",
+          "right_table": "t_warehouse",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "库存-商品",
+          "left_table": "t_inventory",
+          "left_column": "product_id",
+          "right_table": "t_product",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "仓库-分公司",
+          "left_table": "t_warehouse",
+          "left_column": "company_id",
+          "right_table": "t_company",
+          "right_column": "id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "库存流水-仓库",
+          "left_table": "t_inventory_transaction",
+          "left_column": "warehouse_id",
+          "right_table": "t_warehouse",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "库存流水-商品",
+          "left_table": "t_inventory_transaction",
+          "left_column": "product_id",
+          "right_table": "t_product",
+          "right_column": "id",
+          "join_type": "INNER"
+        }
+      ],
+      "priority": 9,
+      "icon": "database",
+      "color": "#faad14"
+    },
+    {
+      "name": "finance",
+      "display_name": "财务管理",
+      "description": "处理应收应付、收付款、费用、提成相关查询。包括账款统计、账龄分析、费用分析等。",
+      "keywords": [
+        "财务", "应收", "应付", "账款", "付款", "收款",
+        "费用", "提成", "逾期", "账龄"
+      ],
+      "intent_examples": [
+        "查询应收账款总额",
+        "统计逾期账款",
+        "分析费用构成",
+        "销售员提成统计"
+      ],
+      "table_names": [
+        "t_accounts_payable", "t_accounts_receivable",
+        "t_payment_record", "t_receipt_record",
+        "t_expense_record", "t_commission_record"
+      ],
+      "table_patterns": ["t_accounts*", "t_payment*", "t_receipt*", "t_expense*", "t_commission*"],
+      "business_rules": "1. 应付/应收状态: 0-未付/未收, 1-部分, 2-已结清\n2. 逾期天数 overdue_days 基于 due_date 计算\n3. 付款方式: CASH, BANK, DRAFT, CHECK\n4. 费用类型: FREIGHT, COMMISSION, ADMIN, OTHER\n5. 提成状态: 0-未结算, 1-已结算",
+      "common_patterns": [
+        {"pattern": "账龄分析", "hint": "使用 overdue_days 或 CASE WHEN 划分账龄区间"},
+        {"pattern": "费用分析", "hint": "按 expense_type GROUP BY"},
+        {"pattern": "提成统计", "hint": "汇总 t_commission_record 按销售员"}
+      ],
+      "join_rules": [
+        {
+          "name": "应付-供应商",
+          "left_table": "t_accounts_payable",
+          "left_column": "supplier_id",
+          "right_table": "t_supplier",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "应收-客户",
+          "left_table": "t_accounts_receivable",
+          "left_column": "customer_id",
+          "right_table": "t_customer",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "付款-供应商",
+          "left_table": "t_payment_record",
+          "left_column": "supplier_id",
+          "right_table": "t_supplier",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "收款-客户",
+          "left_table": "t_receipt_record",
+          "left_column": "customer_id",
+          "right_table": "t_customer",
+          "right_column": "id",
+          "join_type": "INNER"
+        },
+        {
+          "name": "费用-部门",
+          "left_table": "t_expense_record",
+          "left_column": "dept_id",
+          "right_table": "t_department",
+          "right_column": "id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "提成-销售员",
+          "left_table": "t_commission_record",
+          "left_column": "salesman_id",
+          "right_table": "t_employee",
+          "right_column": "id",
+          "join_type": "INNER"
+        }
+      ],
+      "priority": 7,
+      "icon": "dollar",
+      "color": "#722ed1"
+    },
+    {
+      "name": "product",
+      "display_name": "商品管理",
+      "description": "处理商品信息、分类、品牌、价格历史、促销活动相关查询。",
+      "keywords": [
+        "商品", "产品", "货品", "分类", "品类", "品牌",
+        "价格", "促销", "价格历史"
+      ],
+      "intent_examples": [
+        "查询商品信息",
+        "各分类商品数量",
+        "商品价格变动历史",
+        "当前促销活动"
+      ],
+      "table_names": [
+        "t_product", "t_product_category", "t_brand",
+        "t_product_price_history", "t_product_promotion"
+      ],
+      "table_patterns": ["t_product*", "t_brand*"],
+      "business_rules": "1. 商品编码 product_code, 条码 barcode\n2. 采购价 purchase_price, 销售价 sale_price\n3. 成本核算方法: WEIGHTED-加权平均, FIFO-先进先出\n4. 价格历史类型: PURCHASE, SALE\n5. 促销折扣类型: PERCENT-百分比, AMOUNT-固定金额",
+      "common_patterns": [
+        {"pattern": "商品查询", "hint": "支持按名称、编码、分类、品牌筛选"},
+        {"pattern": "价格历史", "hint": "查询 t_product_price_history 按日期排序"},
+        {"pattern": "促销活动", "hint": "WHERE start_date <= 当前日期 <= end_date AND status = 1"}
+      ],
+      "join_rules": [
+        {
+          "name": "商品-分类",
+          "left_table": "t_product",
+          "left_column": "category_id",
+          "right_table": "t_product_category",
+          "right_column": "id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "商品-品牌",
+          "left_table": "t_product",
+          "left_column": "brand_id",
+          "right_table": "t_brand",
+          "right_column": "id",
+          "join_type": "LEFT"
+        },
+        {
+          "name": "价格历史-商品",
+          "left_table": "t_product_price_history",
+          "left_column": "product_id",
+          "right_table": "t_product",
+          "right_column": "id",
+          "join_type": "INNER"
+        }
+      ],
+      "priority": 6,
+      "icon": "appstore",
+      "color": "#13c2c2"
+    }
+  ]
+}
