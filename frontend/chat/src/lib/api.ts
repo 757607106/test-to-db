@@ -1,5 +1,6 @@
 
 import axios from 'axios';
+import { getBackendApiUrl } from '@/utils/apiConfig';
 
 // 数据库连接类型定义
 export interface DBConnection {
@@ -14,15 +15,25 @@ export interface DBConnection {
   updated_at: string;
 }
 
-// API基础URL配置
-const API_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000/api';
+// API基础URL配置 - 动态获取，支持 localhost 和局域网 IP
+const getApiUrl = () => {
+  if (typeof window === 'undefined') {
+    return process.env.NEXT_PUBLIC_BACKEND_API_URL || 'http://localhost:8000/api';
+  }
+  return getBackendApiUrl();
+};
 
 const api = axios.create({
-  baseURL: API_URL,
+  baseURL: getApiUrl(),
   headers: {
     'Content-Type': 'application/json',
   },
 });
+
+// 动态更新 baseURL（客户端初始化后）
+if (typeof window !== 'undefined') {
+  api.defaults.baseURL = getBackendApiUrl();
+}
 
 // 请求拦截器 - 添加认证 token
 api.interceptors.request.use(

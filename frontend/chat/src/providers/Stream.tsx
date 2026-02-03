@@ -405,8 +405,10 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
     _setApiKey(key);
   };
 
-  // Determine final values to use, prioritizing URL params then env vars、最后是动态 URL
-  const finalApiUrl = apiUrl || envApiUrl || dynamicApiUrl;
+  // Determine final values to use
+  // 优先级：1. URL 参数 2. 动态检测的 URL（根据访问地址自动切换）3. 环境变量
+  // 这样可以同时支持 localhost 和局域网 IP 访问
+  const finalApiUrl = apiUrl || dynamicApiUrl || envApiUrl;
   const finalAssistantId = assistantId || envAssistantId;
 
   // Show the form if we: don't have an API URL, or don't have an assistant ID
@@ -493,8 +495,8 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
   return (
     <StreamSession
       apiKey={apiKey}
-      apiUrl={apiUrl}
-      assistantId={assistantId}
+      apiUrl={finalApiUrl}
+      assistantId={finalAssistantId}
     >
       {children}
     </StreamSession>

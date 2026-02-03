@@ -9,10 +9,12 @@ import {
   ReactNode,
   useCallback,
   useState,
+  useEffect,
   Dispatch,
   SetStateAction,
 } from "react";
 import { createClient } from "./client";
+import { getLangGraphApiUrl } from "@/utils/apiConfig";
 
 interface ThreadContextType {
   getThreads: () => Promise<Thread[]>;
@@ -36,6 +38,14 @@ function getThreadSearchMetadata(
 }
 
 export function ThreadProvider({ children }: { children: ReactNode }) {
+  // 动态获取 LangGraph API URL
+  const [dynamicApiUrl, setDynamicApiUrl] = useState<string>("");
+  
+  // 客户端初始化时获取动态 URL
+  useEffect(() => {
+    setDynamicApiUrl(getLangGraphApiUrl());
+  }, []);
+
   // Get environment variables
   const envApiUrl: string | undefined = process.env.NEXT_PUBLIC_API_URL;
   const envAssistantId: string | undefined = process.env.NEXT_PUBLIC_ASSISTANT_ID;
@@ -51,8 +61,9 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
 
-  // Determine final values to use, prioritizing URL params then env vars
-  const finalApiUrl = apiUrl || envApiUrl;
+  // Determine final values to use
+  // 优先级：1. URL 参数 2. 动态检测的 URL（根据访问地址自动切换）3. 环境变量
+  const finalApiUrl = apiUrl || dynamicApiUrl || envApiUrl;
   const finalAssistantId = assistantId || envAssistantId;
 
   const getThreads = useCallback(async (): Promise<Thread[]> => {
