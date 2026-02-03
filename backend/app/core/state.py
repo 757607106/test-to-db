@@ -1,7 +1,21 @@
-from typing import Dict, Any, List, Optional, Literal
+from typing import Dict, Any, List, Optional, Literal, Annotated
 from dataclasses import dataclass, field
 from langgraph.graph.message import MessagesState
 from langgraph.prebuilt.chat_agent_executor import AgentState
+
+
+def add_to_list(left: list, right: list) -> list:
+    """
+    列表累积 reducer
+    
+    用于确保列表字段在状态更新时累积而不是覆盖
+    这对于 error_history、agent_call_history 等字段至关重要
+    """
+    if left is None:
+        left = []
+    if right is None:
+        right = []
+    return left + right
 
 
 @dataclass
@@ -69,7 +83,8 @@ class SQLMessageState(AgentState):
     next_plan: Optional[str] = None
     
     # 已完成的步骤详细信息 (用于时间线展示)
-    timeline: List[Dict[str, Any]] = field(default_factory=list)
+    # 使用 reducer 确保累积而不是覆盖
+    timeline: Annotated[List[Dict[str, Any]], add_to_list] = field(default_factory=list)
 
     # 当前处理阶段
     current_stage: Literal[
@@ -85,8 +100,8 @@ class SQLMessageState(AgentState):
     # 代理间通信
     agent_messages: Dict[str, Any] = field(default_factory=dict)
 
-    # 错误历史
-    error_history: List[Dict[str, Any]] = field(default_factory=list)
+    # 错误历史 - 使用 reducer 确保累积而不是覆盖
+    error_history: Annotated[List[Dict[str, Any]], add_to_list] = field(default_factory=list)
     
     # ===== 防护机制相关字段 =====
     # Supervisor 调用轮次计数
@@ -95,11 +110,11 @@ class SQLMessageState(AgentState):
     # 上一个调用的 Agent
     last_agent_called: Optional[str] = None
     
-    # Agent 调用历史（用于循环检测）
-    agent_call_history: List[str] = field(default_factory=list)
+    # Agent 调用历史（用于循环检测）- 使用 reducer 确保累积
+    agent_call_history: Annotated[List[str], add_to_list] = field(default_factory=list)
     
-    # 已完成的阶段列表
-    completed_stages: List[str] = field(default_factory=list)
+    # 已完成的阶段列表 - 使用 reducer 确保累积
+    completed_stages: Annotated[List[str], add_to_list] = field(default_factory=list)
     
     # ===== 澄清上下文 =====
     # 用于在 SQL 错误等场景下触发澄清

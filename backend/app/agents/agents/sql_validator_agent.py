@@ -13,7 +13,7 @@ import logging
 from typing import Dict, Any, List, Annotated
 
 from langchain_core.tools import tool, InjectedToolCallId
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage, BaseMessage
 from langgraph.prebuilt import create_react_agent, InjectedState
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
@@ -24,6 +24,38 @@ from app.services.sql_validator import sql_validator as sql_validator_service
 from app.schemas.stream_events import create_sql_step_event, create_stage_message_event
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_new_messages_for_parent(
+    messages: List[BaseMessage], 
+    tool_call_id: str, 
+    new_tool_message: ToolMessage
+) -> List[BaseMessage]:
+    """
+    提取需要返回给父图的新消息
+    
+    只返回：
+    1. 调用该工具的 AIMessage（包含 tool_call_id 的那个）
+    2. 新的 ToolMessage
+    
+    这样可以避免消息重复，同时保证 AIMessage 不丢失
+    """
+    new_messages = []
+    
+    # 从后往前找到调用该工具的 AIMessage
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+            for tc in msg.tool_calls:
+                if tc.get('id') == tool_call_id:
+                    new_messages.insert(0, msg)
+                    break
+            if new_messages:
+                break
+    
+    # 添加新的 ToolMessage
+    new_messages.append(new_tool_message)
+    
+    return new_messages
 
 
 @tool
@@ -50,11 +82,13 @@ def validate_sql_syntax(
                 content="验证失败：没有找到需要验证的 SQL 语句",
                 tool_call_id=tool_call_id
             )
+            # 修复：只返回新消息，避免消息重复
+            new_messages = _extract_new_messages_for_parent(current_messages, tool_call_id, error_msg)
             return Command(
                 graph=Command.PARENT,
                 update={
                     "current_stage": "error_recovery",
-                    "messages": current_messages + [error_msg]
+                    "messages": new_messages
                 }
             )
         
@@ -109,10 +143,12 @@ def validate_sql_syntax(
         
         # 返回 Command 更新父图状态
         tool_msg = ToolMessage(content=message, tool_call_id=tool_call_id)
+        # 修复：只返回新消息，避免消息重复
+        new_messages = _extract_new_messages_for_parent(current_messages, tool_call_id, tool_msg)
         update_dict = {
             "validation_result": validation_result,
             "current_stage": next_stage,
-            "messages": current_messages + [tool_msg]
+            "messages": new_messages
         }
         
         # 如果有修复后的 SQL，也更新
@@ -127,11 +163,13 @@ def validate_sql_syntax(
             content=f"SQL 验证失败: {str(e)}",
             tool_call_id=tool_call_id
         )
+        # 修复：只返回新消息，避免消息重复
+        new_messages = _extract_new_messages_for_parent(current_messages, tool_call_id, error_msg)
         return Command(
             graph=Command.PARENT,
             update={
                 "current_stage": "error_recovery",
-                "messages": current_messages + [error_msg]
+                "messages": new_messages
             }
         )
 

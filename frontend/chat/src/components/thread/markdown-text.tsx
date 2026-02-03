@@ -352,7 +352,8 @@ const MarkdownTextImpl: FC<{ children: string; shouldAnimate?: boolean }> = ({
   const { displayedText, isTyping } = useTypewriter(children, 10, !shouldSkipTypewriter);
   
   const textToRender = displayedText;
-  const showCursor = !shouldSkipTypewriter && isTyping;
+  // 隐藏打字机光标效果
+  const showCursor = false;
   
   return (
     <div className="markdown-content relative">

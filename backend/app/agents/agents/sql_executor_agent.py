@@ -6,11 +6,11 @@ SQL执行代理 - 简化版
 - 只负责执行 SQL，不做复杂的错误分析
 - 错误分析交给 error_recovery_agent 和 LLM 处理
 """
-from typing import Dict, Any, Annotated
+from typing import Dict, Any, Annotated, List
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool, InjectedToolCallId
-from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
+from langchain_core.messages import AIMessage, AnyMessage, ToolMessage, BaseMessage
 from langgraph.prebuilt import create_react_agent, InjectedState
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
@@ -18,6 +18,38 @@ from langgraph.types import Command
 from app.core.state import SQLMessageState, SQLExecutionResult, extract_connection_id
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 from app.schemas.stream_events import create_sql_step_event, create_stage_message_event, create_thought_event
+
+
+def _extract_new_messages_for_parent(
+    messages: List[BaseMessage], 
+    tool_call_id: str, 
+    new_tool_message: ToolMessage
+) -> List[BaseMessage]:
+    """
+    提取需要返回给父图的新消息
+    
+    只返回：
+    1. 调用该工具的 AIMessage（包含 tool_call_id 的那个）
+    2. 新的 ToolMessage
+    
+    这样可以避免消息重复，同时保证 AIMessage 不丢失
+    """
+    new_messages = []
+    
+    # 从后往前找到调用该工具的 AIMessage
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+            for tc in msg.tool_calls:
+                if tc.get('id') == tool_call_id:
+                    new_messages.insert(0, msg)
+                    break
+            if new_messages:
+                break
+    
+    # 添加新的 ToolMessage
+    new_messages.append(new_tool_message)
+    
+    return new_messages
 
 
 @tool
@@ -61,10 +93,12 @@ def execute_sql_query(
                 content="错误：未指定数据库连接",
                 tool_call_id=tool_call_id
             )
+            # 修复：只返回新消息，避免消息重复
+            new_messages = _extract_new_messages_for_parent(current_messages, tool_call_id, error_msg)
             return Command(
                 graph=Command.PARENT,
                 update={
-                    "messages": current_messages + [error_msg]
+                    "messages": new_messages
                 }
             )
         
@@ -78,10 +112,12 @@ def execute_sql_query(
                 content=f"找不到连接ID为 {connection_id} 的数据库连接",
                 tool_call_id=tool_call_id
             )
+            # 修复：只返回新消息，避免消息重复
+            new_messages = _extract_new_messages_for_parent(current_messages, tool_call_id, error_msg)
             return Command(
                 graph=Command.PARENT,
                 update={
-                    "messages": current_messages + [error_msg]
+                    "messages": new_messages
                 }
             )
 
@@ -108,12 +144,14 @@ def execute_sql_query(
             content=f"SQL执行成功，返回 {row_count} 条记录",
             tool_call_id=tool_call_id
         )
+        # 修复：只返回新消息，避免消息重复
+        new_messages = _extract_new_messages_for_parent(current_messages, tool_call_id, tool_msg)
         return Command(
             graph=Command.PARENT,
             update={
                 "query_results": result_data,
                 "current_stage": "data_analysis",
-                "messages": current_messages + [tool_msg]
+                "messages": new_messages
             }
         )
 
@@ -142,12 +180,14 @@ def execute_sql_query(
             content=f"SQL 执行失败，正在分析错误...",
             tool_call_id=tool_call_id
         )
+        # 修复：只返回新消息，避免消息重复
+        new_messages = _extract_new_messages_for_parent(current_messages, tool_call_id, tool_msg)
         return Command(
             graph=Command.PARENT,
             update={
                 "current_stage": "error_recovery",
                 "error_history": [error_info],  # 会被合并到现有的 error_history
-                "messages": current_messages + [tool_msg]
+                "messages": new_messages
             }
         )
 

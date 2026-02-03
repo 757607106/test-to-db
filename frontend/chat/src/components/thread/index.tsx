@@ -287,17 +287,47 @@ export function Thread() {
   const hasNoAIOrToolMessages = !messages.find(
     (m) => m.type === "ai" || m.type === "tool",
   );
-  const filteredMessages = messages.filter(
-    (m) =>
-      !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX) &&
-      m.type !== "tool" &&
-      // 过滤掉 LangGraph Supervisor 的技术性交接消息
-      !(typeof m.content === "string" && m.content.includes("Transferring back to")) &&
-      !(Array.isArray(m.content) && m.content.some(c => typeof c === 'object' && 'text' in c && c.text.includes("Transferring back to"))) &&
-      // 过滤 Supervisor 的 Thought/Plan 技术消息（这些应该通过流式事件展示，不作为普通消息）
-      !(typeof m.content === "string" && (m.content.includes("**Thought**:") || m.content.includes("- **Thought**:"))) &&
-      !(Array.isArray(m.content) && m.content.some(c => typeof c === 'object' && 'text' in c && (c.text.includes("**Thought**:") || c.text.includes("- **Thought**:"))))
-  );
+  
+  // 消息去重和过滤
+  // 1. 先基于 ID 去重（保留最后一个同 ID 消息，因为可能是更新后的版本）
+  // 2. 再应用其他过滤条件
+  const filteredMessages = React.useMemo(() => {
+    // 使用 Map 进行去重，相同 ID 保留最后出现的版本
+    const seenIds = new Map<string, Message>();
+    const deduped: Message[] = [];
+    
+    for (const m of messages) {
+      if (m.id) {
+        // 如果有 ID，检查是否已存在
+        if (seenIds.has(m.id)) {
+          // 更新为最新版本（替换之前的位置）
+          const existingIndex = deduped.findIndex(msg => msg.id === m.id);
+          if (existingIndex !== -1) {
+            deduped[existingIndex] = m;
+          }
+        } else {
+          seenIds.set(m.id, m);
+          deduped.push(m);
+        }
+      } else {
+        // 没有 ID 的消息直接添加
+        deduped.push(m);
+      }
+    }
+    
+    // 应用过滤条件
+    return deduped.filter(
+      (m) =>
+        !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX) &&
+        m.type !== "tool" &&
+        // 过滤掉 LangGraph Supervisor 的技术性交接消息
+        !(typeof m.content === "string" && m.content.includes("Transferring back to")) &&
+        !(Array.isArray(m.content) && m.content.some(c => typeof c === 'object' && 'text' in c && c.text.includes("Transferring back to"))) &&
+        // 过滤 Supervisor 的 Thought/Plan 技术消息（这些应该通过流式事件展示，不作为普通消息）
+        !(typeof m.content === "string" && (m.content.includes("**Thought**:") || m.content.includes("- **Thought**:"))) &&
+        !(Array.isArray(m.content) && m.content.some(c => typeof c === 'object' && 'text' in c && (c.text.includes("**Thought**:") || c.text.includes("- **Thought**:"))))
+    );
+  }, [messages]);
 
   return (
     <div className="flex h-screen w-full overflow-hidden">

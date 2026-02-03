@@ -6,11 +6,11 @@ Skill 模式支持：
 - 当 skill_context.enabled = True 时，使用 Skill 预加载的表结构
 - 当 skill_context.enabled = False 时，使用全库检索模式
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool, InjectedToolCallId
-from langchain_core.messages import HumanMessage, AIMessage, AnyMessage, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessage, AnyMessage, ToolMessage, BaseMessage
 from langgraph.prebuilt import create_react_agent, InjectedState
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
@@ -21,6 +21,38 @@ from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 from app.db.session import SessionLocal
 from app.services.text2sql_utils import retrieve_relevant_schema, get_value_mappings, analyze_query_with_llm
 from app.schemas.stream_events import create_stage_message_event, create_thought_event, create_sql_step_event
+
+
+def _extract_new_messages_for_parent(
+    messages: List[BaseMessage], 
+    tool_call_id: str, 
+    new_tool_message: ToolMessage
+) -> List[BaseMessage]:
+    """
+    提取需要返回给父图的新消息
+    
+    只返回：
+    1. 调用该工具的 AIMessage（包含 tool_call_id 的那个）
+    2. 新的 ToolMessage
+    
+    这样可以避免消息重复，同时保证 AIMessage 不丢失
+    """
+    new_messages = []
+    
+    # 从后往前找到调用该工具的 AIMessage
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+            for tc in msg.tool_calls:
+                if tc.get('id') == tool_call_id:
+                    new_messages.insert(0, msg)
+                    break
+            if new_messages:
+                break
+    
+    # 添加新的 ToolMessage
+    new_messages.append(new_tool_message)
+    
+    return new_messages
 
 
 @tool
@@ -83,9 +115,11 @@ def retrieve_database_schema(
     connection_id = state.get("connection_id") or extract_connection_id(state)
     if not connection_id:
         error_msg = ToolMessage(content="错误：未指定数据库连接", tool_call_id=tool_call_id)
+        # 修复：只返回新消息，避免消息重复
+        new_messages = _extract_new_messages_for_parent(current_messages, tool_call_id, error_msg)
         return Command(
             graph=Command.PARENT,
-            update={"messages": current_messages + [error_msg]}
+            update={"messages": new_messages}
         )
     
     # ========== Skill 模式：使用预加载的 schema，跳过全库检索 ==========
@@ -124,6 +158,8 @@ def retrieve_database_schema(
                 content=f"已加载业务领域 [{skill_names}] 的表结构: {table_count} 个表",
                 tool_call_id=tool_call_id
             )
+            # 修复：只返回新消息，避免消息重复
+            new_messages = _extract_new_messages_for_parent(current_messages, tool_call_id, tool_msg)
             return Command(
                 graph=Command.PARENT,
                 update={
@@ -135,7 +171,7 @@ def retrieve_database_schema(
                         "skill_names": [s.get("name") for s in matched_skills],
                     },
                     "current_stage": "sql_generation",
-                    "messages": current_messages + [tool_msg]
+                    "messages": new_messages
                 }
             )
     
@@ -164,6 +200,8 @@ def retrieve_database_schema(
                 content=f"已识别到 {table_count} 个相关表。分析结果：{query_analysis.get('query_intent', '')}",
                 tool_call_id=tool_call_id
             )
+            # 修复：只返回新消息，避免消息重复
+            new_messages = _extract_new_messages_for_parent(current_messages, tool_call_id, tool_msg)
             return Command(
                 graph=Command.PARENT,
                 update={
@@ -174,16 +212,18 @@ def retrieve_database_schema(
                     },
                     "query_analysis": query_analysis,  # 关键：将分析结果共享给后续 Agent
                     "current_stage": "sql_generation",
-                    "messages": current_messages + [tool_msg]
+                    "messages": new_messages
                 }
             )
         finally:
             db.close()
     except Exception as e:
         error_msg = ToolMessage(content=f"检索失败: {str(e)}", tool_call_id=tool_call_id)
+        # 修复：只返回新消息，避免消息重复
+        new_messages = _extract_new_messages_for_parent(current_messages, tool_call_id, error_msg)
         return Command(
             graph=Command.PARENT,
-            update={"messages": current_messages + [error_msg]}
+            update={"messages": new_messages}
         )
 
 

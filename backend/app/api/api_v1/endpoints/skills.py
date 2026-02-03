@@ -200,7 +200,7 @@ async def apply_discovered_skills(
     current_user: User = Depends(deps.get_current_user),
     connection_id: int = Query(..., description="数据库连接ID"),
     skill_names: List[str] = Query(None, description="要应用的 Skill 名称列表（已废弃，请使用 body）"),
-    suggestions: Optional[List[dict]] = Body(None, description="完整的 suggestions 数据"),
+    suggestions: Optional[List[dict]] = Body(None, embed=True, description="完整的 suggestions 数据"),
 ) -> Any:
     """
     应用发现的 Skill 建议

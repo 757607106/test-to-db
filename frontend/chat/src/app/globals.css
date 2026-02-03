@@ -149,3 +149,8 @@
     box-shadow: inset 9px 0 6px -1px rgb(0 0 0 / 0.02);
   }
 }
+
+/* 隐藏 Next.js 开发模式的错误/警告指示器 */
+nextjs-portal {
+  display: none !important;
+}
