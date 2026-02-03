@@ -296,10 +296,13 @@ export function CommandBar({
           <div className="h-4 w-px bg-border mx-1" /> {/* 分隔线 */}
         </>
       )}
+      {/* 复制按钮已隐藏
       <ContentCopyable
         content={content}
         disabled={isLoading}
       />
+      */}
+      {/* 重新生成按钮已隐藏
       {isAiMessage && !!handleRegenerate && (
         <TooltipIconButton
           disabled={isLoading}
@@ -310,6 +313,7 @@ export function CommandBar({
           <RefreshCcw />
         </TooltipIconButton>
       )}
+      */}
       {showEdit && (
         <TooltipIconButton
           disabled={isLoading}
