@@ -14,7 +14,40 @@ import {
   SetStateAction,
 } from "react";
 import { createClient } from "./client";
-import { getLangGraphApiUrl } from "@/utils/apiConfig";
+import { getLangGraphApiUrl, getBackendApiUrl } from "@/utils/apiConfig";
+
+// 轻量级 Thread 摘要类型
+interface ThreadSummary {
+  thread_id: string;
+  created_at?: string;
+  updated_at?: string;
+  status?: string;
+  first_message?: string;
+  metadata?: Record<string, unknown>;
+}
+
+// 分页响应类型
+interface ThreadSearchResponse {
+  threads: ThreadSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
+// 将 ThreadSummary 转换为 Thread 类型以兼容现有代码
+function summaryToThread(summary: ThreadSummary): Thread {
+  return {
+    thread_id: summary.thread_id,
+    created_at: summary.created_at || new Date().toISOString(),
+    updated_at: summary.updated_at || new Date().toISOString(),
+    status: summary.status || "idle",
+    metadata: summary.metadata || {},
+    values: summary.first_message ? {
+      messages: [{ content: summary.first_message }]
+    } : {},
+  } as Thread;
+}
 
 interface ThreadContextType {
   getThreads: () => Promise<Thread[]>;
@@ -67,28 +100,54 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
   const finalAssistantId = assistantId || envAssistantId;
 
   const getThreads = useCallback(async (): Promise<Thread[]> => {
-    if (!finalApiUrl || !finalAssistantId) return [];
-    const client = createClient(finalApiUrl, getApiKey() ?? undefined);
+    if (!finalAssistantId) return [];
+    
+    try {
+      // 使用后端分页代理接口，避免 LangGraph 返回数据过大
+      const backendUrl = getBackendApiUrl();
+      const response = await fetch(`${backendUrl}/threads/search`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          metadata: getThreadSearchMetadata(finalAssistantId),
+          limit: 50,
+          offset: 0,
+        }),
+      });
 
-    const threads = await client.threads.search({
-      metadata: {
-        ...getThreadSearchMetadata(finalAssistantId),
-      },
-      limit: 100,
-    });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch threads: ${response.status}`);
+      }
 
-    return threads;
-  }, [finalApiUrl, finalAssistantId]);
+      const data: ThreadSearchResponse = await response.json();
+      return data.threads.map(summaryToThread);
+    } catch (error) {
+      console.error("Error fetching threads:", error);
+      return [];
+    }
+  }, [finalAssistantId]);
 
   const deleteThread = useCallback(async (threadId: string): Promise<void> => {
-    if (!finalApiUrl) throw new Error("API URL is required");
-    const client = createClient(finalApiUrl, getApiKey() ?? undefined);
+    try {
+      // 使用后端代理接口删除 thread
+      const backendUrl = getBackendApiUrl();
+      const response = await fetch(`${backendUrl}/threads/${threadId}`, {
+        method: "DELETE",
+      });
 
-    await client.threads.delete(threadId);
+      if (!response.ok && response.status !== 404) {
+        throw new Error(`Failed to delete thread: ${response.status}`);
+      }
 
-    // Remove the thread from local state
-    setThreads(prevThreads => prevThreads.filter(thread => thread.thread_id !== threadId));
-  }, [finalApiUrl]);
+      // Remove the thread from local state
+      setThreads(prevThreads => prevThreads.filter(thread => thread.thread_id !== threadId));
+    } catch (error) {
+      console.error("Error deleting thread:", error);
+      throw error;
+    }
+  }, []);
 
   const value = {
     getThreads,
