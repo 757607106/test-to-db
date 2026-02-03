@@ -387,14 +387,15 @@ def extract_sql_from_llm_response(response: str) -> str:
     return response
 
 
-def retrieve_relevant_schema(db: Session, connection_id: int, query: str) -> Dict[str, Any]:
+def retrieve_relevant_schema(db: Session, connection_id: int, query: str, query_analysis: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     基于自然语言查询检索相关的表结构信息
     使用Neo4j图数据库和LLM找到相关表和列
     """
     try:
         # 1. 使用LLM分析查询并提取关键实体和意图
-        query_analysis = analyze_query_with_llm(query)
+        if not query_analysis:
+            query_analysis = analyze_query_with_llm(query)
 
         # 连接到Neo4j
         driver = GraphDatabase.driver(

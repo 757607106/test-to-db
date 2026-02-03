@@ -104,6 +104,17 @@ class InsightEvent(BaseModel):
     time_ms: int = Field(default=0, description="分析耗时(毫秒)")
 
 
+class ThoughtEvent(BaseModel):
+    """
+    思维过程事件 - 展示 Agent 的推理过程 (CoT)
+    """
+    type: Literal["thought"] = "thought"
+    agent: str = Field(description="Agent 名称")
+    thought: str = Field(description="思考内容")
+    plan: Optional[str] = Field(default=None, description="下一步计划")
+    time_ms: int = Field(default=0, description="耗时(毫秒)")
+
+
 class NodeStatusEvent(BaseModel):
     """
     节点状态事件 - 展示 Agent 节点的执行状态
@@ -247,6 +258,21 @@ def create_insight_event(
         insights=insight_items,
         recommendations=recommendations or [],
         raw_content=raw_content,
+        time_ms=time_ms
+    ).model_dump()
+
+
+def create_thought_event(
+    agent: str,
+    thought: str,
+    plan: Optional[str] = None,
+    time_ms: int = 0
+) -> Dict[str, Any]:
+    """创建思维过程事件"""
+    return ThoughtEvent(
+        agent=agent,
+        thought=thought,
+        plan=plan,
         time_ms=time_ms
     ).model_dump()
 

@@ -273,7 +273,10 @@ export function Thread() {
       m.type !== "tool" &&
       // 过滤掉 LangGraph Supervisor 的技术性交接消息
       !(typeof m.content === "string" && m.content.includes("Transferring back to")) &&
-      !(Array.isArray(m.content) && m.content.some(c => typeof c === 'object' && 'text' in c && c.text.includes("Transferring back to")))
+      !(Array.isArray(m.content) && m.content.some(c => typeof c === 'object' && 'text' in c && c.text.includes("Transferring back to"))) &&
+      // 过滤 Supervisor 的 Thought/Plan 技术消息（这些应该通过流式事件展示，不作为普通消息）
+      !(typeof m.content === "string" && (m.content.includes("**Thought**:") || m.content.includes("- **Thought**:"))) &&
+      !(Array.isArray(m.content) && m.content.some(c => typeof c === 'object' && 'text' in c && (c.text.includes("**Thought**:") || c.text.includes("- **Thought**:"))))
   );
 
   return (

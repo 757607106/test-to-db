@@ -20,7 +20,7 @@ from app.core.state import SQLMessageState, extract_connection_id
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 from app.db.session import SessionLocal
 from app.services.text2sql_utils import retrieve_relevant_schema, get_value_mappings, analyze_query_with_llm
-from app.schemas.stream_events import create_stage_message_event
+from app.schemas.stream_events import create_stage_message_event, create_thought_event, create_sql_step_event
 
 
 @tool
@@ -58,42 +58,88 @@ def retrieve_database_schema(
     
     Args:
         query: 用户查询
-    
-    Returns:
-        Command: 更新父图状态的命令
     """
-    # 优先从 state 直接获取，如果没有则从 messages 中提取
-    connection_id = state.get("connection_id")
-    if not connection_id:
-        connection_id = extract_connection_id(state)
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    connection_id = state.get("connection_id") or extract_connection_id(state)
     if not connection_id:
         return Command(
             graph=Command.PARENT,
-            update={
-                "messages": [ToolMessage(
-                    content="错误：未指定数据库连接，请先在界面中选择一个数据库",
-                    tool_call_id=tool_call_id
-                )]
-            }
+            update={"messages": [ToolMessage(content="错误：未指定数据库连接", tool_call_id=tool_call_id)]}
         )
     
-    print("开始分析用户查询...", connection_id)
+    # ========== Skill 模式：使用预加载的 schema，跳过全库检索 ==========
+    skill_context = state.get("skill_context", {})
+    if skill_context.get("enabled"):
+        skill_schema_info = skill_context.get("schema_info", {})
+        if skill_schema_info.get("tables"):
+            # 将 Skill schema 转换为 schema_context 格式
+            schema_context = {}
+            for table in skill_schema_info.get("tables", []):
+                table_name = table.get("table_name")
+                if table_name:
+                    schema_context[table_name] = {
+                        "description": table.get("description", ""),
+                        "columns": []
+                    }
+            
+            for col in skill_schema_info.get("columns", []):
+                table_name = col.get("table_name")
+                if table_name and table_name in schema_context:
+                    schema_context[table_name]["columns"].append({
+                        "column_name": col.get("column_name"),
+                        "data_type": col.get("data_type"),
+                        "description": col.get("description", ""),
+                        "is_primary_key": col.get("is_primary_key", False),
+                        "is_foreign_key": col.get("is_foreign_key", False),
+                    })
+            
+            table_count = len(schema_context)
+            matched_skills = skill_context.get("matched_skills", [])
+            skill_names = ", ".join(s.get("display_name", s.get("name", "未知")) for s in matched_skills)
+            
+            logger.info(f"[SchemaAgent] Skill 模式: {skill_names}, 表数量: {table_count}")
+            
+            return Command(
+                graph=Command.PARENT,
+                update={
+                    "schema_info": {
+                        "schema_context": schema_context,
+                        "skill_tables": [t.get("table_name") for t in skill_schema_info.get("tables", [])],
+                        "relationships": skill_schema_info.get("relationships", []),
+                        "source": "skill",
+                        "skill_names": [s.get("name") for s in matched_skills],
+                    },
+                    "current_stage": "sql_generation",
+                    "messages": [ToolMessage(
+                        content=f"已加载业务领域 [{skill_names}] 的表结构: {table_count} 个表",
+                        tool_call_id=tool_call_id
+                    )]
+                }
+            )
+    
+    # ========== 全库检索模式 ==========
     try:
         db = SessionLocal()
         try:
-            # 获取相关表结构
+            # 1. 核心改进：优先使用 state 中已有的分析结果，避免重复 LLM 调用
+            query_analysis = state.get("query_analysis")
+            if not query_analysis:
+                query_analysis = analyze_query_with_llm(query)
+            
+            # 获取相关表结构 (传入已有的分析结果)
             schema_context = retrieve_relevant_schema(
                 db=db,
                 connection_id=connection_id,
-                query=query
+                query=query,
+                query_analysis=query_analysis
             )
             
             # 获取值映射
             value_mappings = get_value_mappings(db, schema_context)
+            table_count = len(schema_context.get("tables", [])) if isinstance(schema_context, dict) else len(schema_context)
             
-            table_count = len(schema_context) if schema_context else 0
-            
-            # 返回 Command 更新父图状态（关键：graph=Command.PARENT）
             return Command(
                 graph=Command.PARENT,
                 update={
@@ -102,9 +148,10 @@ def retrieve_database_schema(
                         "value_mappings": value_mappings,
                         "source": "full_schema_retrieval"
                     },
+                    "query_analysis": query_analysis,  # 关键：将分析结果共享给后续 Agent
                     "current_stage": "sql_generation",
                     "messages": [ToolMessage(
-                        content=f"已获取 {table_count} 个相关表的结构信息，可以继续生成 SQL",
+                        content=f"已识别到 {table_count} 个相关表。分析结果：{query_analysis.get('query_intent', '')}",
                         tool_call_id=tool_call_id
                     )]
                 }
@@ -114,13 +161,8 @@ def retrieve_database_schema(
     except Exception as e:
         return Command(
             graph=Command.PARENT,
-            update={
-                "messages": [ToolMessage(
-                    content=f"获取数据库结构失败: {str(e)}",
-                    tool_call_id=tool_call_id
-                )]
-            }
-        )
+            update={"messages": [ToolMessage(content=f"检索失败: {str(e)}", tool_call_id=tool_call_id)]})
+
 
 
 @tool
@@ -183,26 +225,19 @@ class SchemaAnalysisAgent:
         )
     
     def _create_system_prompt(self, state: SQLMessageState, config: RunnableConfig) -> list[AnyMessage]:
-        """创建系统提示"""
+        """创建系统提示词 - 增强推理能力"""
         system_msg = f"""你是一个专业的数据库模式分析专家。
+你的任务是：深入分析用户查询，识别出回答该查询所必须的数据库表、字段以及它们之间的关联关系。
 
-你的唯一任务是：获取与用户查询相关的数据库表结构信息。
+**工作原则：**
+1. **语义优先**：不要只看字面意思，要理解用户查询背后的业务逻辑（例如：“最近的订单”意味着你需要订单表及其时间字段）。
+2. **关联识别**：如果查询涉及多个实体，必须识别出用于 JOIN 的关联字段。
+3. **输出要求**：使用 retrieve_database_schema 工具来获取实际的结构信息。在调用工具前，请简要陈述你的推理过程。
 
-工作流程：
-1. 使用 analyze_user_query 工具分析用户查询
-2. 使用 retrieve_database_schema 工具获取相关表结构
-
-**严格限制（必须遵守）：**
-- **只输出表结构信息**，不要给任何建议、解释或"查询逻辑"。
-- **严禁问用户问题**。澄清由系统其他模块处理，你不需要关心。
-- **严禁设定默认值**。如果用户说"最近"，你只需获取相关的日期字段，不要猜测范围。
-- **严禁输出"建议的查询逻辑"**。你的职责仅限于获取 schema，不负责规划查询。
-
-输出格式：
-- 只需简洁列出找到的相关表和字段
-- 不要解释如何使用这些字段
-- 不要给出任何建议"""
-
+**严禁行为：**
+- 严禁猜测不存在的字段。
+- 严禁在没有获取到 Schema 的情况下生成 SQL 代码。
+"""
         return [{"role": "system", "content": system_msg}] + state["messages"]
 
     async def process(self, state: SQLMessageState) -> Dict[str, Any]:
@@ -308,6 +343,8 @@ class SchemaAnalysisAgent:
             "skill_names": [s.get("name") for s in matched_skills],
         }
         state["current_stage"] = "sql_generation"
+        state["thought"] = f"检测到用户查询属于 [{skill_names}] 业务领域，我将加载预定义的行业知识库和表结构，以确保 SQL 生成符合业务逻辑。"
+        state["next_plan"] = "获取表结构后，我将把任务移交给 SQL 生成专家。"
         
         # 构建消息
         table_count = len(schema_context)
@@ -316,6 +353,20 @@ class SchemaAnalysisAgent:
         summary = f"已加载业务领域 [{skill_names}] 的表结构: {table_count} 个表, {column_count} 个字段"
         writer = get_stream_writer()
         if writer:
+            # 发送 sql_step 事件 - 关键！这是 ThinkingProcess 执行进度条的数据源
+            writer(create_sql_step_event(
+                step="schema_agent",
+                status="completed",
+                result=f"识别到 {table_count} 个相关表（Skill 模式）"
+            ))
+            
+            # 发送思维过程事件
+            writer(create_thought_event(
+                agent="schema_agent",
+                thought=state["thought"],
+                plan=state["next_plan"]
+            ))
+            
             writer(create_stage_message_event(
                 message=f"已完成 Schema 分析（Skill 模式），识别到 {table_count} 个相关表。",
                 step="schema_agent"
@@ -349,10 +400,26 @@ class SchemaAnalysisAgent:
         # 更新状态
         state["current_stage"] = "sql_generation"
         state["agent_messages"]["schema_agent"] = result
+        
+        state["thought"] = "我正在对全库进行语义搜索，以识别与您问题最相关的表和字段。我不仅会查找字面匹配，还会通过图数据库寻找潜在的关联关系。"
+        state["next_plan"] = "锁定表结构后，我将把上下文传递给 SQL 生成专家。"
+        
         writer = get_stream_writer()
         if writer:
+            # 发送 sql_step 事件 - 关键！
+            writer(create_sql_step_event(
+                step="schema_agent",
+                status="completed",
+                result="已完成全库 Schema 智能检索"
+            ))
+            
+            writer(create_thought_event(
+                agent="schema_agent",
+                thought=state["thought"],
+                plan=state["next_plan"]
+            ))
             writer(create_stage_message_event(
-                message="已完成 Schema 分析，准备生成 SQL。",
+                message="已完成全库 Schema 智能检索，准备生成 SQL。",
                 step="schema_agent"
             ))
         

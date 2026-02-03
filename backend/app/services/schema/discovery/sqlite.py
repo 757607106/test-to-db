@@ -26,8 +26,10 @@ def discover_sqlite_schema(inspector) -> List[Dict[str, Any]]:
 
     for table_name in tables:
         print(f"Processing table/view: {table_name}")
+        # Get table comment (SQLite doesn't support table comments in standard way, but we keep structure)
         table_info = {
             "table_name": table_name,
+            "description": f"Auto-discovered table: {table_name}",
             "columns": [],
             "is_view": table_name in views
         }
@@ -41,6 +43,7 @@ def discover_sqlite_schema(inspector) -> List[Dict[str, Any]]:
                 column_info = {
                     "column_name": column["name"],
                     "data_type": str(column["type"]),
+                    "description": column.get("comment") or f"Auto-discovered column: {column['name']}",
                     "is_primary_key": column.get("primary_key", False),  # SQLite provides primary_key info directly
                     "is_foreign_key": False,
                     "is_nullable": column.get("nullable", True)

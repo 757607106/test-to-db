@@ -258,12 +258,15 @@ async def data_analyst_node(state: SQLMessageState, writer: StreamWriter) -> Dic
 @streaming_node(step_name="chart_generator", fallback_stage="chart_done")
 async def chart_generator_node(state: SQLMessageState, writer: StreamWriter) -> Dict[str, Any]:
     """
-    Chart Generator 节点 - 生成图表配置
+    Chart Generator 节点 - 生成图表配置并发送数据查询事件
     
     调用 chart_generator_agent 根据数据生成 Recharts 图表配置。
     非关键节点，失败时返回空配置继续执行。
+    
+    重要：此节点负责发送 data_query 事件，前端 DataChartDisplay 组件依赖此事件渲染图表。
     """
     from app.agents.agents.chart_generator_agent import chart_generator_agent
+    from app.schemas.stream_events import create_stage_message_event, create_data_query_event
     
     start_time = time.time()
     agent = get_custom_agent(state, "chart_generator", chart_generator_agent)
@@ -273,9 +276,10 @@ async def chart_generator_node(state: SQLMessageState, writer: StreamWriter) -> 
     # ✅ 修复：保留 error_recovery 状态
     if result.get("current_stage") != "error_recovery":
         result["current_stage"] = "chart_done"
+        
         if writer:
-            from app.schemas.stream_events import create_stage_message_event
-            chart_config = result.get("chart_config")
+            # 1. 发送阶段消息
+            chart_config = result.get("chart_config") or state.get("chart_config")
             message = "图表配置已生成。"
             if isinstance(chart_config, dict):
                 chart_type = chart_config.get("type")
@@ -286,8 +290,126 @@ async def chart_generator_node(state: SQLMessageState, writer: StreamWriter) -> 
                 step="chart_generator",
                 time_ms=elapsed_ms
             ))
+            
+            # 2. 发送 data_query 事件（前端 DataChartDisplay 依赖此事件）
+            _send_data_query_event(state, result, writer)
     
     return result
+
+
+def _send_data_query_event(state: SQLMessageState, result: Dict[str, Any], writer: StreamWriter):
+    """
+    发送 data_query 事件到前端
+    
+    此事件是前端 DataChartDisplay 组件渲染图表的数据源。
+    从 execution_result 中提取数据并生成图表配置。
+    """
+    from app.schemas.stream_events import create_data_query_event
+    
+    try:
+        # 获取执行结果
+        exec_result = state.get("execution_result")
+        if not exec_result:
+            logger.warning("[chart_generator_node] 无执行结果，跳过 data_query 事件")
+            return
+        
+        # 提取数据（兼容 Pydantic 对象和 dict）
+        if hasattr(exec_result, 'data'):
+            data = exec_result.data
+            success = getattr(exec_result, 'success', True)
+        else:
+            data = exec_result.get('data', {})
+            success = exec_result.get('success', True)
+        
+        if not success or not data:
+            logger.warning("[chart_generator_node] 执行失败或无数据，跳过 data_query 事件")
+            return
+        
+        # 提取 columns 和 rows
+        columns = data.get("columns", []) if isinstance(data, dict) else []
+        raw_rows = data.get("data", []) if isinstance(data, dict) else []
+        row_count = data.get("row_count", len(raw_rows)) if isinstance(data, dict) else len(raw_rows)
+        
+        if not columns:
+            logger.warning("[chart_generator_node] 无列信息，跳过 data_query 事件")
+            return
+        
+        # 转换数据格式：数组数组 -> 对象数组
+        rows = []
+        for raw_row in raw_rows:
+            if isinstance(raw_row, list) and len(raw_row) == len(columns):
+                rows.append(dict(zip(columns, raw_row)))
+            elif isinstance(raw_row, dict):
+                rows.append(raw_row)
+        
+        # 获取图表配置（优先使用结果中的，其次使用状态中的，最后自动生成）
+        chart_config = result.get("chart_config") or state.get("chart_config")
+        if not chart_config and columns and rows:
+            chart_config = _generate_chart_config_for_data(columns, rows)
+        
+        # 发送事件
+        writer(create_data_query_event(
+            columns=columns,
+            rows=rows[:100],  # 限制前100行，避免数据量过大
+            row_count=row_count,
+            chart_config=chart_config,
+            title=None  # 可以后续从 user_query 中提取
+        ))
+        
+        logger.info(f"[chart_generator_node] data_query 事件已发送: {len(columns)} 列, {row_count} 行")
+        
+    except Exception as e:
+        logger.error(f"[chart_generator_node] 发送 data_query 事件失败: {e}")
+
+
+def _generate_chart_config_for_data(columns: list, rows: list) -> Dict[str, Any]:
+    """
+    根据数据自动生成图表配置
+    """
+    if not columns or not rows:
+        return None
+    
+    # 分析列类型
+    numeric_columns = []
+    category_columns = []
+    date_columns = []
+    
+    for col in columns:
+        col_lower = col.lower()
+        if any(kw in col_lower for kw in ['date', 'time', '日期', '时间', 'day', 'month', 'year']):
+            date_columns.append(col)
+        elif any(kw in col_lower for kw in ['name', 'type', 'category', '名称', '类型', '分类', 'id']):
+            category_columns.append(col)
+        else:
+            if rows:
+                first_val = rows[0].get(col) if isinstance(rows[0], dict) else None
+                if isinstance(first_val, (int, float)):
+                    numeric_columns.append(col)
+                else:
+                    category_columns.append(col)
+    
+    # 决定图表类型
+    chart_type = "bar"
+    if date_columns:
+        x_axis = date_columns[0]
+        chart_type = "line"
+    elif category_columns:
+        x_axis = category_columns[0]
+        chart_type = "bar" if len(rows) <= 10 else "line"
+    elif numeric_columns:
+        x_axis = numeric_columns[0]
+    else:
+        x_axis = columns[0]
+    
+    y_axis = numeric_columns[0] if numeric_columns else (columns[1] if len(columns) > 1 else columns[0])
+    
+    return {
+        "type": chart_type,
+        "xAxis": x_axis,
+        "yAxis": y_axis,
+        "dataKey": y_axis,
+        "xDataKey": x_axis
+    }
 
 
 # ============================================================================

@@ -31,7 +31,7 @@ from app.core.state import SQLMessageState
 from app.core.llms import get_default_model
 from app.core.agent_config import get_agent_llm, CORE_AGENT_CHART_ANALYST
 from app.core.llm_wrapper import LLMWrapper, LLMWrapperConfig
-from app.schemas.stream_events import create_sql_step_event, create_insight_event, create_stage_message_event
+from app.schemas.stream_events import create_sql_step_event, create_insight_event, create_stage_message_event, create_thought_event
 from app.agents.nodes.base import ErrorStage
 
 logger = logging.getLogger(__name__)
@@ -233,8 +233,14 @@ class DataAnalystAgent:
             writer(create_sql_step_event(
                 step="data_analyst",
                 status="running",
-                result="正在分析数据...",
+                result="正在深度解读查询结果，提取核心洞察...",
                 time_ms=0
+            ))
+            # 推送思考过程
+            writer(create_thought_event(
+                agent="data_analyst_agent",
+                thought="我正在分析 SQL 执行返回的原始数据。我将从趋势、异常指标和维度对比三个方面进行深度拆解，以为您提供具有业务价值的建议。",
+                plan="完成数据分析后，我将进入图表建议阶段。"
             ))
         
         try:

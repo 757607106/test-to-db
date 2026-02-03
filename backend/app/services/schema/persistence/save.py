@@ -49,12 +49,19 @@ def save_discovered_schema(db: Session, connection_id: int, schema_info: List[Di
         if existing_table:
             print(f"Table {table_name} already exists, updating...")
             table_obj = existing_table
+            # 改进：如果抓取到了新描述，则更新
+            if table_info.get("description") and table_obj.description != table_info.get("description"):
+                crud.schema_table.update(
+                    db=db, 
+                    db_obj=table_obj, 
+                    obj_in=schemas.SchemaTableUpdate(description=table_info.get("description"))
+                )
         else:
             print(f"Creating new table: {table_name}")
             table_create = schemas.SchemaTableCreate(
                 connection_id=connection_id,
                 table_name=table_name,
-                description=f"Auto-discovered table: {table_name}",
+                description=table_info.get("description") or f"Auto-discovered table: {table_name}",
                 ui_metadata={"position": {"x": 0, "y": 0}}
             )
             table_obj = crud.schema_table.create(db=db, obj_in=table_create)
@@ -79,6 +86,7 @@ def save_discovered_schema(db: Session, connection_id: int, schema_info: List[Di
                 print(f"Column {column_name} already exists, updating...")
                 column_update = schemas.SchemaColumnUpdate(
                     data_type=column_info.get("data_type") or "",
+                    description=column_info.get("description"), # 关键：更新描述
                     is_primary_key=column_info.get("is_primary_key", False),
                     is_foreign_key=column_info.get("is_foreign_key", False),
                     is_unique=column_info.get("is_unique", False)
@@ -92,7 +100,7 @@ def save_discovered_schema(db: Session, connection_id: int, schema_info: List[Di
                     table_id=table_obj.id,
                     column_name=column_name,
                     data_type=column_info.get("data_type") or "",
-                    description=f"Auto-discovered column: {column_name}",
+                    description=column_info.get("description") or f"Auto-discovered column: {column_name}",
                     is_primary_key=column_info.get("is_primary_key", False),
                     is_foreign_key=column_info.get("is_foreign_key", False),
                     is_unique=column_info.get("is_unique", False)

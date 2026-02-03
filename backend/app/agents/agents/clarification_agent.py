@@ -183,6 +183,13 @@ def _handle_ambiguous_query_clarification(
 - 查询包含具体数值（如"大于100"）
 - 查询意图已经非常明确
 
+**严禁询问的技术问题（绝对不能问用户这些）**:
+- 数据库类型（MySQL、PostgreSQL、SQLite 等）
+- 字段的数据类型或存储格式（如日期格式 YYYY-MM-DD、VARCHAR 等）
+- 表名、字段名、SQL 语法相关问题
+- 任何需要用户了解数据库技术知识才能回答的问题
+这些信息应由系统自动从数据库元数据获取，不应询问用户。
+
 请返回 JSON 格式:
 {{
     "needs_clarification": true/false,
@@ -381,6 +388,16 @@ class ClarificationAgent:
 用户查询: {user_query}
 
 Schema 信息和上下文已通过状态注入，请直接使用工具进行检测。"""
+
+        from langgraph.config import get_stream_writer
+        from app.schemas.stream_events import create_thought_event
+        writer = get_stream_writer()
+        if writer:
+            writer(create_thought_event(
+                agent="clarification_agent",
+                thought="我正在检查您的问题是否存在歧义（如时间范围不明确或业务概念多义）。如果需要，我会请求您进一步补充信息。",
+                plan="完成歧义检测后，如果没有问题，我将转交给 SQL 生成专家。"
+            ))
 
         # 调用 Agent
         result = await self.agent.ainvoke(

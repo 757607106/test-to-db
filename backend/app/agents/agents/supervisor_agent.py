@@ -21,6 +21,7 @@ from langchain_core.messages.utils import count_tokens_approximately
 
 from app.core.state import SQLMessageState
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SUPERVISOR
+from app.core.state import extract_connection_id
 from app.agents.utils.supervisor_guards import (
     run_all_guards,
     update_guard_state,
@@ -86,18 +87,58 @@ def guard_check_hook(state: Dict[str, Any]) -> Dict[str, Any]:
 
 def combined_pre_model_hook(state: Dict[str, Any]) -> Dict[str, Any]:
     """
-    组合的 pre_model_hook - 同时处理消息裁剪和防护检查
-    
-    官方规范（https://reference.langchain.com/python/langgraph/supervisor/）：
-    - pre_model_hook 必须返回包含 `messages` 或 `llm_input_messages` 之一的字典
-    - `llm_input_messages`: 只作为 LLM 输入，不修改原始历史（推荐）
-    - `messages`: 会更新状态中的消息历史
-    
-    本实现使用 `llm_input_messages` 确保不修改原始消息历史。
+    组合的 pre_model_hook - 同时处理消息裁剪、状态追踪、防护检查和 connection_id 提取
     """
     updates = {}
     messages = state.get("messages", [])
     
+    # 0. 确保 connection_id 和 db_type 正确设置
+    if not state.get("connection_id"):
+        connection_id = extract_connection_id(state)
+        if connection_id:
+            updates["connection_id"] = connection_id
+            logger.info(f"pre_model_hook 提取 connection_id: {connection_id}")
+    
+    # 确保 db_type 有默认值
+    if not state.get("db_type"):
+        # 尝试从数据库连接中获取 db_type
+        connection_id = state.get("connection_id") or updates.get("connection_id")
+        logger.info(f"[pre_model_hook] db_type 未设置，尝试从 connection_id={connection_id} 获取")
+        if connection_id:
+            try:
+                from app.services.db_service import get_db_connection_by_id
+                connection = get_db_connection_by_id(connection_id)
+                if connection and connection.db_type:
+                    updates["db_type"] = connection.db_type.lower()
+                    logger.info(f"[pre_model_hook] 成功设置 db_type: {updates['db_type']}")
+                else:
+                    logger.warning(f"[pre_model_hook] connection 为空或无 db_type，使用默认值 mysql")
+                    updates["db_type"] = "mysql"
+            except Exception as e:
+                logger.error(f"[pre_model_hook] 获取 db_type 失败: {e}")
+                updates["db_type"] = "mysql"  # 默认值
+        else:
+            logger.warning("[pre_model_hook] connection_id 未设置，使用默认 db_type=mysql")
+            updates["db_type"] = "mysql"
+    else:
+        logger.debug(f"[pre_model_hook] db_type 已存在: {state.get('db_type')}")
+    
+    # 1. 自动状态追踪：识别最后执行的 Agent 并更新 completed_stages 和 agent_call_history
+    # 这样防护机制（Guards）就能准确感知当前进度
+    last_agent = None
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and msg.name and msg.name != "supervisor":
+            last_agent = msg.name
+            break
+    
+    if last_agent and last_agent != state.get("last_agent_called"):
+        # 发现新完成的 Agent 任务，更新状态
+        stage = get_stage_for_agent(last_agent)
+        tracking_updates = update_guard_state(state, last_agent, stage)
+        state.update(tracking_updates)  # 更新本地 state 以供后续 hook 使用
+        updates.update(tracking_updates) # 传播更新
+        logger.info(f"自动追踪：检测到 {last_agent} 执行完成，阶段更新为 {stage}")
+
     # 1. 防护检查（获取状态更新，不处理消息）
     guard_updates = guard_check_hook(state)
     
@@ -220,7 +261,7 @@ class SupervisorAgent:
             agents=self.worker_agents,
             prompt=self._get_supervisor_prompt(),
             add_handoff_back_messages=True,  # 让 Supervisor 看到 Agent 返回结果，支持动态决策
-            output_mode="last_message",
+            output_mode="full_history",  # 保留完整消息历史，避免 Agent 返回后清除之前的消息
             pre_model_hook=combined_pre_model_hook,  # 组合 hook：防护检查 + 消息裁剪
             state_schema=SQLMessageState,
             parallel_tool_calls=True,  # 启用并行 Agent 调用（仅 OpenAI/Anthropic 支持，其他模型自动降级为串行）
@@ -240,96 +281,67 @@ class SupervisorAgent:
 
     def _get_supervisor_prompt(self) -> str:
         """
-        获取监督代理提示词
-        
-        设计原则：
-        - 只描述每个 Agent 的能力和使用场景
-        - 不规定固定的执行顺序
-        - 让 LLM 根据当前状态自主决策
+        获取监督代理提示词 - 官方稳定性增强版 + 显性思维链
         """
         
-        # 构建 Agent 能力描述
         clarification_desc = ""
         if self.enable_clarification:
             clarification_desc = """
-**clarification_agent** - 澄清用户意图
-  - 能力：检测查询中的模糊性，生成澄清问题；处理 SQL 执行错误的业务化澄清
-  - 使用场景：
-    1. 用户查询存在模糊性时（如"最近"、"大客户"、"主要产品"）
-    2. SQL 执行失败且需要用户确认时（查看 current_stage == "clarification" 或 clarification_context 存在）
-  - 前提：需要已有 Schema 信息
-  - 输出：澄清问题或确认可以继续
-  - **重要**：SQL 执行错误后必须调用此 Agent，用业务语言向用户说明问题
+**clarification_agent** - 业务意图澄清
+  - **前置条件**：必须在 `schema_agent` 完成之后调用，因为澄清需要基于已获取的数据结构信息。
+  - **触发场景**：
+    1. 用户问题存在业务歧义（如"最近"没有明确时间范围、"大客户"没有定义标准）
+    2. schema_agent 返回的表/字段存在多种可能解释
+    3. SQL 执行失败需要向用户解释并确认调整方案
+  - **业务化原则**：澄清问题必须用业务语言表达，严禁暴露表名、字段名、SQL 等技术细节。
+  - **澄清后判断**：用户回答后，根据回答内容判断是否需要重新调用 `schema_agent` 扩展或调整数据范围。
 """
         
-        return f"""你是一个智能的 SQL 查询助手，负责协调多个专业代理完成用户的数据查询需求。
+        return f"""你是一个高级数据分析协调专家。你的目标是确保用户的问题得到准确、安全、且深度解析的回答。
 
-## 可用的专业代理
+## 执行链路准则 (稳定性核心)
 
-**schema_agent** - 获取数据库结构
-  - 能力：分析用户查询，获取相关表和字段信息
-  - 使用场景：需要了解数据库结构时（通常是第一步）
-  - 输出：相关表结构、字段信息、关系
+1. **Schema 优先**：在生成任何 SQL 之前，必须确保调用过 `schema_agent` 且状态中已有 `schema_info`。
+2. **澄清在 Schema 之后**：如果用户问题存在歧义，必须在 `schema_agent` 完成后、`sql_generator_agent` 之前调用 `clarification_agent`。
+   - 澄清必须基于已获取的 Schema 信息，用业务语言提问（不暴露表名/字段名）。
+   - 用户回答后，判断是否需要重新调用 `schema_agent` 调整数据范围。
+3. **验证闭环**：`sql_generator_agent` 生成 SQL 后，严禁直接执行，必须先调用 `sql_validator_agent` 进行安全和语法检查。
+4. **错误自愈**：如果执行失败，优先调用 `clarification_agent` 向用户解释业务原因，只有技术性错误才调用 `error_recovery_agent`。
+5. **状态感知**：关注 `current_stage` 字段：
+   - `schema_analysis` -> 调用 `schema_agent`
+   - `schema_done` -> 检查是否需要澄清，若需要则调用 `clarification_agent`
+   - `sql_generation` -> 调用 `sql_generator_agent`
+   - `sql_validation` -> 调用 `sql_validator_agent`
+   - `sql_execution` -> 调用 `sql_executor_agent`
+
+## 专业代理能力
+
+**schema_agent** - 领域知识提取
+  - 能力：分析查询涉及的表、字段、关联关系和业务逻辑。
+  - 输出：结构化 Schema 信息和查询分析报告。
 {clarification_desc}
-**sql_generator_agent** - 生成 SQL 语句
-  - 能力：根据用户查询和 Schema 信息生成 SQL
-  - 使用场景：需要生成查询语句时
-  - 前提：必须已有 Schema 信息
-  - 输出：SQL 语句
+**sql_generator_agent** - SQL 专家
+  - 能力：基于已有的 Schema 信息和查询分析生成高性能 SQL。
+  - 约束：必须参考 `query_analysis` 中的聚合和时间维度建议。
 
-**sql_validator_agent** - 验证 SQL 语法
-  - 能力：检查 SQL 语法正确性和安全性
-  - 使用场景：SQL 生成后，执行前
-  - 输出：验证结果
+**sql_validator_agent** - 安全与合规审计
+  - 能力：防止注入，检查数据库方言兼容性。
 
-**sql_executor_agent** - 执行 SQL 查询
-  - 能力：执行 SQL 并返回结果
-  - 使用场景：SQL 验证通过后
-  - 前提：必须有已生成的 SQL
-  - 输出：查询结果数据
+**sql_executor_agent** - 数据获取
+  - 能力：安全执行查询并返回原始数据。
 
-**data_analyst_agent** - 分析数据结果
-  - 能力：分析查询结果，生成洞察和建议
-  - 使用场景：查询成功后，需要解读数据时
-  - 前提：必须有查询结果
-  - 输出：数据洞察、趋势分析、业务建议
+**data_analyst_agent** - 商业洞察
+  - 能力：不仅解读数据，还要发现趋势、异常并提供业务建议。
 
-**chart_generator_agent** - 生成可视化图表
-  - 能力：根据数据生成图表配置
-  - 使用场景：用户需要可视化时（可选）
-  - 前提：必须有查询结果
-  - 输出：图表配置
+## 澄清后的重新分析判断
+当 `clarification_agent` 完成用户澄清后，必须判断用户的回答是否改变了查询范围：
+- **需要重新 Schema 分析**：用户明确了新的数据维度、时间范围扩大、涉及新的业务概念。
+- **不需要重新分析**：用户只是确认了模糊概念的具体值（如"最近"指"最近7天"），当前 Schema 已足够。
 
-**error_recovery_agent** - 错误恢复
-  - 能力：诊断错误原因，尝试修复
-  - 使用场景：任何阶段出错时
-  - 输出：修复方案或错误说明
-
-## 决策原则
-
-1. **根据状态决策**：查看当前已有的信息，选择最合适的下一步
-2. **前提条件检查**：调用 Agent 前确保其前提条件已满足
-3. **一次一个**：每次只调用一个 Agent
-4. **观察反馈**：根据 Agent 返回结果决定下一步
-5. **及时完成**：任务完成后及时结束
-6. **SQL 错误必须澄清**：当 current_stage == "clarification" 或存在 clarification_context 时，必须调用 clarification_agent
-
-## 重要约束
-
-- **严禁替用户做业务决策**：如果查询中有"最近"、"大"、"主要"等模糊词且没有具体定义，必须先澄清
-- **严禁跳过必要步骤**：生成 SQL 前必须有 Schema，执行前必须有 SQL
-- **SQL 错误必须业务化澄清**：SQL 执行失败后不要直接调用 error_recovery_agent，而是先调用 clarification_agent 用业务语言向用户说明
-- **错误时求助**：只有在系统内部错误或多次失败后才调用 error_recovery_agent
-
-## 工作方式
-
-1. 理解用户的查询意图
-2. 评估当前状态（已有哪些信息）
-3. 选择最合适的下一个 Agent
-4. 执行并观察结果
-5. 重复直到任务完成
-
-请根据当前对话状态，选择最合适的代理来推进任务。"""
+## 决策逻辑
+- 始终保持原子化操作，一次只调用一个 Agent。
+- 观察上一个 Agent 的 `ToolMessage` 输出，如果包含错误信息，立即进入错误处理路径。
+"""
 
     async def supervise(self, state: SQLMessageState, thread_id: Optional[str] = None) -> Dict[str, Any]:
         """

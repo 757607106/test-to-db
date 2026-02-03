@@ -9,34 +9,54 @@ SQL验证代理
 
 注意：复杂的语法检查交给 LLM 处理，避免规则引擎误报
 """
-from typing import Dict, Any, List
-from langchain_core.tools import tool
-from langchain_core.messages import AIMessage
-from langgraph.prebuilt import create_react_agent
+import logging
+from typing import Dict, Any, List, Annotated
+
+from langchain_core.tools import tool, InjectedToolCallId
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.prebuilt import create_react_agent, InjectedState
+from langgraph.config import get_stream_writer
+from langgraph.types import Command
 
 from app.core.state import SQLMessageState, SQLValidationResult
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 from app.services.sql_validator import sql_validator as sql_validator_service
+from app.schemas.stream_events import create_sql_step_event, create_stage_message_event
+
+logger = logging.getLogger(__name__)
 
 
 @tool
 def validate_sql_syntax(
-    sql_query: str, 
-    db_type: str = "mysql",
-    schema_context: Dict[str, Any] = None
-) -> Dict[str, Any]:
+    state: Annotated[dict, InjectedState],
+    tool_call_id: Annotated[str, InjectedToolCallId]
+) -> Command:
     """
-    验证SQL安全性、资源限制、数据库方言兼容性，以及表名/列名是否存在
+    验证SQL安全性、资源限制、数据库方言兼容性，以及表名/列名是否存在。
+    自动从状态中获取 SQL、数据库类型和 Schema 信息。
     
-    Args:
-        sql_query: SQL查询语句
-        db_type: 数据库类型（mysql, postgresql, sqlserver, oracle, sqlite）
-        schema_context: Schema 上下文（包含 tables, columns 信息），用于验证表名/列名
-        
     Returns:
-        验证结果，包含错误、警告和修复后的SQL
+        Command: 更新 validation_result 状态的命令
     """
     try:
+        # 从状态获取必要信息
+        sql_query = state.get("generated_sql", "")
+        if not sql_query:
+            return Command(
+                graph=Command.PARENT,
+                update={
+                    "current_stage": "error_recovery",
+                    "messages": [ToolMessage(
+                        content="验证失败：没有找到需要验证的 SQL 语句",
+                        tool_call_id=tool_call_id
+                    )]
+                }
+            )
+        
+        db_type = state.get("db_type", "mysql")
+        schema_context = _build_schema_context_from_state(state)
+        
+        # 调用验证服务
         result = sql_validator_service.validate(
             sql=sql_query,
             schema_context=schema_context,
@@ -44,23 +64,137 @@ def validate_sql_syntax(
             allow_write=False
         )
         
-        return {
-            "success": True,
-            "is_valid": result.is_valid,
-            "errors": result.errors,
-            "warnings": result.warnings,
-            "fixed_sql": result.fixed_sql,
-            "db_type": db_type
+        errors = result.errors
+        warnings = result.warnings
+        fixed_sql = result.fixed_sql or sql_query
+        is_valid = len(errors) == 0
+        
+        # 构建验证结果
+        validation_result = SQLValidationResult(
+            is_valid=is_valid,
+            errors=errors,
+            warnings=warnings,
+            suggestions=[]
+        )
+        
+        # 确定下一阶段
+        if is_valid:
+            next_stage = "sql_execution"
+            message = f"SQL 验证通过（{db_type}）"
+            if fixed_sql != sql_query:
+                message = f"SQL 验证通过，已自动添加 LIMIT 限制"
+        else:
+            next_stage = "error_recovery"
+            message = f"SQL 验证失败: {errors[0] if errors else '未知错误'}"
+        
+        logger.info(f"[SQLValidator] {message}")
+        
+        # 发送 sql_step 事件 - 关键！
+        writer = get_stream_writer()
+        if writer:
+            writer(create_sql_step_event(
+                step="sql_validator",
+                status="completed" if is_valid else "error",
+                result=message
+            ))
+            writer(create_stage_message_event(
+                message=message,
+                step="sql_validator"
+            ))
+        
+        # 返回 Command 更新父图状态
+        update_dict = {
+            "validation_result": validation_result,
+            "current_stage": next_stage,
+            "messages": [ToolMessage(content=message, tool_call_id=tool_call_id)]
         }
         
+        # 如果有修复后的 SQL，也更新
+        if fixed_sql != sql_query:
+            update_dict["generated_sql"] = fixed_sql
+        
+        return Command(graph=Command.PARENT, update=update_dict)
+        
     except Exception as e:
-        return {
-            "success": False,
-            "is_valid": False,
-            "error": str(e),
-            "errors": [str(e)],
-            "warnings": []
-        }
+        logger.error(f"[SQLValidator] 验证异常: {e}")
+        return Command(
+            graph=Command.PARENT,
+            update={
+                "current_stage": "error_recovery",
+                "messages": [ToolMessage(
+                    content=f"SQL 验证失败: {str(e)}",
+                    tool_call_id=tool_call_id
+                )]
+            }
+        )
+
+
+def _build_schema_context_from_state(state: dict) -> Dict[str, Any]:
+    """
+    从 state 中构建 schema_context 用于表名/列名验证
+    
+    复用原有的 _build_schema_context 逻辑
+    """
+    schema_info = state.get("schema_info", {})
+    
+    if not schema_info:
+        return None
+    
+    tables = []
+    columns = []
+    relationships = []
+    
+    # 获取模式上下文
+    schema_context = schema_info.get("schema_context", {})
+    
+    # 情况 1: 全库检索模式 (返回的是 {"tables": [...], "columns": [...]})
+    if isinstance(schema_context, dict) and "tables" in schema_context:
+        for table in schema_context.get("tables", []):
+            tables.append({
+                "table_name": table.get("name"),
+                "description": table.get("description", "")
+            })
+        for col in schema_context.get("columns", []):
+            tables_for_col = col.get("table_name")
+            columns.append({
+                "table_name": tables_for_col,
+                "column_name": col.get("name"),
+                "data_type": col.get("type")
+            })
+        relationships = schema_context.get("relationships", [])
+
+    # 情况 2: Skill 模式或旧格式 (返回的是 {table_name: {"columns": [...]}})
+    elif isinstance(schema_context, dict):
+        for table_name, table_data in schema_context.items():
+            if isinstance(table_data, dict):
+                tables.append({
+                    "table_name": table_name,
+                    "description": table_data.get("description", "")
+                })
+                for col in table_data.get("columns", []):
+                    if isinstance(col, dict):
+                        columns.append({
+                            "table_name": table_name,
+                            "column_name": col.get("column_name", col.get("name", "")),
+                            "data_type": col.get("data_type", col.get("type", ""))
+                        })
+    
+    # 处理 skill_tables 格式作为补充
+    if not tables and schema_info.get("skill_tables"):
+        for table_name in schema_info.get("skill_tables", []):
+            tables.append({"table_name": table_name})
+    
+    if not relationships:
+        relationships = schema_info.get("relationships", [])
+    
+    if not tables:
+        return None
+    
+    return {
+        "tables": tables,
+        "columns": columns,
+        "relationships": relationships
+    }
 
 
 class SQLValidatorAgent:
@@ -106,9 +240,27 @@ class SQLValidatorAgent:
         columns = []
         relationships = []
         
-        # 处理 schema_context 格式（全库检索模式）
+        # 获取模式上下文
         schema_context = schema_info.get("schema_context", {})
-        if isinstance(schema_context, dict):
+        
+        # 情况 1: 全库检索模式 (返回的是 {"tables": [...], "columns": [...]})
+        if isinstance(schema_context, dict) and "tables" in schema_context:
+            for table in schema_context.get("tables", []):
+                tables.append({
+                    "table_name": table.get("name"),
+                    "description": table.get("description", "")
+                })
+            for col in schema_context.get("columns", []):
+                tables_for_col = col.get("table_name")
+                columns.append({
+                    "table_name": tables_for_col,
+                    "column_name": col.get("name"),
+                    "data_type": col.get("type")
+                })
+            relationships = schema_context.get("relationships", [])
+
+        # 情况 2: Skill 模式或旧格式 (返回的是 {table_name: {"columns": [...]}})
+        elif isinstance(schema_context, dict):
             for table_name, table_data in schema_context.items():
                 if isinstance(table_data, dict):
                     tables.append({
@@ -123,12 +275,13 @@ class SQLValidatorAgent:
                                 "data_type": col.get("data_type", col.get("type", ""))
                             })
         
-        # 处理 skill_tables 格式（Skill 模式）
+        # 处理 skill_tables 格式作为补充
         if not tables and schema_info.get("skill_tables"):
             for table_name in schema_info.get("skill_tables", []):
                 tables.append({"table_name": table_name})
         
-        relationships = schema_info.get("relationships", [])
+        if not relationships:
+            relationships = schema_info.get("relationships", [])
         
         if not tables:
             return None

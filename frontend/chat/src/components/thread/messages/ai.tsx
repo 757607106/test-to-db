@@ -24,23 +24,11 @@ import {
 import { useArtifact } from "../artifact";
 import { DataChartDisplay } from "./DataChartDisplay";
 import { InsightDisplay } from "./InsightDisplay";
+import { ThinkingProcess } from "./ThinkingProcess";
 import {
   Sparkles,
-  Loader2,
 } from "lucide-react";
 import { SQL_STEP_LABELS } from "@/types/stream-events";
-
-/**
- * 思考中指示器 - 当 agent 正在执行工具时显示
- */
-const ThinkingIndicator = memo(function ThinkingIndicator() {
-  return (
-    <div className="flex items-center gap-2 py-2 text-slate-500">
-      <Loader2 className="h-4 w-4 animate-spin" />
-      <span className="text-sm">正在思考中...</span>
-    </div>
-  );
-});
 
 /**
  * 推荐问题组件 - 使用 memo 优化
@@ -293,6 +281,14 @@ export function AssistantMessage({
             <InsightDisplay insight={thread.queryContext.insight} />
           )}
 
+          {/* 深度思考过程 - 整合执行进度、推理链、阶段消息 */}
+          {showTransientComponents && (
+            <ThinkingProcess 
+              queryContext={thread.queryContext} 
+              isLoading={isLoading} 
+            />
+          )}
+
           {/* 流式文字内容 - AI 的分析 */}
           {contentString.length > 0 && (
             <div className="py-1">
@@ -308,11 +304,6 @@ export function AssistantMessage({
               questions={thread.queryContext.similarQuestions.questions}
               onSelectQuestion={handleSelectQuestion}
             />
-          )}
-
-          {/* 思考中指示器 - 当 agent 正在执行工具时显示 */}
-          {isLastMessage && isLoading && contentString.length > 0 && (
-            <ThinkingIndicator />
           )}
 
           {/* 自定义组件 */}
@@ -359,13 +350,31 @@ export function AssistantMessage({
 }
 
 export function AssistantMessageLoading() {
+  const thread = useStreamContext();
+
+  // 检查是否有任何思考过程数据
+  const hasThinkingContent = 
+    (thread.queryContext?.thoughts && thread.queryContext.thoughts.length > 0) ||
+    (thread.queryContext?.sqlSteps && thread.queryContext.sqlSteps.length > 0) ||
+    (thread.queryContext?.stageMessages && thread.queryContext.stageMessages.length > 0) ||
+    thread.queryContext?.cacheHit;
+
   return (
-    <div className="mr-auto flex items-start gap-2">
-      <div className="bg-muted flex h-8 items-center gap-1 rounded-2xl px-4 py-2">
-        <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_infinite] rounded-full"></div>
-        <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_0.5s_infinite] rounded-full"></div>
-        <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_1s_infinite] rounded-full"></div>
-      </div>
+    <div className="mr-auto flex w-full flex-col gap-2">
+      {hasThinkingContent ? (
+        <ThinkingProcess 
+          queryContext={thread.queryContext} 
+          isLoading={true} 
+        />
+      ) : (
+        <div className="mr-auto flex items-start gap-2">
+          <div className="bg-muted flex h-8 items-center gap-1 rounded-2xl px-4 py-2">
+            <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_infinite] rounded-full"></div>
+            <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_0.5s_infinite] rounded-full"></div>
+            <div className="bg-foreground/50 h-1.5 w-1.5 animate-[pulse_1.5s_ease-in-out_1s_infinite] rounded-full"></div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

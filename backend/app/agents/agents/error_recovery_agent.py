@@ -2,13 +2,17 @@
 错误恢复代理
 负责分析错误、提供恢复策略和自动修复能力
 """
-from typing import Dict, Any, List
-from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage
-from langgraph.prebuilt import create_react_agent
+import logging
+from typing import Dict, Any, List, Annotated
+from langchain_core.tools import tool, InjectedToolCallId
+from langchain_core.messages import HumanMessage, ToolMessage
+from langgraph.prebuilt import create_react_agent, InjectedState
+from langgraph.types import Command
 
 from app.core.state import SQLMessageState
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
+
+logger = logging.getLogger(__name__)
 
 
 @tool
@@ -176,46 +180,65 @@ def generate_recovery_strategy(error_analysis: Dict[str, Any], current_state: Di
 
 
 @tool
-def auto_fix_sql_error(sql_query: str, error_message: str, schema_info: Dict[str, Any] = None) -> Dict[str, Any]:
+def auto_fix_sql_error(
+    state: Annotated[dict, InjectedState],
+    tool_call_id: Annotated[str, InjectedToolCallId]
+) -> Command:
     """
-    自动修复SQL错误
+    自动修复SQL错误。从Supervisor状态中获取SQL、错误历史和Schema信息。
     
-    Args:
-        sql_query: 有问题的SQL查询
-        error_message: 错误消息
-        schema_info: 模式信息
-        
     Returns:
-        修复后的SQL和修复说明
+        Command: 更新 generated_sql 和 current_stage 的命令
     """
     try:
+        # 从状态获取必要信息
+        sql_query = state.get("generated_sql", "")
+        error_history = state.get("error_history", [])
+        schema_info = state.get("schema_info", {})
+        retry_count = state.get("retry_count", 0)
+        max_retries = state.get("max_retries", 3)
+        
+        if not sql_query:
+            return Command(
+                graph=Command.PARENT,
+                update={
+                    "current_stage": "terminated",
+                    "messages": [ToolMessage(
+                        content="恢复失败：没有找到需要修复的 SQL 语句",
+                        tool_call_id=tool_call_id
+                    )]
+                }
+            )
+        
+        # 获取最新错误消息
+        error_message = ""
+        if error_history:
+            latest_error = error_history[-1]
+            error_message = latest_error.get("error", "")
+        
         fixed_sql = sql_query
         fixes_applied = []
-        
         error_lower = error_message.lower()
         
         # 常见语法错误修复
         if "syntax error" in error_lower or "语法错误" in error_lower:
-            # 1. 修复缺失的分号
             if not fixed_sql.strip().endswith(';'):
                 fixed_sql += ';'
                 fixes_applied.append("添加缺失的分号")
             
-            # 2. 修复关键字大小写
             keywords = ['SELECT', 'FROM', 'WHERE', 'JOIN', 'ON', 'GROUP BY', 'ORDER BY', 'HAVING']
             for keyword in keywords:
                 fixed_sql = fixed_sql.replace(keyword.lower(), keyword)
             
-            # 3. 修复引号问题
             if fixed_sql.count("'") % 2 != 0:
                 fixed_sql += "'"
                 fixes_applied.append("修复未闭合的单引号")
         
         # 表名或字段名错误修复
         if "unknown column" in error_lower or "unknown table" in error_lower:
-            if schema_info:
-                available_tables = list(schema_info.keys()) if isinstance(schema_info, dict) else []
-                for table in available_tables:
+            schema_context = schema_info.get("schema_context", {})
+            if isinstance(schema_context, dict):
+                for table in schema_context.keys():
                     if table.lower() in fixed_sql.lower():
                         fixed_sql = fixed_sql.replace(table.lower(), table)
                         fixes_applied.append(f"修正表名为 {table}")
@@ -232,22 +255,48 @@ def auto_fix_sql_error(sql_query: str, error_message: str, schema_info: Dict[str
                 fixed_sql = fixed_sql.replace("SELECT *", "SELECT id, name")
                 fixes_applied.append("简化SELECT字段以避免权限问题")
         
-        success = len(fixes_applied) > 0
+        # 确定结果和下一阶段
+        fix_successful = len(fixes_applied) > 0 or fixed_sql != sql_query
         
-        return {
-            "success": True,
-            "auto_fix_successful": success,
-            "original_sql": sql_query,
-            "fixed_sql": fixed_sql,
-            "fixes_applied": fixes_applied,
-            "requires_manual_review": not success
+        if fix_successful:
+            next_stage = "sql_validation"  # 修复后重新验证
+            message = f"SQL 自动修复完成: {', '.join(fixes_applied) if fixes_applied else '已修复'}"
+            new_retry_count = 0
+            logger.info(f"[ErrorRecovery] {message}")
+        else:
+            new_retry_count = retry_count + 1
+            if new_retry_count >= max_retries:
+                next_stage = "terminated"
+                message = f"SQL 自动修复失败，已达最大重试次数 ({max_retries})"
+            else:
+                next_stage = "sql_generation"  # 重新生成
+                message = f"无法自动修复，将重新生成 SQL (重试 {new_retry_count}/{max_retries})"
+            logger.warning(f"[ErrorRecovery] {message}")
+        
+        # 返回 Command 更新父图状态
+        update_dict = {
+            "current_stage": next_stage,
+            "retry_count": new_retry_count,
+            "messages": [ToolMessage(content=message, tool_call_id=tool_call_id)]
         }
+        
+        if fix_successful:
+            update_dict["generated_sql"] = fixed_sql
+        
+        return Command(graph=Command.PARENT, update=update_dict)
         
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        logger.error(f"[ErrorRecovery] 修复异常: {e}")
+        return Command(
+            graph=Command.PARENT,
+            update={
+                "current_stage": "terminated",
+                "messages": [ToolMessage(
+                    content=f"SQL 修复失败: {str(e)}",
+                    tool_call_id=tool_call_id
+                )]
+            }
+        )
 
 
 class ErrorRecoveryAgent:
@@ -324,6 +373,24 @@ class ErrorRecoveryAgent:
             if recovery_result.get("recovery_successful"):
                 state["retry_count"] = 0
                 state["current_stage"] = recovery_result.get("next_stage", "sql_generation")
+                
+                state["thought"] = f"分析发现错误原因为：{recovery_result.get('error_reason')}。我已制定了修复策略：{recovery_result.get('recovery_strategy')}。目前修复已完成，准备重新执行。"
+                state["next_plan"] = f"重新进入 {state['current_stage']} 阶段。"
+                
+                from langgraph.config import get_stream_writer
+                from app.schemas.stream_events import create_thought_event, create_node_event
+                writer = get_stream_writer()
+                if writer:
+                    writer(create_thought_event(
+                        agent="error_recovery_agent",
+                        thought=state["thought"],
+                        plan=state["next_plan"]
+                    ))
+                    writer(create_node_event(
+                        node="error_recovery_agent",
+                        status="completed",
+                        message="错误已自动修复"
+                    ))
                 
                 if recovery_result.get("fixed_sql"):
                     state["generated_sql"] = recovery_result["fixed_sql"]

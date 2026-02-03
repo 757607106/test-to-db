@@ -26,8 +26,16 @@ def discover_postgresql_schema(inspector) -> List[Dict[str, Any]]:
 
     for table_name in tables:
         print(f"Processing table/view: {table_name}")
+        # Get table comment
+        table_comment = None
+        try:
+            table_comment = inspector.get_table_comment(table_name).get("text")
+        except Exception:
+            pass
+
         table_info = {
             "table_name": table_name,
+            "description": table_comment or f"Auto-discovered table: {table_name}",
             "columns": [],
             "is_view": table_name in views
         }
@@ -41,6 +49,7 @@ def discover_postgresql_schema(inspector) -> List[Dict[str, Any]]:
                 column_info = {
                     "column_name": column["name"],
                     "data_type": str(column["type"]),
+                    "description": column.get("comment") or f"Auto-discovered column: {column['name']}",
                     "is_primary_key": False,
                     "is_foreign_key": False,
                     "is_nullable": column.get("nullable", True)

@@ -29,7 +29,7 @@ from langgraph.errors import GraphInterrupt
 from app.core.state import SQLMessageState
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
 from app.core.llm_wrapper import LLMWrapper
-from app.schemas.stream_events import create_stage_message_event
+from app.schemas.stream_events import create_stage_message_event, create_thought_event, create_sql_step_event
 from app.services.db_dialect import get_syntax_guide_for_prompt, get_dialect
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,29 @@ def generate_sql_query(
         sample_retrieval_result = state.get("sample_retrieval_result", {})
         sample_qa_pairs = sample_retrieval_result.get("qa_pairs", [])
         
+        # 获取 Skill 上下文
+        skill_context = state.get("skill_context", {})
+        skill_prompt = ""
+        if skill_context.get("enabled"):
+            lines = ["\n## 业务领域上下文 (Skill Context)"]
+            
+            # 业务规则
+            business_rules = skill_context.get("business_rules")
+            if business_rules:
+                lines.append("### 业务规则（必须遵循）")
+                lines.append(business_rules)
+            
+            # JOIN 规则
+            join_rules = skill_context.get("join_rules", [])
+            if join_rules:
+                lines.append("### JOIN 规则（优先使用）")
+                for rule in join_rules:
+                    left = f"{rule.get('left_table')}.{rule.get('left_column')}"
+                    right = f"{rule.get('right_table')}.{rule.get('right_column')}"
+                    lines.append(f"- {left} {rule.get('join_type', 'JOIN')} {right}")
+            
+            skill_prompt = "\n".join(lines)
+        
         # 获取数据库语法指南
         syntax_guide = get_syntax_guide_for_prompt(db_type)
         
@@ -73,6 +96,8 @@ def generate_sql_query(
 
 可用的表和字段信息:
 {schema_info.get('schema_context', {})}
+
+{skill_prompt}
 """
         
         if value_mappings:
@@ -315,13 +340,27 @@ SQL生成原则：
             # 获取数据库语法指南
             syntax_guide = get_syntax_guide_for_prompt(db_type)
             
-            # 获取模式信息
+            # 获取模式信息和查询分析结果
             schema_info = state.get("schema_info")
+            query_analysis = state.get("query_analysis", {})  # 关键：获取前置分析结果
+            
             if not schema_info:
                 # 从代理消息中提取模式信息
                 schema_agent_result = state.get("agent_messages", {}).get("schema_agent")
                 if schema_agent_result:
                     schema_info = self._extract_schema_from_messages(schema_agent_result.get("messages", []))
+
+            # 获取意图分析相关的提示词
+            analysis_prompt = ""
+            if query_analysis:
+                analysis_prompt = f"""
+## 业务意图分析 (Business Intent)
+- 核心目标: {query_analysis.get('query_intent', '未识别')}
+- 涉及实体: {', '.join(query_analysis.get('entities', []))}
+- 聚合需求: {', '.join(query_analysis.get('likely_aggregations', []))}
+- 时间关联: {'是' if query_analysis.get('time_related') else '否'}
+- 比较关联: {'是' if query_analysis.get('comparison_related') else '否'}
+"""
 
             # 获取样本检索结果
             sample_retrieval_result = state.get("sample_retrieval_result")
@@ -359,11 +398,15 @@ SQL生成原则：
 
 {syntax_guide}
 
+{analysis_prompt}
+
 模式信息: {schema_info}
 {sample_info}
 {skill_prompt}
 
-【重要】请严格遵循上述数据库语法规则生成 SQL。
+【重要约束】
+1. 必须优先参考上面的“业务意图分析”来决定 SQL 的结构。
+2. 严格遵循数据库语法规则。
 """)
             ]
             
@@ -379,8 +422,26 @@ SQL生成原则：
             state["generated_sql"] = generated_sql
             state["current_stage"] = "sql_validation"
             state["agent_messages"]["sql_generator"] = result
+            
+            state["thought"] = f"我已结合业务意图和 Schema 信息构建了 SQL。我采用了适当的聚合函数和过滤条件，以确保数据的准确性。生成的 SQL 如下：\n{generated_sql}"
+            state["next_plan"] = "下一步，我将把 SQL 交给验证专家进行安全和语法审计。"
+            
             writer = get_stream_writer()
             if writer:
+                # 发送 sql_step 事件 - 关键！
+                writer(create_sql_step_event(
+                    step="sql_generator",
+                    status="completed",
+                    result="SQL 已生成"
+                ))
+                
+                # 推送思维链
+                writer(create_thought_event(
+                    agent="sql_generator_agent",
+                    thought=state["thought"],
+                    plan=state["next_plan"]
+                ))
+                
                 sql_preview = generated_sql.strip() if generated_sql else ""
                 message = "SQL 已生成，准备执行查询。"
                 if sql_preview:

@@ -283,6 +283,14 @@ const StreamSession = ({
             }));
             break;
             
+          case "thought":
+            // 思维过程事件
+            setQueryContext(prev => ({
+              ...prev,
+              thoughts: [...prev.thoughts, streamEvent]
+            }));
+            break;
+            
           case "node_status":
             // 节点状态事件（用于错误恢复等场景）
             setQueryContext(prev => ({

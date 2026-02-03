@@ -151,6 +151,17 @@ export interface InsightEvent {
 }
 
 /**
+ * 思维过程事件 - 展示 Agent 的推理过程 (CoT)
+ */
+export interface ThoughtEvent {
+  type: "thought";
+  agent: string;               // Agent 名称
+  thought: string;             // 思考内容
+  plan?: string;               // 下一步计划
+  time_ms: number;             // 耗时(毫秒)
+}
+
+/**
  * 节点状态事件 - 展示 Agent 节点的执行状态
  * 
  * 用于向前端通知节点执行状态，特别是错误恢复等场景
@@ -180,6 +191,7 @@ export type StreamEvent =
   | DataQueryEvent 
   | SimilarQuestionsEvent
   | InsightEvent
+  | ThoughtEvent
   | NodeStatusEvent;
 
 /**
@@ -193,6 +205,7 @@ export interface QueryContext {
   dataQuery?: DataQueryEvent;
   similarQuestions?: SimilarQuestionsEvent;
   insight?: InsightEvent;                 // 数据洞察
+  thoughts: ThoughtEvent[];               // 思维链过程
   nodeStatus?: NodeStatusEvent;           // 节点状态（用于错误恢复等）
 }
 
@@ -202,7 +215,8 @@ export interface QueryContext {
 export function createEmptyQueryContext(): QueryContext {
   return {
     sqlSteps: [],
-    stageMessages: []
+    stageMessages: [],
+    thoughts: []
   };
 }
 
@@ -220,6 +234,7 @@ export function isStreamEvent(event: unknown): event is StreamEvent {
     e.type === "data_query" ||
     e.type === "similar_questions" ||
     e.type === "insight" ||
+    e.type === "thought" ||
     e.type === "node_status"
   );
 }

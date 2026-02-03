@@ -8,10 +8,12 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool, InjectedToolCallId
 from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
 from langgraph.prebuilt import create_react_agent, InjectedState
+from langgraph.config import get_stream_writer
 from langgraph.types import Command
 
 from app.core.state import SQLMessageState, SQLExecutionResult, extract_connection_id
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
+from app.schemas.stream_events import create_sql_step_event, create_stage_message_event
 
 
 @tool
@@ -63,6 +65,19 @@ def execute_sql_query(
         result_data = execute_query_with_connection(connection, sql_query)
         
         row_count = len(result_data) if result_data else 0
+        
+        # 发送 sql_step 事件 - 关键！
+        writer = get_stream_writer()
+        if writer:
+            writer(create_sql_step_event(
+                step="sql_executor",
+                status="completed",
+                result=f"SQL执行成功，返回 {row_count} 条记录"
+            ))
+            writer(create_stage_message_event(
+                message=f"SQL执行成功，返回 {row_count} 条记录",
+                step="sql_executor"
+            ))
         
         # 返回 Command 更新父图状态（关键：graph=Command.PARENT）
         return Command(

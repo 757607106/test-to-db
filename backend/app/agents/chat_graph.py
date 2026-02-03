@@ -452,7 +452,7 @@ class IntelligentSQLGraph:
         # 3. 添加意图信息
         initial_state["query_type"] = intent.query_type.value
         initial_state["query_complexity"] = intent.complexity
-        initial_state["needs_clarification"] = intent.needs_clarification
+        # 注意：needs_clarification 已移除，澄清判断应在 schema_agent 之后基于实际 Schema 进行
         
         # 如果有子查询（多步查询），添加到状态
         if intent.sub_queries:
@@ -540,6 +540,11 @@ def get_global_graph() -> IntelligentSQLGraph:
     if _global_graph is None:
         _global_graph = create_intelligent_sql_graph()
     return _global_graph
+
+
+async def get_global_graph_async() -> IntelligentSQLGraph:
+    """获取全局图实例（异步版本，用于测试兼容性）"""
+    return get_global_graph()
 
 
 # 导出 graph 用于 LangGraph 服务
