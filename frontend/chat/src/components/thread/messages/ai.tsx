@@ -269,6 +269,25 @@ export function AssistantMessage({
     <div className="group mr-auto flex w-full items-start gap-2">
       <div className="flex w-full flex-col gap-2">
         <>
+          {/* 规划执行过程 - 固定在最上方，使用稳定布局避免跳动 */}
+          {showTransientComponents && (
+            <div className="w-full">
+              <ThinkingProcess 
+                queryContext={thread.queryContext} 
+                isLoading={isLoading} 
+              />
+            </div>
+          )}
+
+          {/* 流式文字内容 - AI 的分析 */}
+          {contentString.length > 0 && (
+            <div className="py-1">
+              <MarkdownText shouldAnimate={isLastMessage && isLoading}>
+                {contentString}
+              </MarkdownText>
+            </div>
+          )}
+
           {/* 数据可视化图表 */}
           {hasChartConfig && thread.queryContext?.dataQuery && showTransientComponents && (
             <div className="mb-4">
@@ -279,23 +298,6 @@ export function AssistantMessage({
           {/* 数据洞察 */}
           {hasInsight && thread.queryContext?.insight && showTransientComponents && (
             <InsightDisplay insight={thread.queryContext.insight} />
-          )}
-
-          {/* 深度思考过程 - 整合执行进度、推理链、阶段消息 */}
-          {showTransientComponents && (
-            <ThinkingProcess 
-              queryContext={thread.queryContext} 
-              isLoading={isLoading} 
-            />
-          )}
-
-          {/* 流式文字内容 - AI 的分析 */}
-          {contentString.length > 0 && (
-            <div className="py-1">
-              <MarkdownText shouldAnimate={isLastMessage && isLoading}>
-                {contentString}
-              </MarkdownText>
-            </div>
           )}
 
           {/* 推荐问题 */}

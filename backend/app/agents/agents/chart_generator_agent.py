@@ -3,20 +3,65 @@
 负责根据SQL查询结果生成合适的数据可视化图表
 """
 import asyncio
+import json
 from typing import Dict, Any, List
 from langchain_core.tools import tool
 from langchain_core.messages import AIMessage
 from langgraph.prebuilt import create_react_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.interceptors import MCPToolCallRequest, MCPToolCallResult
 
 from app.core.state import SQLMessageState
 from app.core.agent_config import get_agent_llm, CORE_AGENT_CHART_ANALYST
+
+
+class JsonParsingInterceptor:
+    """
+    拦截器：自动将字符串格式的 JSON 参数解析为实际对象
+    解决 LLM 将数组/对象参数序列化为字符串的问题
+    """
+    
+    async def __call__(
+        self,
+        request: MCPToolCallRequest,
+        handler,
+    ) -> MCPToolCallResult:
+        # 深度解析所有字符串类型的参数
+        parsed_args = self._parse_json_args(request.args)
+        
+        # 使用解析后的参数创建新请求
+        new_request = request.override(args=parsed_args)
+        
+        return await handler(new_request)
+    
+    def _parse_json_args(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """递归解析字符串格式的 JSON 参数"""
+        parsed = {}
+        for key, value in args.items():
+            if isinstance(value, str):
+                # 尝试解析字符串为 JSON
+                stripped = value.strip()
+                if stripped.startswith('[') or stripped.startswith('{'):
+                    try:
+                        parsed[key] = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        parsed[key] = value
+                else:
+                    parsed[key] = value
+            elif isinstance(value, dict):
+                parsed[key] = self._parse_json_args(value)
+            else:
+                parsed[key] = value
+        return parsed
 
 
 # 初始化MCP图表服务器客户端
 def _initialize_chart_client():
     """初始化图表生成客户端"""
     try:
+        # 创建 JSON 解析拦截器，自动将字符串格式的 JSON 转换为实际对象
+        json_interceptor = JsonParsingInterceptor()
+        
         client = MultiServerMCPClient(
             {
                 "mcp-server-chart": {
@@ -24,7 +69,8 @@ def _initialize_chart_client():
                     "args": ["-y", "@antv/mcp-server-chart"],
                     "transport": "stdio",
                 }
-            }
+            },
+            tool_interceptors=[json_interceptor]
         )
         chart_tools = asyncio.run(client.get_tools())
         return client, chart_tools

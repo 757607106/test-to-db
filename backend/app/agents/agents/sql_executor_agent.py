@@ -13,7 +13,7 @@ from langgraph.types import Command
 
 from app.core.state import SQLMessageState, SQLExecutionResult, extract_connection_id
 from app.core.agent_config import get_agent_llm, CORE_AGENT_SQL_GENERATOR
-from app.schemas.stream_events import create_sql_step_event, create_stage_message_event
+from app.schemas.stream_events import create_sql_step_event, create_stage_message_event, create_thought_event
 
 
 @tool
@@ -32,6 +32,20 @@ def execute_sql_query(
         Command: 更新父图 query_results 状态的命令
     """
     try:
+        # 立即发送 running 状态事件
+        writer = get_stream_writer()
+        if writer:
+            writer(create_sql_step_event(
+                step="sql_executor",
+                status="running",
+                result="正在执行 SQL 查询..."
+            ))
+            writer(create_thought_event(
+                agent="sql_executor",
+                thought="我正在连接数据库并执行查询，请稍候...",
+                plan="获取查询结果后将进行数据分析"
+            ))
+        
         # 从状态获取 connection_id
         connection_id = state.get("connection_id") or extract_connection_id(state)
         if not connection_id:

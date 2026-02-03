@@ -1,11 +1,16 @@
 /**
- * 深度思考过程组件 (Deep Thinking Process)
+ * 规划执行过程组件 (Planning & Execution Process)
  * 
  * 类似 Cursor/ChatGPT 的思考过程展示：
  * 1. 执行进度条 (sqlSteps) - 显示各阶段状态
  * 2. 推理链 (thoughts) - 显示 AI 的思考过程
  * 3. 阶段消息 (stageMessages) - 显示详细执行信息
  * 4. 缓存命中提示 (cacheHit) - 显示是否命中缓存
+ * 
+ * 设计原则：
+ * - 固定高度避免页面跳动
+ * - 平滑过渡动画
+ * - 状态变化不引起布局抖动
  */
 import { useState, memo, useMemo } from "react";
 import { cn } from "@/lib/utils";
@@ -308,7 +313,7 @@ const StageMessages = memo(function StageMessages({
 });
 
 /**
- * 深度思考过程主组件
+ * 规划执行过程主组件
  */
 export const ThinkingProcess = memo(function ThinkingProcess({ 
   queryContext, 
@@ -332,6 +337,12 @@ export const ThinkingProcess = memo(function ThinkingProcess({
     return time;
   }, [sqlSteps, thoughts]);
 
+  // 计算完成状态
+  const isCompleted = useMemo(() => {
+    if (!sqlSteps || sqlSteps.length === 0) return false;
+    return sqlSteps.every(s => s.status === 'completed' || s.status === 'error' || s.status === 'skipped');
+  }, [sqlSteps]);
+
   // 如果没有任何数据，不渲染
   const hasContent = (sqlSteps && sqlSteps.length > 0) || 
                      (thoughts && thoughts.length > 0) || 
@@ -340,29 +351,41 @@ export const ThinkingProcess = memo(function ThinkingProcess({
 
   if (!hasContent) return null;
 
+  // 根据状态决定显示文案
+  const headerText = isLoading 
+    ? "规划执行中..." 
+    : (isCompleted ? "执行完成" : "规划执行");
+
   return (
     <div className={cn(
-      "mb-4 rounded-xl border overflow-hidden transition-all",
+      "mb-4 rounded-xl border overflow-hidden",
+      // 使用 min-height 避免高度变化导致的跳动
+      "min-h-[60px]",
+      // 移除 transition-all，只对特定属性过渡
+      "transition-colors duration-300",
       isLoading 
         ? "border-blue-200 bg-blue-50/30" 
-        : "border-slate-200 bg-slate-50/50"
+        : (isCompleted ? "border-emerald-200 bg-emerald-50/30" : "border-slate-200 bg-slate-50/50")
     )}>
-      {/* 头部 */}
+      {/* 头部 - 固定高度 */}
       <button 
         onClick={() => setIsExpanded(!isExpanded)}
-        className="flex w-full items-center justify-between px-4 py-2.5 hover:bg-slate-100/50 transition-colors"
+        className="flex w-full items-center justify-between px-4 py-2.5 hover:bg-slate-100/50 transition-colors h-[44px]"
       >
         <div className="flex items-center gap-2">
           <BrainCircuit className={cn(
-            "h-4 w-4",
-            isLoading ? "text-blue-500 animate-pulse" : "text-slate-500"
+            "h-4 w-4 transition-colors duration-300",
+            isLoading ? "text-blue-500 animate-pulse" : (isCompleted ? "text-emerald-500" : "text-slate-500")
           )} />
-          <span className="text-xs font-semibold text-slate-600 uppercase tracking-wider">
-            {isLoading ? "正在思考中..." : "思考过程"}
+          <span className={cn(
+            "text-xs font-semibold uppercase tracking-wider transition-colors duration-300",
+            isLoading ? "text-blue-600" : (isCompleted ? "text-emerald-600" : "text-slate-600")
+          )}>
+            {headerText}
           </span>
           {totalTime > 0 && !isLoading && (
             <span className="text-xs text-slate-400">
-              耗时 {totalTime > 1000 ? `${(totalTime / 1000).toFixed(1)}s` : `${totalTime}ms`}
+              · {totalTime > 1000 ? `${(totalTime / 1000).toFixed(1)}s` : `${totalTime}ms`}
             </span>
           )}
         </div>
@@ -380,36 +403,41 @@ export const ThinkingProcess = memo(function ThinkingProcess({
         </div>
       </button>
 
-      {/* 展开内容 */}
-      {isExpanded && (
-        <div className="px-4 pb-4 space-y-4 animate-in fade-in slide-in-from-top-1 duration-200">
-          {/* 缓存命中提示 */}
-          {cacheHit && <CacheHitBadge cacheHit={cacheHit} />}
+      {/* 展开内容 - 使用 grid 实现平滑展开/收起 */}
+      <div className={cn(
+        "grid transition-[grid-template-rows] duration-300 ease-in-out",
+        isExpanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+      )}>
+        <div className="overflow-hidden">
+          <div className="px-4 pb-4 space-y-4">
+            {/* 缓存命中提示 */}
+            {cacheHit && <CacheHitBadge cacheHit={cacheHit} />}
 
-          {/* 执行进度 */}
-          {sqlSteps && sqlSteps.length > 0 && (
-            <ExecutionProgress steps={sqlSteps} isLoading={isLoading} />
-          )}
+            {/* 执行进度 */}
+            {sqlSteps && sqlSteps.length > 0 && (
+              <ExecutionProgress steps={sqlSteps} isLoading={isLoading} />
+            )}
 
-          {/* 推理链 */}
-          {thoughts && thoughts.length > 0 && (
-            <ReasoningChain 
-              thoughts={thoughts} 
-              isExpanded={showThoughts}
-              onToggle={() => setShowThoughts(!showThoughts)}
-            />
-          )}
+            {/* 推理链 */}
+            {thoughts && thoughts.length > 0 && (
+              <ReasoningChain 
+                thoughts={thoughts} 
+                isExpanded={showThoughts}
+                onToggle={() => setShowThoughts(!showThoughts)}
+              />
+            )}
 
-          {/* 阶段消息 */}
-          {stageMessages && stageMessages.length > 0 && (
-            <StageMessages 
-              messages={stageMessages}
-              isExpanded={showMessages}
-              onToggle={() => setShowMessages(!showMessages)}
-            />
-          )}
+            {/* 阶段消息 */}
+            {stageMessages && stageMessages.length > 0 && (
+              <StageMessages 
+                messages={stageMessages}
+                isExpanded={showMessages}
+                onToggle={() => setShowMessages(!showMessages)}
+              />
+            )}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 });

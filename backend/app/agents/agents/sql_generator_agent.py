@@ -55,6 +55,20 @@ def generate_sql_query(
         Command: 更新 generated_sql 状态的命令
     """
     try:
+        # 立即发送 running 状态事件，让前端显示"思考中"
+        writer = get_stream_writer()
+        if writer:
+            writer(create_sql_step_event(
+                step="sql_generator",
+                status="running",
+                result="正在生成 SQL 查询语句..."
+            ))
+            writer(create_thought_event(
+                agent="sql_generator",
+                thought="基于表结构信息，我正在构建符合业务需求的 SQL 查询...",
+                plan="生成 SQL 后将进行验证和执行"
+            ))
+        
         # 从状态获取信息
         schema_info = state.get("schema_info", {})
         value_mappings = schema_info.get("value_mappings", {})

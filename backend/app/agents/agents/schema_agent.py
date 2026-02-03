@@ -62,6 +62,20 @@ def retrieve_database_schema(
     import logging
     logger = logging.getLogger(__name__)
     
+    # 立即发送 running 状态事件，让前端显示"思考中"
+    writer = get_stream_writer()
+    if writer:
+        writer(create_sql_step_event(
+            step="schema_agent",
+            status="running",
+            result="正在分析查询并获取相关表结构..."
+        ))
+        writer(create_thought_event(
+            agent="schema_agent",
+            thought="我正在分析您的问题，识别相关的数据表和字段...",
+            plan="完成表结构分析后，将进行 SQL 生成"
+        ))
+    
     connection_id = state.get("connection_id") or extract_connection_id(state)
     if not connection_id:
         return Command(
