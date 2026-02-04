@@ -76,14 +76,22 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
 
     def authenticate(
         self, db: Session, *, username_or_email: str, password: str
-    ) -> Optional[User]:
-        """Authenticate user by username/email and password."""
+    ) -> tuple[Optional[User], str]:
+        """
+        Authenticate user by username/email and password.
+        
+        Returns:
+            tuple: (user, error_code)
+            - (user, "") if success
+            - (None, "user_not_found") if user doesn't exist
+            - (None, "wrong_password") if password is incorrect
+        """
         user = self.get_by_username_or_email(db, username_or_email=username_or_email)
         if not user:
-            return None
+            return None, "user_not_found"
         if not verify_password(password, user.password_hash):
-            return None
-        return user
+            return None, "wrong_password"
+        return user, ""
 
     def update_last_login(self, db: Session, *, user: User) -> User:
         """Update user's last login timestamp."""

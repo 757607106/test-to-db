@@ -127,20 +127,27 @@ def login(
     OAuth2 compatible token login, get an access token for future requests.
     Accepts username or email in the 'username' field.
     """
-    user = crud.user.authenticate(
+    user, error_code = crud.user.authenticate(
         db, username_or_email=form_data.username, password=form_data.password
     )
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username/email or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        if error_code == "user_not_found":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="用户不存在，请检查用户名或邮箱",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        else:  # wrong_password
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="密码错误，请重新输入",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
     
     if not crud.user.is_active(user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Inactive user",
+            detail="账户已被禁用，请联系管理员",
         )
     
     # Update last login time
@@ -162,19 +169,25 @@ def login_json(
     JSON-based login endpoint (alternative to OAuth2 form).
     Accepts username or email.
     """
-    user = crud.user.authenticate(
+    user, error_code = crud.user.authenticate(
         db, username_or_email=user_in.username, password=user_in.password
     )
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username/email or password",
-        )
+        if error_code == "user_not_found":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="用户不存在，请检查用户名或邮箱",
+            )
+        else:  # wrong_password
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="密码错误，请重新输入",
+            )
     
     if not crud.user.is_active(user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Inactive user",
+            detail="账户已被禁用，请联系管理员",
         )
     
     # Update last login time

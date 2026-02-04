@@ -1,15 +1,10 @@
 
 import type { Metadata } from "next";
 import "./globals.css";
-import { Inter } from "next/font/google";
 import React from "react";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 
-const inter = Inter({
-  subsets: ["latin"],
-  preload: true,
-  display: "swap",
-});
+// 使用系统字体，避免 Google Fonts 网络请求导致启动慢
 
 export const metadata: Metadata = {
   title: "慧眼数据平台",
@@ -23,7 +18,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={inter.className}>
+      <body className="font-sans">
         <NuqsAdapter>{children}</NuqsAdapter>
       </body>
     </html>

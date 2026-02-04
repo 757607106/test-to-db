@@ -49,19 +49,35 @@ def setup_environment():
     default_langgraph_url = f"http://{service_host}:2024"
     langgraph_api_url = os.getenv("LANGGRAPH_API_URL", default_langgraph_url)
     
+    # 读取 checkpoint 模式配置
+    checkpoint_mode = os.getenv("CHECKPOINT_MODE", "inmem").lower()
+    
+    # 根据 checkpoint 模式设置数据库配置
+    if checkpoint_mode == "postgres":
+        # PostgreSQL 持久化模式 - 历史记录会保存到数据库
+        database_uri = postgres_uri
+        migrations_path = "./migrations"  # 使用标准迁移路径
+        runtime_edition = "postgres"
+        print(f"📦 Checkpointer 模式: PostgreSQL (持久化)")
+        print(f"   数据库: {postgres_uri.split('@')[1] if '@' in postgres_uri else postgres_uri}")
+    else:
+        # 内存模式 - 服务重启后数据丢失
+        database_uri = ":memory:"
+        migrations_path = "__inmem"
+        runtime_edition = "inmem"
+        print(f"📦 Checkpointer 模式: 内存 (服务重启后数据丢失)")
+    
     # Set environment variables
     os.environ.update({
-        # Database and storage - 使用自定义 PostgreSQL checkpointer
+        # Database and storage - 根据模式选择存储方式
         "POSTGRES_URI": postgres_uri,
-        # "REDIS_URI": "redis://localhost:6379",
-        "DATABASE_URI": ":memory:",
+        "DATABASE_URI": database_uri,
         "REDIS_URI": "fake",
-        # "MIGRATIONS_PATH": "/storage/migrations",
-        "MIGRATIONS_PATH": "__inmem",
+        "MIGRATIONS_PATH": migrations_path,
         # Server configuration
         "ALLOW_PRIVATE_NETWORK": "true",
         "LANGGRAPH_UI_BUNDLER": "true",
-        "LANGGRAPH_RUNTIME_EDITION": "inmem",
+        "LANGGRAPH_RUNTIME_EDITION": runtime_edition,
         "LANGSMITH_LANGGRAPH_API_VARIANT": "local_dev",
         "LANGGRAPH_DISABLE_FILE_PERSISTENCE": "false",
         "LANGGRAPH_ALLOW_BLOCKING": "true",
