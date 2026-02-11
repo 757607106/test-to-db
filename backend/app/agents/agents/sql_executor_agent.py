@@ -140,6 +140,11 @@ def execute_sql_query(
             ))
         
         # 返回 Command 更新父图状态
+        # 优化：限制存储到 checkpoint 的数据量，与流式事件保持一致（100行）
+        # 前端显示最多 100 行，checkpoint 存储完整数据会导致历史数据过大
+        MAX_CHECKPOINT_ROWS = 100
+        truncated_data = result_data[:MAX_CHECKPOINT_ROWS] if len(result_data) > MAX_CHECKPOINT_ROWS else result_data
+        
         tool_msg = ToolMessage(
             content=f"SQL执行成功，返回 {row_count} 条记录",
             tool_call_id=tool_call_id
@@ -149,7 +154,7 @@ def execute_sql_query(
         return Command(
             graph=Command.PARENT,
             update={
-                "query_results": result_data,
+                "query_results": truncated_data,
                 "current_stage": "data_analysis",
                 "messages": new_messages
             }

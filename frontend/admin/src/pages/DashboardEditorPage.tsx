@@ -1008,11 +1008,6 @@ const DashboardEditorPage: React.FC = () => {
                     保存布局
                   </Button>
                 )}
-
-                <Button
-                  icon={<SettingOutlined />}
-                  onClick={() => navigate(`/dashboards/${dashboardId}/settings`)}
-                />
               </Space>
             </div>
           )}
@@ -1215,10 +1210,8 @@ const DashboardEditorPage: React.FC = () => {
         onSuccess={async () => {
           setMiningWizardVisible(false);
           await fetchDashboard();
-          // 智能挖掘成功后自动应用网格布局
-          setTimeout(() => {
-            handleAutoLayout('grid');
-          }, 100);
+          // 后端已设置正确的双列网格布局，无需前端再次排版
+          message.success('已应用自动排版');
         }}
       />
 

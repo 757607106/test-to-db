@@ -175,7 +175,7 @@ def get_active_llm_config(model_type: str = "chat", use_cache: bool = True) -> O
     finally:
         db.close()
 
-def get_default_model(config_override: Optional[LLMConfiguration] = None, caller: str = None) -> BaseChatModel:
+def get_default_model(config_override: Optional[LLMConfiguration] = None, caller: str = None, temperature: float = 0.2) -> BaseChatModel:
     """
     Get LLM model instance with caching support.
     
@@ -184,6 +184,7 @@ def get_default_model(config_override: Optional[LLMConfiguration] = None, caller
     Args:
         config_override: 指定的 LLM 配置
         caller: 调用者标识，用于日志追踪
+        temperature: 温度参数，控制输出随机性（0.0-1.0），默认0.2
     
     Returns:
         BaseChatModel实例
@@ -198,8 +199,8 @@ def get_default_model(config_override: Optional[LLMConfiguration] = None, caller
         # Try to get from DB if no override
         config = config_override or get_active_llm_config(model_type="chat")
         
-        # 生成缓存键并检查缓存
-        cache_key = _generate_llm_cache_key(config)
+        # 生成缓存键并检查缓存（包含 temperature）
+        cache_key = f"{_generate_llm_cache_key(config)}_t{temperature}"
         
         if _is_llm_cache_valid(cache_key):
             cached_llm = _llm_cache[cache_key]
@@ -231,7 +232,7 @@ def get_default_model(config_override: Optional[LLMConfiguration] = None, caller
             model_name=model_name,
             api_key=api_key,
             base_url=api_base,
-            temperature=0.2,
+            temperature=temperature,
             max_tokens=8192,
             timeout=None,  # 禁用超时限制
             max_retries=0  # 重试由 LLMWrapper 统一处理

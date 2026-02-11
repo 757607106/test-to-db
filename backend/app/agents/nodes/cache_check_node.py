@@ -414,9 +414,27 @@ async def cache_check_node(state: SQLMessageState, writer: StreamWriter) -> Dict
             )
             
             # 构建执行结果
+            # 优化：限制存储到 checkpoint 的数据量，与流式事件保持一致（100行）
+            MAX_CHECKPOINT_ROWS = 100
+            raw_data = exec_result.get("data") if isinstance(exec_result, dict) else exec_result
+            truncated_data = None
+            if raw_data:
+                if isinstance(raw_data, dict):
+                    # 格式: {"columns": [...], "data": [...], "row_count": N}
+                    truncated_data = {
+                        "columns": raw_data.get("columns", []),
+                        "data": raw_data.get("data", [])[:MAX_CHECKPOINT_ROWS],
+                        "row_count": raw_data.get("row_count", 0)
+                    }
+                elif isinstance(raw_data, list):
+                    # 格式: [{"col": val}, ...]
+                    truncated_data = raw_data[:MAX_CHECKPOINT_ROWS]
+                else:
+                    truncated_data = raw_data
+            
             execution_result = SQLExecutionResult(
                 success=True,
-                data=exec_result.get("data") if isinstance(exec_result, dict) else exec_result,
+                data=truncated_data,
                 error=None,
                 execution_time=exec_result.get("execution_time", 0) if isinstance(exec_result, dict) else 0,
                 rows_affected=exec_result.get("data", {}).get("row_count", 0) if isinstance(exec_result, dict) else 0

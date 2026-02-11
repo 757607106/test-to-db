@@ -305,7 +305,8 @@ class DashboardInsightService:
                 ).first()
             
             # 使用 LLMWrapper（统一重试策略，无超时限制）
-            llm = get_default_model(config_override=llm_config, caller="dashboard_mining")
+            # temperature=0.7 增加多样性，避免每次生成结果相同
+            llm = get_default_model(config_override=llm_config, caller="dashboard_mining", temperature=0.7)
             wrapper_config = LLMWrapperConfig(
                 max_retries=3,
                 retry_base_delay=2.0,

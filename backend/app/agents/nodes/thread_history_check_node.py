@@ -317,11 +317,30 @@ def thread_history_check_node(state: SQLMessageState, writer: StreamWriter) -> D
         
         new_ai_message = AIMessage(content=content)
         
+        # 优化：截断 execution_result 数据，减少 checkpoint 存储
+        MAX_CHECKPOINT_ROWS = 100
+        historical_exec_result = historical.get("execution_result")
+        if historical_exec_result and isinstance(historical_exec_result, dict):
+            raw_data = historical_exec_result.get("data")
+            if raw_data:
+                truncated_data = None
+                if isinstance(raw_data, dict):
+                    truncated_data = {
+                        "columns": raw_data.get("columns", []),
+                        "data": raw_data.get("data", [])[:MAX_CHECKPOINT_ROWS],
+                        "row_count": raw_data.get("row_count", 0)
+                    }
+                elif isinstance(raw_data, list):
+                    truncated_data = raw_data[:MAX_CHECKPOINT_ROWS]
+                else:
+                    truncated_data = raw_data
+                historical_exec_result = {**historical_exec_result, "data": truncated_data}
+        
         return {
             "thread_history_hit": True,
             "messages": [new_ai_message],
             "generated_sql": historical.get("generated_sql"),
-            "execution_result": historical.get("execution_result"),
+            "execution_result": historical_exec_result,
             "current_stage": "completed"
         }
     
