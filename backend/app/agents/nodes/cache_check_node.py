@@ -366,7 +366,7 @@ async def cache_check_node(state: SQLMessageState, writer: StreamWriter) -> Dict
             exec_result = None
             if cache_hit.result is None:
                 try:
-                    from app.agents.agents.sql_executor_agent import execute_sql_query
+                    from app.agents.sql_executor_agent import execute_sql_query
                     
                     exec_result_str = execute_sql_query.invoke({
                         "sql_query": clean_sql,

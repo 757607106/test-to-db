@@ -113,7 +113,7 @@ class TestErrorRecovery:
     
     def test_error_classification(self):
         """测试错误分类"""
-        from app.agents.agents.error_recovery_agent import _classify_error_type
+        from app.agents.error_recovery_agent import _classify_error_type
         
         # MySQL LIMIT in subquery 错误
         error_msg = "This version of MySQL doesn't yet support 'LIMIT & IN/ALL/ANY/SOME subquery'"
@@ -133,7 +133,7 @@ class TestErrorRecovery:
     
     def test_recovery_strategy_generation(self):
         """测试恢复策略生成"""
-        from app.agents.agents.error_recovery_agent import generate_recovery_strategy
+        from app.agents.error_recovery_agent import generate_recovery_strategy
         import json
         
         # 测试 SQL 语法错误的恢复策略
@@ -157,7 +157,7 @@ class TestErrorRecovery:
     
     def test_user_friendly_messages(self):
         """测试用户友好消息"""
-        from app.agents.agents.error_recovery_agent import USER_FRIENDLY_MESSAGES
+        from app.agents.error_recovery_agent import USER_FRIENDLY_MESSAGES
         
         # 验证所有动作都有对应的消息
         expected_actions = [

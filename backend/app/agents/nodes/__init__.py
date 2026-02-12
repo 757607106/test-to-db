@@ -13,6 +13,7 @@ from app.agents.nodes.base import (
     get_custom_agent,
     build_error_record,
     ErrorStage,
+    extract_new_messages_for_parent,
 )
 
 __all__ = [
@@ -22,4 +23,6 @@ __all__ = [
     "get_custom_agent",
     "build_error_record",
     "ErrorStage",
+    "extract_new_messages_for_parent",
 ]
+

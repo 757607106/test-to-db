@@ -297,7 +297,7 @@ class DashboardWidgetService:
             return None
         
         try:
-            from app.agents.agents.sql_generator_agent import sql_generator_agent
+            from app.agents.sql_generator_agent import sql_generator_agent
             from app.services.text2sql_utils import retrieve_relevant_schema
             from app.models.db_connection import DBConnection
             from langchain_core.messages import HumanMessage

@@ -79,8 +79,27 @@ def _initialize_chart_client():
         return None, []
 
 
-# 全局图表客户端和工具
-CHART_CLIENT, CHART_TOOLS = _initialize_chart_client()
+# 延迟初始化：避免模块导入时 asyncio.run() 失败导致整个 Agent 层不可用
+_chart_client = None
+_chart_tools = None
+_chart_init_attempted = False
+
+
+def get_chart_tools():
+    """延迟初始化图表工具，首次调用时才创建 MCP 客户端"""
+    global _chart_client, _chart_tools, _chart_init_attempted
+    if not _chart_init_attempted:
+        _chart_init_attempted = True
+        _chart_client, _chart_tools = _initialize_chart_client()
+    return _chart_tools or []
+
+
+def get_chart_client():
+    """获取图表客户端（延迟初始化）"""
+    global _chart_client
+    if not _chart_init_attempted:
+        get_chart_tools()  # 触发初始化
+    return _chart_client
 
 
 @tool
@@ -316,9 +335,10 @@ class ChartGeneratorAgent:
         # 组合本地工具和MCP图表工具
         self.tools = []
         
-        # 如果MCP图表工具可用，添加到工具列表
-        if CHART_TOOLS:
-            self.tools.extend(CHART_TOOLS)
+        # 如果MCP图表工具可用，添加到工具列表（延迟初始化）
+        chart_tools = get_chart_tools()
+        if chart_tools:
+            self.tools.extend(chart_tools)
         
         # 创建ReAct代理（使用自定义 state_schema 以支持 connection_id 等字段）
         self.agent = create_react_agent(

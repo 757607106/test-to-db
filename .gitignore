@@ -74,9 +74,8 @@ target/
 celerybeat-schedule
 
 # dotenv
-# .env 文件现在允许提交（请确保不包含敏感信息）
-# .env
-# .env.*
+.env
+.env.*
 !.env.example
 
 # virtualenv

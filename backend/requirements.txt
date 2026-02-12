@@ -9,8 +9,7 @@ langgraph~=0.6.10
 langchain-core~=0.3.77
 langchain-deepseek~=0.1.4
 langgraph-cli[inmem]
-# langgraph-supervisor 已移除，使用原生条件边实现
-# langgraph-supervisor~=0.0.29
+langgraph-supervisor~=0.0.29
 langgraph-checkpoint-postgres
 langchain-mcp-adapters~=0.1.11
 langchain-ollama~=0.3.10

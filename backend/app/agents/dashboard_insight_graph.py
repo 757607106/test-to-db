@@ -294,7 +294,7 @@ async def sql_generator_node(state: DashboardInsightState) -> Dict[str, Any]:
         return {"current_stage": "sql_generated"}
     
     try:
-        from app.agents.agents.sql_generator_agent import sql_generator_agent
+        from app.agents.sql_generator_agent import sql_generator_agent
         
         adapted_state = _adapt_for_sql_generator(state)
         result = await sql_generator_agent.process(adapted_state)
@@ -386,7 +386,7 @@ async def sql_executor_node(state: DashboardInsightState) -> Dict[str, Any]:
         }
     
     try:
-        from app.agents.agents.sql_executor_agent import execute_sql_query
+        from app.agents.sql_executor_agent import execute_sql_query
         import json
         
         connection_id = state.get("connection_id")
@@ -489,7 +489,7 @@ async def insight_analyzer_node(state: DashboardInsightState) -> Dict[str, Any]:
         
         # 调用 LLM 智能分析 Agent
         try:
-            from app.agents.agents.dashboard_analyst_agent import dashboard_analyst_agent
+            from app.agents.dashboard_analyst_agent import dashboard_analyst_agent
             
             insights = await dashboard_analyst_agent.analyze(
                 data=data,
@@ -710,7 +710,7 @@ async def error_recovery_node(state: DashboardInsightState) -> Dict[str, Any]:
         return {"retry_count": retry_count, "current_stage": "recovery_done"}
     
     try:
-        from app.agents.agents.error_recovery_agent import error_recovery_agent
+        from app.agents.error_recovery_agent import error_recovery_agent
         
         adapted_state = _adapt_for_error_recovery(state)
         result = await error_recovery_agent.process(adapted_state)

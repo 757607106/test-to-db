@@ -10,7 +10,7 @@
 import logging
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, ToolMessage
 
 if TYPE_CHECKING:
     from app.core.state import SQLMessageState
@@ -184,6 +184,41 @@ def build_error_record(stage: str, error: str) -> Dict[str, Any]:
     }
 
 
+def extract_new_messages_for_parent(
+    messages: List[Any],
+    tool_call_id: str,
+    new_tool_message: ToolMessage
+) -> List[Any]:
+    """
+    提取需要返回给父图的新消息
+    
+    只返回：
+    1. 调用该工具的 AIMessage（包含 tool_call_id 的那个）
+    2. 新的 ToolMessage
+    
+    这样可以避免消息重复，同时保证 AIMessage 不丢失
+    
+    原理：父图的 add_messages reducer 会自动累积消息，
+    如果返回完整消息历史会导致重复。
+    """
+    new_messages = []
+    
+    # 从后往前找到调用该工具的 AIMessage
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+            for tc in msg.tool_calls:
+                if tc.get('id') == tool_call_id:
+                    new_messages.insert(0, msg)
+                    break
+            if new_messages:
+                break
+    
+    # 添加新的 ToolMessage
+    new_messages.append(new_tool_message)
+    
+    return new_messages
+
+
 __all__ = [
     "extract_user_query",
     "extract_last_human_message",
@@ -191,4 +226,5 @@ __all__ = [
     "load_custom_agent_by_id",
     "ErrorStage",
     "build_error_record",
+    "extract_new_messages_for_parent",
 ]

@@ -8,8 +8,8 @@
 4. Supervisor 正确调度 clarification_agent
 """
 import pytest
-from app.agents.agents.sql_executor_agent import _extract_business_error
-from app.agents.agents.clarification_agent import _handle_sql_error_clarification
+from app.agents.sql_executor_agent import _extract_business_error
+from app.agents.clarification_agent import _handle_sql_error_clarification
 from app.core.state import SQLMessageState
 
 

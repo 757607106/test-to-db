@@ -576,18 +576,16 @@ clarification_agent = ClarificationAgent()
 
 
 # ============================================================================
-# 向后兼容的别名（供 clarification_node.py 使用）
+# 独立工具函数（供 clarification_node.py 使用）
 # ============================================================================
 
-def _quick_clarification_check_impl(
+def quick_clarification_check(
     query: str, 
     connection_id: Optional[int] = None,
     schema_info: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
-    向后兼容：快速检测用户查询是否需要澄清
-    
-    注意：这是为了兼容旧代码。新代码应该使用 ClarificationAgent。
+    快速检测用户查询是否需要澄清（供 clarification_node 独立调用）
     """
     try:
         llm = get_agent_llm(CORE_AGENT_SQL_GENERATOR, use_wrapper=True)
@@ -690,12 +688,12 @@ def _quick_clarification_check_impl(
         }
 
 
-def _enrich_query_with_clarification_impl(
+def enrich_query_with_clarification_standalone(
     original_query: str, 
     clarification_responses: List[Dict[str, str]]
 ) -> Dict[str, Any]:
     """
-    向后兼容：将用户的澄清回复整合到原始查询中
+    将用户的澄清回复整合到原始查询中（供 clarification_node 独立调用）
     """
     if not clarification_responses:
         return {
@@ -735,7 +733,6 @@ __all__ = [
     "parse_user_clarification_response",
     "should_skip_clarification",
     "build_schema_context",
-    # 向后兼容
-    "_quick_clarification_check_impl",
-    "_enrich_query_with_clarification_impl",
+    "quick_clarification_check",
+    "enrich_query_with_clarification_standalone",
 ]

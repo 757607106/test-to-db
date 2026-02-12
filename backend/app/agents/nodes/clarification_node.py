@@ -22,9 +22,9 @@ import logging
 from langgraph.types import interrupt
 
 from app.core.state import SQLMessageState, extract_connection_id
-from app.agents.agents.clarification_agent import (
-    _quick_clarification_check_impl as quick_clarification_check,
-    _enrich_query_with_clarification_impl as enrich_query_with_clarification,
+from app.agents.clarification_agent import (
+    quick_clarification_check,
+    enrich_query_with_clarification_standalone as enrich_query_with_clarification,
     format_clarification_questions,
     parse_user_clarification_response,
     should_skip_clarification,

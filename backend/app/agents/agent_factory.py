@@ -12,8 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.models.agent_profile import AgentProfile
 from app.core.agent_config import get_custom_agent_llm
-from app.agents.agents.data_analyst_agent import DataAnalystAgent
-from app.agents.agents.chart_generator_agent import ChartGeneratorAgent
+from app.agents.data_analyst_agent import DataAnalystAgent
+from app.agents.chart_generator_agent import ChartGeneratorAgent
 
 logger = logging.getLogger(__name__)
 

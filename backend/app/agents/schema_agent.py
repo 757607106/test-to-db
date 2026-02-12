@@ -23,36 +23,8 @@ from app.services.text2sql_utils import retrieve_relevant_schema, get_value_mapp
 from app.schemas.stream_events import create_stage_message_event, create_thought_event, create_sql_step_event
 
 
-def _extract_new_messages_for_parent(
-    messages: List[BaseMessage], 
-    tool_call_id: str, 
-    new_tool_message: ToolMessage
-) -> List[BaseMessage]:
-    """
-    提取需要返回给父图的新消息
-    
-    只返回：
-    1. 调用该工具的 AIMessage（包含 tool_call_id 的那个）
-    2. 新的 ToolMessage
-    
-    这样可以避免消息重复，同时保证 AIMessage 不丢失
-    """
-    new_messages = []
-    
-    # 从后往前找到调用该工具的 AIMessage
-    for msg in reversed(messages):
-        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
-            for tc in msg.tool_calls:
-                if tc.get('id') == tool_call_id:
-                    new_messages.insert(0, msg)
-                    break
-            if new_messages:
-                break
-    
-    # 添加新的 ToolMessage
-    new_messages.append(new_tool_message)
-    
-    return new_messages
+from app.agents.nodes.base import extract_new_messages_for_parent as _extract_new_messages_for_parent
+
 
 
 @tool
